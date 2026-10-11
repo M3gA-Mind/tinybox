@@ -487,7 +487,7 @@ impl Resources {
         process: &ProcessRef,
     ) -> Result<()> {
         if let Some(stream) = self.stream(process)? {
-            if !stream.cleanup_acknowledged() {
+            if !stream.journal.cleanup_acknowledged() {
                 return Err(failure(
                     tinybox_bus::UNSUPPORTED_OPERATION,
                     "execution cleanup is not acknowledged",
