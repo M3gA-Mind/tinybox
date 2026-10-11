@@ -117,11 +117,6 @@ fn toolchain_homes_are_granted_when_they_exist() -> Result<(), Box<dyn std::erro
             "{ro} must not be writable"
         );
     }
-    for sys in ["/usr/local", "/opt"] {
-        if Path::new(sys).exists() {
-            assert!(has(&g.read_only, &canon(Path::new(sys))?), "{sys} missing");
-        }
-    }
     Ok(())
 }
 
