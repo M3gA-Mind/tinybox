@@ -3,6 +3,13 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
+const MEMBERS_REMAIN_FUNCTION: &str = "members_remain() { \
+    if ! command -v ps >/dev/null 2>&1 || ! command -v awk >/dev/null 2>&1; then return 0; fi; \
+    listing=$(ps -e -o pid= -o pgid= 2>/dev/null) || return 0; \
+    state=$(printf '%s\\n' \"$listing\" | awk -v group=\"$group\" 'NF == 0 { next } $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { bad=1; next } $2 == group && $1 != group { found=1 } END { if (bad) print \"unknown\"; else if (found) print \"present\"; else print \"absent\" }') || return 0; \
+    case \"$state\" in absent) return 1;; present|unknown|'') return 0;; *) return 0;; esac; \
+}";
+
 use async_trait::async_trait;
 use tinybox_core::{Error, ExecRequest, ExecutionObserver, OutputStream, Result};
 use tokio::sync::Notify;
@@ -117,17 +124,24 @@ pub(super) fn request(
     }
     let pid_file = format!("{directory}/pid");
     let status_file = format!("{directory}/status");
+    let status_tmp_file = format!("{directory}/status.tmp");
     let wrapper_file = format!("{directory}/wrapper");
     let owner_file = format!("{directory}/owner");
     let script = tinybox_core::shell::script(&request.argv, request.cwd.as_deref(), &request.env);
     let child = format!(
-        "if ! printf '%s\\n' \"$$\" > {}; then exit 125; fi; \
+        "dir={}; if ! printf '%s\\n' \"$$\" > {}; then exit 125; fi; \
          trap ':' TERM; ( trap - TERM; /bin/sh -c {} <&3 ) & command_pid=$!; \
-         wait \"$command_pid\"; code=$?; printf '%s\\n' \"$code\" > {}; \
-         while :; do sleep 3600; done; : {id}",
+         wait \"$command_pid\"; code=$?; \
+         if ! printf '%s\\n' \"$code\" > {}; then if [ ! -d \"$dir\" ]; then while :; do sleep 3600; done; fi; exit 125; fi; \
+         trap '' TERM; if ! mv -f {} {}; then if [ ! -d \"$dir\" ]; then while :; do sleep 3600; done; fi; exit 125; fi; trap ':' TERM; \
+         group=$$; {members_remain}; if members_remain; then while :; do sleep 3600; done; fi; : {id}",
+        tinybox_core::shell::quote(directory),
         tinybox_core::shell::quote(&pid_file),
         tinybox_core::shell::quote(&script),
+        tinybox_core::shell::quote(&status_tmp_file),
+        tinybox_core::shell::quote(&status_tmp_file),
         tinybox_core::shell::quote(&status_file),
+        members_remain = MEMBERS_REMAIN_FUNCTION,
         id = tinybox_core::shell::quote(id)
     );
     let wrapper = format!(
@@ -148,7 +162,8 @@ pub(super) fn request(
          if [ -f \"$status_file\" ]; then code=$(cat \"$status_file\" 2>/dev/null); case \"$code\" in ''|*[!0-9]*) exit 125;; esac; fi; \
          group=$(cat \"$pid_file\" 2>/dev/null); case \"$group\" in ''|*[!0-9]*) exit 125;; esac; \
          kill -TERM -\"$group\" 2>/dev/null || true; \
-         count=0; while kill -0 -\"$group\" 2>/dev/null; do \
+         {members_remain}; \
+         count=0; while members_remain; do \
            count=$((count + 1)); if [ \"$count\" -ge 100 ]; then break; fi; sleep 0.01; \
          done; \
          if kill -0 -\"$group\" 2>/dev/null; then kill -KILL -\"$group\" 2>/dev/null || true; fi; \
@@ -162,6 +177,7 @@ pub(super) fn request(
         status = tinybox_core::shell::quote(&status_file),
         wrapper_file = tinybox_core::shell::quote(&wrapper_file),
         owner = tinybox_core::shell::quote(&owner_file),
+        members_remain = MEMBERS_REMAIN_FUNCTION,
         id = tinybox_core::shell::quote(id),
         child = tinybox_core::shell::quote(&child),
     );
