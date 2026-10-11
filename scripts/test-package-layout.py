@@ -37,7 +37,7 @@ class PackageTests(unittest.TestCase):
                 "--target","x86_64-unknown-linux-gnu","--host","linux-fixture"],
                 cwd=root,env=env,text=True,capture_output=True)
             self.assertEqual(result.returncode,0,result.stderr)
-            archive=root/"release-assets/tinybox-module-1.2.3-beta.1-linux-fixture.tar.gz"
+            archive=root/"release-assets/tinybox-1.2.3-beta.1-linux-fixture.tar.gz"
             with tarfile.open(archive) as package:
                 data=package.extractfile("./libtinybox.so").read()
                 manifest=tomllib.loads(package.extractfile("./modules.toml").read().decode())

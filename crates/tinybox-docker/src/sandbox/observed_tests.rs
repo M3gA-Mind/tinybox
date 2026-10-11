@@ -1,3 +1,4 @@
+#![cfg(unix)]
 use super::*;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt as _;
