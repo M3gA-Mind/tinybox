@@ -482,9 +482,6 @@ impl tinybox_core::Host for DockerFaultHost {
         observer.output(tinybox_core::OutputStream::Stdout, b"owned")?;
         self.pending
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        if self.wait_for_timeout {
-            std::future::pending::<()>().await;
-        }
         Err(tinybox_core::Error::ObservedCleanupPending {
             provider: "fixture".into(),
         })
