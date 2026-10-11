@@ -8,8 +8,7 @@ on:
         required: true
   push:
     tags: ['v*']
-permissions:
-  contents: write
+permissions: {}
 concurrency:
   group: release-${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
   cancel-in-progress: false
@@ -34,6 +33,8 @@ jobs:
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
   module-release:
     needs: resolve
+    permissions:
+      contents: write
     uses: tinyhumansai/.github/.github/workflows/module-release.yml@3e87ade76b622844985d0c665a3b075313e4545c
     with:
       tag: ${{ needs.resolve.outputs.tag }}

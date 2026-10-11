@@ -4,3 +4,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 python3 scripts/test-e2e-version.py
 cargo test --locked --workspace
 cargo test --locked --workspace --all-features
+case "${RUNNER_OS:-$(uname -s)}" in
+  Windows|MINGW*|MSYS*|CYGWIN*) ;;
+  *) python3 scripts/test-package-layout.py ;;
+esac

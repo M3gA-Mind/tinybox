@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$root"
 target_root="${CARGO_TARGET_DIR:-$root/target}"
 [[ "$target_root" == /* ]] || target_root="$root/$target_root"
@@ -44,7 +44,7 @@ jq -e 'type == "array" and all(.[]; type == "string" and test("^docs/[A-Za-z0-9.
   echo "extra files must be repository-local docs paths without traversal" >&2
   exit 2
 }
-cargo build --locked --release --manifest-path Cargo.toml --package "$crate" --target "$rust_target"
+cargo build --locked --release --lib --manifest-path Cargo.toml --package "$crate" --target "$rust_target"
 stage="$target_root/module-package"
 rm -rf "$stage"
 mkdir -p "$stage" "$output"
