@@ -19,16 +19,17 @@ fn write_cli_fixture(path: &Path, script: impl AsRef<str>) -> std::io::Result<()
     );
     std::fs::write(path, script)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
-    // Another test can fork while the writer is open. Its inherited handle
-    // keeps this script text busy until that child execs. The probe records
-    // nothing and retries only that OS error, preserving real spawn failures.
+    probe_cli_fixture(|| std::process::Command::new(path).arg("--tinybox-probe").status())
+}
+
+/// Confirm the fixture is executable without recording a Docker invocation.
+fn probe_cli_fixture(
+    mut probe: impl FnMut() -> std::io::Result<std::process::ExitStatus>,
+) -> std::io::Result<()> {
     for attempt in 0..200 {
-        match std::process::Command::new(path)
-            .arg("--tinybox-probe")
-            .status()
-        {
+        match probe() {
             Err(error) if error.raw_os_error() == Some(26) && attempt < 199 => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                std::thread::yield_now();
             }
             result => {
                 let status = result?;
@@ -41,6 +42,25 @@ fn write_cli_fixture(path: &Path, script: impl AsRef<str>) -> std::io::Result<()
         }
     }
     Err(std::io::Error::other("fake Docker CLI remained busy"))
+}
+
+#[test]
+fn fixture_probe_waits_for_inherited_writers_without_an_attempt_limit()
+-> std::io::Result<()> {
+    use std::os::unix::process::ExitStatusExt;
+    let mut busy = 300;
+    probe_cli_fixture(|| {
+        if busy > 0 {
+            busy -= 1;
+            Err(std::io::Error::from_raw_os_error(26))
+        } else {
+            Ok(std::process::ExitStatus::from_raw(0))
+        }
+    })?;
+    assert_eq!(busy, 0);
+    assert!(probe_cli_fixture(|| Err(std::io::Error::from_raw_os_error(2))).is_err());
+    assert!(probe_cli_fixture(|| Ok(std::process::ExitStatus::from_raw(256))).is_err());
+    Ok(())
 }
 
 fn canonical(path: &Path) -> std::io::Result<String> {
