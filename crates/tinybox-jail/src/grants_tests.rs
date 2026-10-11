@@ -952,3 +952,29 @@ fn subtree_pair_protection_cannot_be_bypassed_by_a_directory_symlink()
     );
     Ok(())
 }
+
+#[test]
+fn git_includes_strip_unquoted_comments_but_preserve_quoted_markers() {
+    assert_eq!(
+        include_paths(r#"[include]
+path = ~/work.conf # local
+path = other.conf ; explanation
+path = "quoted#name;value.conf" # trailing
+path = prefix"quoted#part"suffix.conf ; trailing
+"#),
+        ["~/work.conf", "other.conf", "quoted#name;value.conf", "prefixquoted#partsuffix.conf"]
+    );
+}
+
+#[test]
+fn git_include_with_a_trailing_comment_grants_the_actual_file()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::write(home.path().join(".gitconfig"), "[include]\npath = ~/work.conf # local\n")?;
+    fs::write(home.path().join("work.conf"), "[core]\n")?;
+    let grants = resolve_local_jail_grants(
+        Some(home.path()), &LocalGrantConfig::default(), &ProtectedPaths::default()
+    );
+    assert!(has(&grants.read_only, &canon(&home.path().join("work.conf"))?));
+    Ok(())
+}
