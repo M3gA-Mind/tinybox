@@ -247,6 +247,26 @@ fn prepare_execution(
     Ok((resolved, collector))
 }
 impl StreamExecution {
+    fn check_replay(
+        &self,
+        request: &SpawnRequest,
+        jail: &Option<tinybox_bus::NativeJailConfig>,
+        shell: &Option<tinybox_bus::ShellExecRequest>,
+        platform_shell: &Option<tinybox_bus::SelectShellRequest>,
+    ) -> Result<()> {
+        if self.request == *request
+            && self.jail == *jail
+            && self.shell == *shell
+            && self.platform_shell == *platform_shell
+        {
+            Ok(())
+        } else {
+            Err(failure(
+                tinybox_bus::INVALID_ID,
+                "stream identifier belongs to another command",
+            ))
+        }
+    }
     fn start(
         request: SpawnRequest,
         resolved: tinybox_core::ExecRequest,
@@ -440,22 +460,12 @@ impl Resources {
             process: request.process.clone(),
         };
         if let Some(existing) = self.stream(&process)? {
-            return if existing.request == request
-                && existing.jail == jail
-                && existing.shell == shell
-                && existing.platform_shell == platform_shell
-            {
-                Ok(process)
-            } else {
-                Err(failure(
-                    tinybox_bus::INVALID_ID,
-                    "stream identifier belongs to another command",
-                ))
-            };
+            existing.check_replay(&request, &jail, &shell, &platform_shell)?;
+            return Ok(process);
         }
         let slot = self.slot(&process.resource).await?;
-        let slot = slot.lock().await;
-        let entry = slot
+        let guard = slot.lock().await;
+        let entry = guard
             .as_ref()
             .ok_or_else(|| failure(tinybox_bus::UNKNOWN_RESOURCE, "closed resource"))?;
         let (resolved, collector) = prepare_execution(
@@ -465,7 +475,13 @@ impl Resources {
             shell.as_ref(),
             platform_shell.as_ref(),
         )?;
+        // Preparation owns its snapshot; Close must not wait for filesystem I/O.
+        drop(guard);
         let collector = prepare(collector).await?;
+        let guard = slot.lock().await;
+        let entry = guard
+            .as_ref()
+            .ok_or_else(|| failure(tinybox_bus::UNKNOWN_RESOURCE, "closed resource"))?;
         let mut state = self.state.lock().await;
         let executions = self
             .executions
@@ -477,18 +493,8 @@ impl Resources {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(existing) = streams.get(&process.process) {
-            return if existing.request == request
-                && existing.jail == jail
-                && existing.shell == shell
-                && existing.platform_shell == platform_shell
-            {
-                Ok(process)
-            } else {
-                Err(failure(
-                    tinybox_bus::INVALID_ID,
-                    "stream identifier belongs to another command",
-                ))
-            };
+            existing.check_replay(&request, &jail, &shell, &platform_shell)?;
+            return Ok(process);
         }
         if entry.processes.len()
             + streams
