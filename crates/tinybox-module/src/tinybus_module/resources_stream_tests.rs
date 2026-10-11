@@ -637,7 +637,7 @@ async fn shell_request(
             preserve_pipeline_status: false,
         },
         cwd: None,
-        extra_env: Default::default(),
+        extra_env: std::collections::BTreeMap::default(),
         state_dir: state.to_string_lossy().into_owned(),
         timeout_ms: 5000,
         stdin: None,
@@ -708,6 +708,53 @@ async fn native_shell_timeout_acknowledges_child_cleanup_before_output_release()
             code: ExecutionFailure::TimedOut
         }
     );
+    resources.release_output(&process).await?;
+    resources.close(&resource).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn native_shell_clears_startup_hooks_after_approved_overrides_and_captures_binary_pipes()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    let startup = state.path().join("startup.sh");
+    std::fs::write(&startup, "exit 77\n")?;
+    let mut request = shell_request(
+        &resources,
+        &resource,
+        state.path(),
+        "cat; printf \\\\377 >&2; false; echo $APPROVED",
+    )
+    .await?;
+    request
+        .extra_env
+        .insert("BASH_ENV".into(), startup.to_string_lossy().into_owned());
+    request
+        .extra_env
+        .insert("SHELLOPTS".into(), "errexit".into());
+    request.extra_env.insert("APPROVED".into(), "yes".into());
+    request.stdin = Some(vec![0, 255, 1]);
+    let process = resources.start_shell_exec(request).await?;
+    completed(&resources, &process).await?;
+    let output = resources.read_output(&process, 0).await?;
+    assert_eq!(output.state, ExecutionState::Exited { exit_code: 0 });
+    let stdout: Vec<u8> = output
+        .chunks
+        .iter()
+        .filter(|c| c.stream == tinybox_bus::OutputStream::Stdout)
+        .flat_map(|c| c.bytes.clone())
+        .collect();
+    assert_eq!(stdout, [0, 255, 1, b'y', b'e', b's', 10]);
+    let stderr: Vec<u8> = output
+        .chunks
+        .iter()
+        .filter(|c| c.stream == tinybox_bus::OutputStream::Stderr)
+        .flat_map(|c| c.bytes.clone())
+        .collect();
+    assert_eq!(stderr, [255]);
     resources.release_output(&process).await?;
     resources.close(&resource).await?;
     Ok(())

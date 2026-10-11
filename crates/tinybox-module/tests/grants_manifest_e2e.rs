@@ -149,12 +149,23 @@ async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
             (tinybox_bus::ReserveRequest::Process(resource.clone()),),
         )
         .await?;
+    #[cfg(windows)]
+    let payload = {
+        let executable = workspace.path().join("quoted fixture tool.exe");
+        std::fs::copy(std::env::current_exe()?, &executable)?;
+        format!(
+            "\"{}\" \"--list\" & echo native-fixture",
+            executable.display()
+        )
+    };
+    #[cfg(not(windows))]
+    let payload = "echo native-fixture";
     let running: tinybox_bus::ProcessRef = proxy
         .call(
             "StartShellExec",
             (serde_json::json!({
                 "process":process, "resource":resource,
-                "shell":{"command":"echo native-fixture"},
+                "shell":{"command":payload},
                 "state_dir":state_dir.path().to_str().ok_or("non-UTF8 fixture")?,
                 "timeout_ms":5000
             }),),
@@ -181,7 +192,10 @@ async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
         .filter(|chunk| chunk.stream == tinybox_bus::OutputStream::Stdout)
         .flat_map(|chunk| chunk.bytes)
         .collect();
-    assert_eq!(String::from_utf8(stdout)?.trim(), "native-fixture");
+    let stdout = String::from_utf8(stdout)?;
+    assert!(stdout.trim().ends_with("native-fixture"));
+    #[cfg(windows)]
+    assert!(stdout.contains("compiled_manifest_admits_and_executes_grant_and_shell_discovery"));
     proxy.call::<()>("ReleaseOutput", (running,)).await?;
     proxy.call::<()>("Close", (resource,)).await?;
     proxy.call::<()>("Shutdown", ()).await?;

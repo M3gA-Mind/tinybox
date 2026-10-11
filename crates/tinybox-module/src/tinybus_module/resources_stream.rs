@@ -126,6 +126,34 @@ fn select_collector(
         }
     })
 }
+fn select_execution_collector(
+    entry: &super::Resource,
+    jail: Option<&tinybox_bus::NativeJailConfig>,
+    shell: Option<&tinybox_bus::ShellExecRequest>,
+    resolved: &tinybox_core::ExecRequest,
+) -> Result<Collector> {
+    Ok(if let Some(shell) = shell {
+        if !entry.native_host || entry.local_sandbox.is_none() {
+            return Err(failure(
+                tinybox_bus::UNSUPPORTED_OPERATION,
+                "native shell requires local passthrough execution",
+            ));
+        }
+        let root = entry.workspace_root.as_ref().ok_or_else(|| {
+            failure(
+                tinybox_bus::UNSUPPORTED_OPERATION,
+                "native shell requires directory resource",
+            )
+        })?;
+        Collector::Shell(super::super::native_shell::ShellContext::prepare(
+            shell.clone(),
+            root,
+            resolved,
+        )?)
+    } else {
+        select_collector(entry, jail, resolved)?
+    })
+}
 impl StreamExecution {
     fn start(
         request: SpawnRequest,
@@ -141,17 +169,16 @@ impl StreamExecution {
         let task = tokio::spawn(async move {
             let _completion = CompletionGuard(observer.clone());
             let result = if let Some(timeout) = timeout {
-                match tokio::time::timeout(
+                if let Ok(result) = tokio::time::timeout(
                     std::time::Duration::from_millis(timeout),
                     runner.run(&resolved, observer.clone()),
                 )
                 .await
                 {
-                    Ok(result) => Some(result),
-                    Err(_) => {
-                        let _cleanup = runner.drain().await;
-                        None
-                    }
+                    Some(result)
+                } else {
+                    let _cleanup = runner.drain().await;
+                    None
                 }
             } else {
                 Some(runner.run(&resolved, observer.clone()).await)
@@ -309,27 +336,8 @@ impl Resources {
             }
             command
         };
-        let collector = if let Some(shell) = &shell {
-            if !entry.native_host || entry.local_sandbox.is_none() {
-                return Err(failure(
-                    tinybox_bus::UNSUPPORTED_OPERATION,
-                    "native shell requires local passthrough execution",
-                ));
-            }
-            let root = entry.workspace_root.as_ref().ok_or_else(|| {
-                failure(
-                    tinybox_bus::UNSUPPORTED_OPERATION,
-                    "native shell requires directory resource",
-                )
-            })?;
-            Collector::Shell(super::super::native_shell::ShellContext::prepare(
-                shell.clone(),
-                root,
-                &resolved,
-            )?)
-        } else {
-            select_collector(entry, jail.as_ref(), &resolved)?
-        };
+        let collector =
+            select_execution_collector(entry, jail.as_ref(), shell.as_ref(), &resolved)?;
         let mut state = self.state.lock().await;
         let executions = self
             .executions
