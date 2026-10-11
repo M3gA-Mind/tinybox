@@ -15,7 +15,7 @@ const HOME_READ_ONLY_DIRS: &[&str] = &[".rustup", ".nvm", ".npm"];
 const CARGO_READ_ONLY_FILES: &[&str] = &["config.toml", "config", "env"];
 
 /// Git config files read at startup, relative to `$HOME`.
-const GITCONFIG_FILES: &[&str] = &[".gitconfig", ".config/git/config", ".config/git/ignore"];
+const GITCONFIG_FILES: &[&str] = &[".gitconfig", ".config/git/config"];
 
 /// Deepest `include` chain followed when collecting git config files.
 const GITCONFIG_MAX_DEPTH: usize = 8;
@@ -147,10 +147,8 @@ impl<'a> Builder<'a> {
     fn exposes_credentials(&self, path: &Path) -> bool {
         let path = normalized_floor_path(&path.to_string_lossy());
         self.protected.credential_roots.iter().any(|root| {
-            let cred = PathBuf::from(root);
-            let cred = cred.canonicalize().unwrap_or(cred);
-            let cred = normalized_floor_path(&cred.to_string_lossy());
-            same_or_descendant(&path, &cred) || same_or_descendant(&cred, &path)
+            root_spellings(Path::new(root))
+                .any(|cred| same_or_descendant(&path, &cred) || same_or_descendant(&cred, &path))
         })
     }
 
@@ -171,8 +169,9 @@ impl<'a> Builder<'a> {
                     && pair[1].eq_ignore_ascii_case(&blocked[1])
             })
         }) || self.protected.prefixes.iter().any(|prefix| {
-            let prefix = normalized_floor_path(prefix);
-            same_or_descendant(&normalized, &prefix) || same_or_descendant(&prefix, &normalized)
+            root_spellings(Path::new(prefix)).any(|prefix| {
+                same_or_descendant(&normalized, &prefix) || same_or_descendant(&prefix, &normalized)
+            })
         })
     }
 
@@ -186,6 +185,23 @@ impl<'a> Builder<'a> {
 
     fn read_write(&mut self, path: &Path, source: &str) {
         if let Some(p) = self.admit(path, source) {
+            let normalized = normalized_floor_path(&p.to_string_lossy());
+            if self.home.is_some_and(|home| {
+                ["git", "registry"].into_iter().any(|cache| {
+                    let root = home.join(".cargo").join(cache);
+                    root.is_dir()
+                        && root_spellings(&root).any(|root| {
+                            same_or_descendant(&normalized, &root)
+                                || same_or_descendant(&root, &normalized)
+                        })
+                })
+            }) {
+                log::warn!(
+                    "refused writable grant reaching shared Cargo sources: {}",
+                    p.display()
+                );
+                return;
+            }
             // A path granted writable subsumes an earlier read-only grant.
             self.grants.read_only.retain(|g| g != &p);
             self.seen.insert(p.clone());
@@ -220,6 +236,10 @@ impl<'a> Builder<'a> {
         let mut roots: Vec<PathBuf> = GITCONFIG_FILES.iter().map(|f| home.join(f)).collect();
         if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
             roots.push(Path::new(&xdg).join("git/config"));
+        }
+        self.read_only(&home.join(".config/git/ignore"), "gitignore");
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+            self.read_only(&Path::new(&xdg).join("git/ignore"), "gitignore");
         }
         let mut visited = HashSet::new();
         for root in roots {
@@ -261,6 +281,16 @@ impl<'a> Builder<'a> {
             self.add_gitconfig_file(&resolved, home, depth + 1, visited);
         }
     }
+}
+
+// A configured protected root may itself be a symlink (for example /etc on
+// macOS). Preserve its requested spelling and its existing resolved target.
+fn root_spellings(root: &Path) -> impl Iterator<Item = String> {
+    std::iter::once(normalized_floor_path(&root.to_string_lossy())).chain(
+        root.canonicalize()
+            .ok()
+            .map(|canonical| normalized_floor_path(&canonical.to_string_lossy())),
+    )
 }
 
 // Windows canonical paths may carry an extended drive or UNC namespace;
