@@ -22,6 +22,8 @@ mod jail;
 pub use jail::{JailEnforcement, NativeJailConfig};
 
 mod shell_selection;
+mod shell_execution;
+pub use shell_execution::ShellExecRequest;
 pub use shell_selection::{SelectShellRequest, ShellFlavor, ShellInvocation};
 
 mod shell;
@@ -44,7 +46,7 @@ pub use files::{
 /// 1.7 adds explicitly approved native directory-jail execution. 1.8 adds a
 /// bounded, module-owned one-shot Docker operation. 1.9 adds local grant discovery.
 /// 1.10 adds platform shell selection.
-pub const CONTRACT_VERSION: (u32, u32) = (1, 10);
+pub const CONTRACT_VERSION: (u32, u32) = (1, 11);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.
@@ -116,6 +118,7 @@ pub const METHODS: &[&str] = &[
     "RunDocker",
     "ResolveLocalGrants",
     "SelectShell",
+    "StartShellExec",
 ];
 
 /// Facts about the detected native directory-jail backend.
@@ -510,3 +513,6 @@ mod tests;
 
 mod output;
 pub use output::{ExecutionFailure, ExecutionState, OutputBatch, OutputChunk, OutputStream};
+
+/// Invalid native shell execution inputs.
+pub const INVALID_SHELL_EXEC: &str = "ai.tinyhumans.tinybox.Error.InvalidShellExec";

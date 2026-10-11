@@ -46,8 +46,8 @@ fn docker_run_vocabulary_is_typed_bounded_and_additive() -> Result<(), serde_jso
         timeout_ms: 120_000,
     };
     assert_eq!(METHODS[27], "RunDocker");
-    assert_eq!(METHODS.last(), Some(&"SelectShell"));
-    assert_eq!(CONTRACT_VERSION, (1, 10));
+    assert_eq!(METHODS.last(), Some(&"StartShellExec"));
+    assert_eq!(CONTRACT_VERSION, (1, 11));
     assert_eq!(MAX_DOCKER_RUN_TIMEOUT_MS, 86_400_000);
     let serialized = serde_json::to_value(&request)?;
     assert_eq!(serialized["read_only_rootfs"], false);
@@ -123,7 +123,7 @@ fn host_gateway_and_docker_facts_are_additive_and_default_safely() -> Result<(),
 #[test]
 fn version_and_capability_wire_snapshot_preserve_contract_compatibility()
 -> Result<(), serde_json::Error> {
-    assert_eq!(CONTRACT_VERSION, (1, 10));
+    assert_eq!(CONTRACT_VERSION, (1, 11));
     assert!(is_compatible(CONTRACT_VERSION));
     assert!(!is_compatible((1, 7)));
     assert!(!is_compatible((1, 6)));
@@ -288,5 +288,23 @@ fn older_shell_invocations_default_the_startup_removal_vocabulary() -> Result<()
         "raw_arguments":null, "bootstrap_environment":[]
     }))?;
     assert_eq!(invocation.remove_environment, Vec::<String>::new());
+    Ok(())
+}
+
+
+#[test]
+fn native_shell_wire_defaults_close_stdin_and_keep_a_bounded_runtime()
+-> Result<(), serde_json::Error> {
+    let request: ShellExecRequest = serde_json::from_value(serde_json::json!({
+        "process":"process", "resource":"resource", "shell":{"command":"true"},
+        "state_dir":"/state"
+    }))?;
+    assert_eq!(request.timeout_ms, 30_000);
+    assert_eq!(request.stdin, None);
+    assert_eq!(request.cwd, None);
+    assert_eq!(request.jail, None);
+    assert_eq!(request.extra_env, std::collections::BTreeMap::new());
+    assert_eq!(METHODS[30], "StartShellExec");
+    assert!(!is_compatible((1, 10)));
     Ok(())
 }
