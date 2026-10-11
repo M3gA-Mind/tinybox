@@ -324,12 +324,13 @@ async fn terminate_native(child: &mut NativeChild, group: i32) -> Result<()> {
             sys::signal::{Signal, killpg},
             unistd::Pid,
         };
-        if child.id().is_some() || group_alive(group)? {
+        if child.id().is_some() || group_alive(group).await? {
             kill_group_checked(
                 group,
                 |group| killpg(Pid::from_raw(group), Signal::SIGKILL),
                 group_alive,
-            )?;
+            )
+            .await?;
         }
         child
             .kill()
@@ -376,13 +377,16 @@ fn kill_group_with(
 }
 
 #[cfg(unix)]
-async fn wait_group(
+async fn wait_group<F>(
     group: i32,
     deadline: std::time::Duration,
-    mut alive: impl FnMut(i32) -> Result<bool>,
-) -> Result<()> {
+    mut alive: impl FnMut(i32) -> F,
+) -> Result<()>
+where
+    F: std::future::Future<Output = Result<bool>>,
+{
     tokio::time::timeout(deadline, async {
-        while alive(group)? {
+        while alive(group).await? {
             tokio::task::yield_now().await;
         }
         Ok(())
@@ -396,7 +400,7 @@ async fn wait_group(
 }
 
 #[cfg(target_os = "linux")]
-pub(super) fn group_alive(group: i32) -> Result<bool> {
+pub(super) async fn group_alive(group: i32) -> Result<bool> {
     for entry in
         std::fs::read_dir("/proc").map_err(|error| Error::io("read process table", &error))?
     {
@@ -427,13 +431,21 @@ fn stat_has_live_group(stat: &str, group: i32) -> bool {
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]
-pub(super) fn group_alive(group: i32) -> Result<bool> {
+pub(super) async fn group_alive(group: i32) -> Result<bool> {
     // Darwin can report EPERM for an empty group and retains zombies in
     // signal probes. Inspect executable members instead of probing a signal.
-    let output = std::process::Command::new("ps")
-        .args(["-axo", "pgid=,stat="])
-        .output()
+    let mut command = Command::new("/bin/ps");
+    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+    command.args(["-e", "-o", "pgid=,s="]);
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
+    command.args(["-axo", "pgid=,stat="]);
+    command
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::piped());
+    let mut child = command
+        .spawn()
         .map_err(|error| Error::io("read process table", &error))?;
+    let output = process_table_output(&mut child, std::time::Duration::from_secs(5)).await?;
     if !output.status.success() {
         return Err(Error::Backend {
             sandbox: crate::LOCAL.into(),
@@ -448,7 +460,7 @@ pub(super) fn group_alive(group: i32) -> Result<bool> {
 }
 
 #[cfg(not(any(unix, windows)))]
-pub(super) fn group_alive(_: i32) -> Result<bool> {
+pub(super) async fn group_alive(_: i32) -> Result<bool> {
     Ok(false)
 }
 
@@ -457,13 +469,16 @@ pub(super) fn group_alive(_: i32) -> Result<bool> {
 mod tests;
 
 #[cfg(unix)]
-fn kill_group_checked(
+async fn kill_group_checked<F>(
     group: i32,
     kill: impl FnOnce(i32) -> std::result::Result<(), nix::errno::Errno>,
-    alive: impl FnOnce(i32) -> Result<bool>,
-) -> Result<()> {
+    alive: impl FnOnce(i32) -> F,
+) -> Result<()>
+where
+    F: std::future::Future<Output = Result<bool>>,
+{
     match kill(group) {
-        Err(nix::errno::Errno::EPERM) if !alive(group)? => Ok(()),
+        Err(nix::errno::Errno::EPERM) if !alive(group).await? => Ok(()),
         result => kill_group_with(group, |_| result),
     }
 }
@@ -476,5 +491,26 @@ fn ps_has_live_group(table: &str, group: i32) -> bool {
             && fields
                 .next()
                 .is_some_and(|state| !state.starts_with(['Z', 'X']))
+    })
+}
+
+#[cfg(all(unix, any(test, not(target_os = "linux"))))]
+async fn process_table_output(
+    child: &mut Child,
+    _deadline: std::time::Duration,
+) -> Result<std::process::Output> {
+    use tokio::io::AsyncReadExt;
+    let mut stdout = child.stdout.take().ok_or_else(|| Error::Backend {
+        sandbox: crate::LOCAL.into(),
+        operation: "read process table",
+        message: "missing process table output".into(),
+    })?;
+    let mut bytes = Vec::new();
+    let (status, _) = tokio::try_join!(child.wait(), stdout.read_to_end(&mut bytes))
+        .map_err(|error| Error::io("read process table", &error))?;
+    Ok(std::process::Output {
+        status,
+        stdout: bytes,
+        stderr: Vec::new(),
     })
 }
