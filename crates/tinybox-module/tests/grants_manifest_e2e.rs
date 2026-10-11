@@ -4,7 +4,7 @@ use std::time::Duration;
 use tinybus::{Connection, broker::Broker, module::ModuleHost, transport::memory::MemoryBus};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn compiled_manifest_admits_and_executes_local_grant_discovery()
+async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
 -> Result<(), Box<dyn std::error::Error>> {
     let built_artifact = compiled_artifact()?;
     // Cargo output inherits the checkout ACL on Windows, which need not meet
