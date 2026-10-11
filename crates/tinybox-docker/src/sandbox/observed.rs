@@ -81,7 +81,7 @@ leader=$!
 ) </dev/null >/dev/null 2>&1 &
 watcher=$!
 
-wait "$leader"
+wait "$leader" 2>/dev/null
 status=$?
 kill "$watcher" 2>/dev/null || :
 wait "$watcher" 2>/dev/null || :

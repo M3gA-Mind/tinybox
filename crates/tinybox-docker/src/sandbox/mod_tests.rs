@@ -62,6 +62,7 @@ struct ScriptedHost {
     fail_next_reservation: AtomicBool,
     fail_next_abort: AtomicBool,
     fail_next_receipt_release: AtomicBool,
+    fail_observed_cleanup: AtomicBool,
     observed_started: tokio::sync::Notify,
     release_observed: tokio::sync::Notify,
 }
@@ -146,6 +147,18 @@ impl Host for ScriptedHost {
                 1,
                 Vec::new(),
                 b"release reply lost".to_vec(),
+            ));
+        }
+        if request
+            .argv
+            .iter()
+            .any(|argument| argument == "tinybox-observed-cancel")
+            && self.fail_observed_cleanup.load(Ordering::Acquire)
+        {
+            return Ok(ExecOutput::new(
+                1,
+                Vec::new(),
+                b"container removed during observed cleanup".to_vec(),
             ));
         }
         let attempt_owner = if request
@@ -1037,6 +1050,65 @@ async fn observed_host_view_reuses_container_identity_and_isolates_cleanup_state
     execution_sandbox.acknowledge_observed_cleanup_for_destroyed_box(&info.id);
     assert!(!execution_sandbox.has_pending_observed_cleanup());
     assert_eq!(execution_host.commands().len(), execution_calls);
+    Ok(())
+}
+
+#[tokio::test]
+async fn confirmed_destroy_prevents_a_late_observed_cleanup_handle_from_being_retained()
+-> Result<()> {
+    let (sandbox, host, store) = sandbox();
+    let info = sandbox.create(&spec()?).await?;
+    let observed_view = sandbox.for_observed_host(host.clone());
+    host.push_ok("running");
+    host.block_observed.store(true, Ordering::Release);
+    host.fail_observed_cleanup.store(true, Ordering::Release);
+
+    let execution_view = observed_view.clone();
+    let id = info.id.clone();
+    let execution = tokio::spawn(async move {
+        execution_view
+            .exec_observed(
+                &id,
+                &ExecRequest::new(["long-running-command"]),
+                Arc::new(CapturingObserver {
+                    cancel: true,
+                    ..CapturingObserver::default()
+                }),
+            )
+            .await
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        host.observed_started.notified(),
+    )
+    .await
+    .map_err(|_| Error::Backend {
+        sandbox: NAME.to_owned(),
+        operation: "start concurrent observed-destroy fixture",
+        message: "observed execution did not reach the host".to_owned(),
+    })?;
+
+    // Destruction confirms that Docker removed the complete container while
+    // the per-execution host view is still waiting for its observed reply.
+    sandbox.destroy(&info.id).await?;
+    assert_eq!(store.list()?.len(), 0);
+    host.cancel_observed.store(true, Ordering::Release);
+    host.release_observed.notify_one();
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(3), execution)
+        .await
+        .map_err(|_| Error::Backend {
+            sandbox: NAME.to_owned(),
+            operation: "finish concurrent observed-destroy fixture",
+            message: "observed execution did not finish after the host reply".to_owned(),
+        })?
+        .map_err(|error| Error::Backend {
+            sandbox: NAME.to_owned(),
+            operation: "join concurrent observed-destroy fixture",
+            message: error.to_string(),
+        })?;
+    assert!(result.is_err());
+    assert!(!observed_view.has_pending_observed_cleanup());
     Ok(())
 }
 
