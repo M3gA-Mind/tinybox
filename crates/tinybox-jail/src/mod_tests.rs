@@ -1,3 +1,5 @@
+//! Tests for the public jail spawning facade.
+
 use super::*;
 
 #[test]
@@ -49,7 +51,7 @@ fn default_backend_is_cached() {
 }
 
 #[test]
-fn spawn_uses_default_backend() {
+fn spawn_uses_default_backend() -> std::io::Result<()> {
     let dir = std::env::temp_dir();
     // Landlock denies everything it is not told about; give it the system
     // directories so `true` can run. Other backends ignore the extra grants.
@@ -69,14 +71,32 @@ fn spawn_uses_default_backend() {
     // `spawn` entry rather than `spawn_with`.
     let result = spawn(&jail, cmd);
     if default_backend().is_available() {
-        let mut child = result.expect("spawn through available backend");
-        let _ = child.wait().expect("wait");
+        assert!(result?.wait()?.success());
     } else {
         assert_eq!(
             result.err().map(|error| error.kind()),
             Some(std::io::ErrorKind::Unsupported)
         );
     }
+    Ok(())
+}
+
+#[test]
+fn spawn_uses_default_backend_for_an_existing_root() -> std::io::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let result = super::spawn(
+        &Jail::new(dir.path(), "default-spawn"),
+        Command::new("true"),
+    );
+    if default_backend().is_available() {
+        assert!(result?.wait()?.success());
+    } else {
+        assert_eq!(
+            result.err().map(|error| error.kind()),
+            Some(std::io::ErrorKind::Unsupported)
+        );
+    }
+    Ok(())
 }
 
 #[test]
