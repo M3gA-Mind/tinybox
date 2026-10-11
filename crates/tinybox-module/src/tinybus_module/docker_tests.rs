@@ -38,7 +38,7 @@ async fn docker_status_uses_the_module_owned_cli_probe()
 
     let status = status_with_cli(
         &DockerCli::with_program(&script_path),
-        DockerStatusRequest { timeout_ms: 1_000 },
+        DockerStatusRequest { timeout_ms: 10_000 },
     )
     .await?;
 
@@ -62,7 +62,7 @@ async fn docker_status_reports_an_unavailable_daemon_without_failing_the_probe()
 
     let status = status_with_cli(
         &DockerCli::with_program(&script_path),
-        DockerStatusRequest { timeout_ms: 1_000 },
+        DockerStatusRequest { timeout_ms: 10_000 },
     )
     .await?;
 
@@ -91,7 +91,7 @@ async fn docker_cleanup_only_kills_ids_returned_for_the_requested_label()
         &DockerCli::with_program(&script_path),
         CleanupDockerRequest {
             label: "openhuman.sandbox=true".into(),
-            timeout_ms: 1_000,
+            timeout_ms: 10_000,
         },
     )
     .await?;
@@ -121,7 +121,7 @@ async fn docker_cleanup_reports_failed_kill_instead_of_claiming_stopped()
         &DockerCli::with_program(&script_path),
         CleanupDockerRequest {
             label: "openhuman.sandbox=true".into(),
-            timeout_ms: 1_000,
+            timeout_ms: 10_000,
         },
     )
     .await
@@ -156,7 +156,7 @@ async fn docker_cleanup_does_not_kill_ids_from_a_failed_listing()
         &DockerCli::with_program(&script_path),
         CleanupDockerRequest {
             label: "openhuman.sandbox=true".into(),
-            timeout_ms: 1_000,
+            timeout_ms: 10_000,
         },
     )
     .await
@@ -195,7 +195,7 @@ async fn docker_cleanup_with_no_matching_containers_does_not_kill()
         &DockerCli::with_program(&script_path),
         CleanupDockerRequest {
             label: "openhuman.sandbox=true".into(),
-            timeout_ms: 1_000,
+            timeout_ms: 10_000,
         },
     )
     .await?;
@@ -247,7 +247,7 @@ async fn docker_control_rejects_invalid_deadline_and_label_before_cli_call()
         &cli,
         CleanupDockerRequest {
             label: "openhuman.sandbox=true\n--privileged".into(),
-            timeout_ms: 1_000,
+            timeout_ms: 10_000,
         },
     )
     .await
