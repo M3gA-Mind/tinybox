@@ -89,7 +89,7 @@ pub(super) fn include_paths(config: &str) -> Vec<String> {
     for line in logical_lines(config) {
         let line = line.trim();
         if let Some(section) = line.strip_prefix('[') {
-            let name = section.split([']', ' ', '"']).next().unwrap_or("");
+            let name = section.split([']', ' ', '\t', '"']).next().unwrap_or("");
             in_include =
                 name.eq_ignore_ascii_case("include") || name.eq_ignore_ascii_case("includeif");
             continue;
