@@ -116,15 +116,24 @@ pub(super) fn request(
         });
     }
     let pid_file = format!("{directory}/pid");
+    let status_file = format!("{directory}/status");
+    let wrapper_file = format!("{directory}/wrapper");
     let owner_file = format!("{directory}/owner");
     let script = tinybox_core::shell::script(&request.argv, request.cwd.as_deref(), &request.env);
     let child = format!(
-        "printf '%s\\n' \"$$\" > {} && exec /bin/sh -c {}",
+        "if ! printf '%s\\n' \"$$\" > {}; then exit 125; fi; \
+         trap ':' TERM; ( trap - TERM; /bin/sh -c {} <&3 ) & command_pid=$!; \
+         wait \"$command_pid\"; code=$?; printf '%s\\n' \"$code\" > {}; \
+         while :; do sleep 3600; done; : {id}",
         tinybox_core::shell::quote(&pid_file),
-        tinybox_core::shell::quote(&script)
+        tinybox_core::shell::quote(&script),
+        tinybox_core::shell::quote(&status_file),
+        id = tinybox_core::shell::quote(id)
     );
     let wrapper = format!(
-        "exec 3<&0; dir={dir}; pid_file={pid}; owner={owner}; \
+        "exec 3<&0; dir={dir}; pid_file={pid}; status_file={status}; wrapper_file={wrapper_file}; owner={owner}; \
+         if [ ! -d \"$dir\" ] || [ \"$(cat \"$owner\" 2>/dev/null)\" != {id} ]; then exit 125; fi; \
+         if ! printf '%s\\n' \"$$\" > \"$wrapper_file\"; then exit 125; fi; \
          if [ ! -d \"$dir\" ] || [ \"$(cat \"$owner\" 2>/dev/null)\" != {id} ]; then exit 125; fi; \
          ( exec setsid /bin/sh -c {child} <&3 ) & launcher=$!; \
          count=0; while [ ! -f \"$pid_file\" ]; do \
@@ -132,19 +141,26 @@ pub(super) fn request(
            count=$((count + 1)); if [ \"$count\" -ge 1000 ]; then kill -KILL \"$launcher\" 2>/dev/null || true; wait \"$launcher\" 2>/dev/null || true; exit 125; fi; \
            sleep 0.01; \
          done; \
-         wait \"$launcher\"; code=$?; \
+         while [ ! -f \"$status_file\" ]; do \
+           if ! kill -0 \"$launcher\" 2>/dev/null; then wait \"$launcher\"; code=$?; break; fi; \
+           sleep 0.01; \
+         done; \
+         if [ -f \"$status_file\" ]; then code=$(cat \"$status_file\" 2>/dev/null); case \"$code\" in ''|*[!0-9]*) exit 125;; esac; fi; \
          group=$(cat \"$pid_file\" 2>/dev/null); case \"$group\" in ''|*[!0-9]*) exit 125;; esac; \
          kill -TERM -\"$group\" 2>/dev/null || true; \
          count=0; while kill -0 -\"$group\" 2>/dev/null; do \
            count=$((count + 1)); if [ \"$count\" -ge 100 ]; then break; fi; sleep 0.01; \
          done; \
          if kill -0 -\"$group\" 2>/dev/null; then kill -KILL -\"$group\" 2>/dev/null || true; fi; \
+         wait \"$launcher\" 2>/dev/null || true; \
          count=0; while kill -0 -\"$group\" 2>/dev/null; do \
            count=$((count + 1)); if [ \"$count\" -ge 1000 ]; then exit 124; fi; sleep 0.01; \
          done; \
          printf 'done\\n' > \"$dir/done\" && rm -rf \"$dir\" || exit 125; exit \"$code\"",
         dir = tinybox_core::shell::quote(directory),
         pid = tinybox_core::shell::quote(&pid_file),
+        status = tinybox_core::shell::quote(&status_file),
+        wrapper_file = tinybox_core::shell::quote(&wrapper_file),
         owner = tinybox_core::shell::quote(&owner_file),
         id = tinybox_core::shell::quote(id),
         child = tinybox_core::shell::quote(&child),
@@ -158,37 +174,104 @@ pub(super) fn cleanup_request(
     target: &SshTarget,
     id: &str,
     directory: &str,
-    allow_unstarted: bool,
+    _allow_unstarted: bool,
 ) -> ExecRequest {
-    let pid_file = format!("{directory}/pid");
-    let owner_file = format!("{directory}/owner");
-    let empty_behavior = if allow_unstarted {
-        "rm -rf \"$dir\"; printf 'clean\\n'; exit 0"
-    } else {
-        "printf 'pending\\n'; exit 1"
-    };
+    let (pid_file, owner_file) = (format!("{directory}/pid"), format!("{directory}/owner"));
     let wrapper = format!(
-        "dir={dir}; pid_file={pid}; owner={owner}; \
+        "dir={dir}; pid_file={pid}; owner={owner}; claim={claim}; \
+         wrapper_state() {{ \
+           if [ ! -f \"$1/wrapper\" ]; then return 3; fi; \
+           wrapper_pid=$(cat \"$1/wrapper\" 2>/dev/null); \
+           case \"$wrapper_pid\" in ''|*[!0-9]*) return 2;; esac; \
+           listing=$(ps -ww -e -o pid= -o command= 2>/dev/null) || return 2; \
+           command=$(printf '%s\\n' \"$listing\" | awk -v wanted=\"$wrapper_pid\" '$1 == wanted {{ $1=\"\"; sub(/^ /, \"\"); print; found=1 }} END {{ if (!found) exit 1 }}') || return 1; \
+           case \"$command\" in *{id}*) return 0;; *) return 1;; esac; \
+         }}; \
+         claim_exists() {{ [ -e \"$claim\" ] || [ -L \"$claim\" ]; }}; \
+         group_state() {{ \
+           listing=$(ps -e -o pgid= 2>/dev/null) || return 2; \
+           printf '%s\\n' \"$listing\" | awk -v wanted=\"$1\" '$1 == wanted {{ found=1 }} END {{ if (found) exit 0; exit 1 }}'; \
+         }}; \
+         group_leader_owned() {{ \
+           listing=$(ps -ww -e -o pid= -o pgid= -o command= 2>/dev/null) || return 2; \
+           command=$(printf '%s\\n' \"$listing\" | awk -v wanted=\"$1\" '$1 == wanted && $2 == wanted {{ $1=\"\"; $2=\"\"; sub(/^  */, \"\"); print; found=1 }} END {{ if (!found) exit 1 }}') || return 1; \
+           case \"$command\" in *{id}*) return 0;; *) return 1;; esac; \
+         }}; \
+         restore_original() {{ \
+           if [ \"$work\" = \"$claim\" ] && [ ! -e \"$dir\" ]; then mv \"$claim\" \"$dir\" 2>/dev/null || return 1; fi; \
+           return 1; \
+         }}; \
+         stop_owned_group() {{ \
+           group_state \"$1\"; state=$?; if [ \"$state\" -eq 1 ]; then return 0; fi; if [ \"$state\" -ne 0 ]; then return 1; fi; \
+           group_leader_owned \"$1\" || return 1; \
+           kill -TERM -\"$1\" 2>/dev/null || return 1; \
+           count=0; while :; do \
+             group_state \"$1\"; state=$?; if [ \"$state\" -eq 1 ]; then return 0; fi; if [ \"$state\" -ne 0 ]; then return 1; fi; \
+             count=$((count + 1)); if [ \"$count\" -ge 100 ]; then break; fi; sleep 0.01; \
+           done; \
+           group_leader_owned \"$1\" || return 1; kill -KILL -\"$1\" 2>/dev/null || return 1; \
+           count=0; while :; do \
+             group_state \"$1\"; state=$?; if [ \"$state\" -eq 1 ]; then return 0; fi; if [ \"$state\" -ne 0 ]; then return 1; fi; \
+             count=$((count + 1)); if [ \"$count\" -ge 1000 ]; then return 1; fi; sleep 0.01; \
+           done; \
+         }}; \
+         reclaim_if_inactive() {{ \
+           work=\"$dir\"; \
+           if claim_exists; then \
+             if [ ! -d \"$claim\" ]; then return 1; fi; \
+             if [ -d \"$dir\" ]; then return 1; fi; work=\"$claim\"; \
+             wrapper_state \"$work\"; wrapper_status=$?; \
+             if [ \"$wrapper_status\" -eq 0 ]; then restore_original; return 1; fi; \
+             if [ \"$wrapper_status\" -ne 1 ] && [ \"$wrapper_status\" -ne 3 ]; then return 1; fi; \
+           elif [ -d \"$dir\" ]; then \
+             wrapper_state \"$dir\"; wrapper_status=$?; \
+             if [ \"$wrapper_status\" -eq 0 ] || [ \"$wrapper_status\" -eq 2 ]; then return 1; fi; \
+             if ! mv \"$dir\" \"$claim\" 2>/dev/null; then return 1; fi; work=\"$claim\"; \
+           else printf 'clean\\n'; return 0; fi; \
+           if [ ! -f \"$work/owner\" ] || [ \"$(cat \"$work/owner\" 2>/dev/null)\" != {id} ]; then return 1; fi; \
+           wrapper_state \"$work\"; wrapper_status=$?; \
+           if [ \"$wrapper_status\" -eq 0 ]; then \
+             restore_original; return 1; \
+           fi; \
+           if [ \"$wrapper_status\" -ne 1 ] && [ \"$wrapper_status\" -ne 3 ]; then restore_original; return 1; fi; \
+           stale_pid=$(cat \"$work/pid\" 2>/dev/null); \
+           if [ -n \"$stale_pid\" ]; then \
+             case \"$stale_pid\" in ''|*[!0-9]*) restore_original; return 1;; esac; \
+             group_state \"$stale_pid\"; group_status=$?; \
+             if [ \"$group_status\" -eq 0 ]; then stop_owned_group \"$stale_pid\" || {{ restore_original; return 1; }}; \
+             elif [ \"$group_status\" -ne 1 ]; then restore_original; return 1; fi; \
+           fi; \
+           rm -rf \"$work\" || return 1; \
+           printf 'clean\\n'; return 0; \
+         }}; \
+         if claim_exists; then reclaim_if_inactive || {{ printf 'pending\\n'; exit 1; }}; exit 0; fi; \
          if [ ! -d \"$dir\" ]; then printf 'clean\\n'; exit 0; fi; \
          if [ ! -f \"$owner\" ] || [ \"$(cat \"$owner\" 2>/dev/null)\" != {id} ]; then printf 'clean\\n'; exit 0; fi; \
          count=0; while [ ! -f \"$pid_file\" ] && [ -d \"$dir\" ]; do \
-           count=$((count + 1)); if [ \"$count\" -ge 1000 ]; then {empty}; fi; sleep 0.01; \
+           count=$((count + 1)); if [ \"$count\" -ge 1000 ]; then reclaim_if_inactive || {{ printf 'pending\\n'; exit 1; }}; exit 0; fi; sleep 0.01; \
          done; \
-         if [ ! -f \"$pid_file\" ]; then {empty}; fi; \
+         if [ ! -f \"$pid_file\" ]; then reclaim_if_inactive || {{ printf 'pending\\n'; exit 1; }}; exit 0; fi; \
          pid=$(cat \"$pid_file\"); case \"$pid\" in ''|*[!0-9]*) printf 'pending\\n'; exit 1;; esac; \
+         wrapper_state \"$dir\"; wrapper_status=$?; \
+         if [ \"$wrapper_status\" -eq 1 ] || [ \"$wrapper_status\" -eq 3 ]; then reclaim_if_inactive || {{ printf 'pending\\n'; exit 1; }}; exit 0; fi; \
+         if [ \"$wrapper_status\" -ne 0 ]; then printf 'pending\\n'; exit 1; fi; \
+         group_state \"$pid\"; group_status=$?; \
+         if [ \"$group_status\" -eq 1 ]; then reclaim_if_inactive || {{ printf 'pending\\n'; exit 1; }}; exit 0; fi; \
+         if [ \"$group_status\" -ne 0 ]; then printf 'pending\\n'; exit 1; fi; \
+         group_leader_owned \"$pid\" || {{ printf 'pending\\n'; exit 1; }}; \
          kill -TERM -\"$pid\" 2>/dev/null || true; \
          count=0; while [ -d \"$dir\" ] && [ ! -f \"$dir/done\" ]; do \
            count=$((count + 1)); if [ \"$count\" -ge 100 ]; then break; fi; sleep 0.01; \
          done; \
          if [ -d \"$dir\" ] && [ ! -f \"$dir/done\" ]; then kill -KILL -\"$pid\" 2>/dev/null || true; fi; \
          count=0; while [ -d \"$dir\" ]; do \
-           count=$((count + 1)); if [ \"$count\" -ge 100 ]; then printf 'pending\\n'; exit 1; fi; sleep 0.01; \
+           count=$((count + 1)); if [ \"$count\" -ge 100 ]; then reclaim_if_inactive || {{ printf 'pending\\n'; exit 1; }}; exit 0; fi; sleep 0.01; \
          done; printf 'clean\\n'",
         dir = tinybox_core::shell::quote(directory),
         pid = tinybox_core::shell::quote(&pid_file),
         owner = tinybox_core::shell::quote(&owner_file),
         id = tinybox_core::shell::quote(id),
-        empty = empty_behavior,
+        claim = tinybox_core::shell::quote(&format!("{directory}.cleanup")),
     );
     ssh_request(target, &wrapper)
 }
