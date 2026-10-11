@@ -814,3 +814,38 @@ async fn failed_scratch_deletion_keeps_output_and_close_retryable()
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn native_shell_refuses_nonlocal_or_nondirectory_collectors_before_admission()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    let shell = shell_request(&resources, &resource, state.path(), "echo owned").await?;
+    let slot = resources.slot(&resource).await?;
+    {
+        let mut entry = slot.lock().await;
+        let entry = entry.as_mut().ok_or("missing resource")?;
+        entry.native_host = false;
+    }
+    let error = resources
+        .start_shell_exec(shell.clone())
+        .await
+        .err()
+        .ok_or("accepted nonlocal shell")?;
+    assert_eq!(error.wire_name(), tinybox_bus::UNSUPPORTED_OPERATION);
+    {
+        let mut entry = slot.lock().await;
+        let entry = entry.as_mut().ok_or("missing resource")?;
+        entry.native_host = true;
+        entry.workspace_root = None;
+    }
+    let error = resources
+        .start_shell_exec(shell)
+        .await
+        .err()
+        .ok_or("accepted nondirectory shell")?;
+    assert_eq!(error.wire_name(), tinybox_bus::UNSUPPORTED_OPERATION);
+    resources.close(&resource).await?;
+    Ok(())
+}
