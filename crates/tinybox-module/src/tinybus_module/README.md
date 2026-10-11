@@ -342,8 +342,8 @@ hosts continue to execute through the module. Native providers can use the
 shared quote-preserving TinyBox command builder.
 
 Windows explicitly enables extensions and disables delayed expansion.
-Unix builders remove BASH_ENV, ENV, SHELLOPTS and BASHOPTS; ShellInvocation
-returns those removal names. Bash uses -p to ignore exported functions.
+Unix builders remove BASH_ENV, ENV, SHELLOPTS, BASHOPTS and POSIXLY_CORRECT;
+ShellInvocation returns those removal names. Bash uses -p to ignore exported functions.
 Discovery checks standard Bash paths on every call. Providers apply the
 removals after approved environment overrides.
 
