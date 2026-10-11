@@ -43,6 +43,7 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | AbortFileWrite | AbortFileWriteRequest | unit |
 | ResolveLocalGrants | ResolveLocalGrantsRequest | LocalGrants |
 | SelectShell | SelectShellRequest | ShellInvocation |
+| StartShellExec | ShellExecRequest | ProcessRef |
 
 Capabilities advertises contract version 1.11; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least

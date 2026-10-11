@@ -685,7 +685,6 @@ async fn native_shell_invalid_budget_does_not_consume_its_reservation()
     Ok(())
 }
 #[tokio::test]
-#[cfg(unix)]
 async fn native_shell_timeout_acknowledges_child_cleanup_before_output_release()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let resources = Resources::default();
