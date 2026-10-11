@@ -285,15 +285,25 @@ fn cmd_startup_ignores_the_payload_path() -> Result<(), Box<dyn std::error::Erro
 #[cfg(unix)]
 fn inherited_posix_mode_cannot_change_bash_command_substitution()
 -> Result<(), Box<dyn std::error::Error>> {
-    let Some(bash) = bash_path() else { return Ok(()); };
-    let selected = selection_for(&SelectShellRequest {
-        command: "set -e; x=$(false; echo reached); echo \"$x\"".into(),
-        preserve_pipeline_status: true,
-    }, ShellFlavor::Posix, Some(bash));
+    let Some(bash) = bash_path() else {
+        return Ok(());
+    };
+    let selected = selection_for(
+        &SelectShellRequest {
+            command: "set -e; x=$(false; echo reached); echo \"$x\"".into(),
+            preserve_pipeline_status: true,
+        },
+        ShellFlavor::Posix,
+        Some(bash),
+    );
     // Supply the ambient value before applying the invocation's removal list.
     let mut command = std::process::Command::new(&selected.program);
-    command.args(&selected.arguments).env("POSIXLY_CORRECT", "1");
-    for name in selected.remove_environment { command.env_remove(name); }
+    command
+        .args(&selected.arguments)
+        .env("POSIXLY_CORRECT", "1");
+    for name in selected.remove_environment {
+        command.env_remove(name);
+    }
     let output = command.output()?;
     assert!(output.status.success());
     assert_eq!(output.stdout, b"reached\n");
@@ -302,8 +312,7 @@ fn inherited_posix_mode_cannot_change_bash_command_substitution()
 
 #[test]
 #[cfg(unix)]
-fn bash_discovery_skips_non_executable_files()
--> Result<(), Box<dyn std::error::Error>> {
+fn bash_discovery_skips_non_executable_files() -> Result<(), Box<dyn std::error::Error>> {
     use std::os::unix::fs::PermissionsExt;
     let first = tempfile::NamedTempFile::new()?;
     let second = tempfile::NamedTempFile::new()?;

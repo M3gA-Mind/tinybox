@@ -127,22 +127,19 @@ fn bash_path() -> Option<&'static str> {
 }
 
 fn bash_path_in<'a>(paths: &[&'a str]) -> Option<&'a str> {
-    paths
-        .iter()
-        .copied()
-        .find(|path| {
-            if !std::path::Path::new(path).is_file() {
-                return false;
-            }
-            #[cfg(unix)]
-            {
-                nix::unistd::access(*path, nix::unistd::AccessFlags::X_OK).is_ok()
-            }
-            #[cfg(not(unix))]
-            {
-                true
-            }
-        })
+    paths.iter().copied().find(|path| {
+        if !std::path::Path::new(path).is_file() {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            nix::unistd::access(*path, nix::unistd::AccessFlags::X_OK).is_ok()
+        }
+        #[cfg(not(unix))]
+        {
+            true
+        }
+    })
 }
 
 #[cfg(test)]

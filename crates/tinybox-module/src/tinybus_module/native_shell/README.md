@@ -14,3 +14,6 @@ Output release and resource close explicitly remove private scratch on a
 blocking worker after draining the native collector. Timeout and cancellation
 drain the process but retain scratch for as long as its journal is retained. A deletion failure is returned to the caller and retains the context
 and scratch path for a later cleanup retry.
+
+Preparation runs on Tokio’s blocking pool so filesystem and jail preflight I/O
+do not stall the module’s async worker.
