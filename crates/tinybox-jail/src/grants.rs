@@ -110,14 +110,20 @@ impl<'a> Builder<'a> {
     }
 
     /// Canonicalize `path` and return it only if it exists and clears the
-    /// credential floor. Canonicalizing first means a symlink into `~/.ssh`
-    /// is judged by its target.
+    /// credential floor on both its requested name and resolved target.
     fn admit(&self, path: &Path, source: &str) -> Option<PathBuf> {
+        if self.refuses_path(path) {
+            log::warn!(
+                "refused {source} grant reaching protected paths: {}",
+                path.display()
+            );
+            return None;
+        }
         let Ok(canonical) = path.canonicalize() else {
             log::debug!("skipped missing {source} grant: {}", path.display());
             return None;
         };
-        if self.is_protected(&canonical) || self.exposes_credentials(&canonical) {
+        if self.refuses_path(&canonical) {
             log::warn!(
                 "refused {source} grant reaching protected paths: {}",
                 canonical.display()
@@ -125,6 +131,16 @@ impl<'a> Builder<'a> {
             return None;
         }
         Some(canonical)
+    }
+
+    fn refuses_path(&self, path: &Path) -> bool {
+        let normalized = normalized_floor_path(&path.to_string_lossy());
+        // Procfs is reserved for the dedicated read-only toggle, including
+        // ancestors whose recursive grant would expose it.
+        let exposes_proc = Path::new("/proc").exists()
+            && (same_or_descendant(&normalized, "/proc")
+                || same_or_descendant("/proc", &normalized));
+        self.is_protected(path) || self.exposes_credentials(path) || exposes_proc
     }
 
     /// True when `path` is, contains, or sits inside a credential directory.

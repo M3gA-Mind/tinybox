@@ -478,3 +478,56 @@ fn credential_root_ancestors_match_case_and_separator_styles() {
     assert!(builder.exposes_credentials(Path::new(r"C:\USERS\floor-fixture\.SSH\id_rsa")));
     assert!(!builder.exposes_credentials(Path::new(r"C:\Users\floor-fixture-other")));
 }
+
+#[test]
+#[cfg(unix)]
+fn protected_credential_alias_does_not_grant_its_neutral_target()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir(home.path().join("dotfiles"))?;
+    fs::write(home.path().join("dotfiles/npmrc"), "fixture")?;
+    std::os::unix::fs::symlink(
+        home.path().join("dotfiles/npmrc"),
+        home.path().join(".npmrc"),
+    )?;
+    let config = LocalGrantConfig {
+        toolchain_homes: false,
+        extra_read_only: vec!["~/.npmrc".into()],
+        ..LocalGrantConfig::default()
+    };
+    let protected = ProtectedPaths {
+        components: vec![".npmrc".into()],
+        ..ProtectedPaths::default()
+    };
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &protected);
+    assert_eq!(grants.read_only, Vec::<PathBuf>::new());
+    Ok(())
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn procfs_extras_cannot_bypass_the_dedicated_toggle_with_an_empty_floor() {
+    let config = LocalGrantConfig {
+        toolchain_homes: false,
+        extra_read_only: vec!["/proc".into(), "/proc/self".into()],
+        extra_read_write: vec!["/proc".into(), "/proc/self".into()],
+        ..LocalGrantConfig::default()
+    };
+    let grants = resolve_local_jail_grants(None, &config, &ProtectedPaths::default());
+    assert_eq!(grants.read_only, Vec::<PathBuf>::new());
+    assert_eq!(grants.read_write, Vec::<PathBuf>::new());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn procfs_toggle_grants_read_only_access_even_when_extras_ask_for_writes() {
+    let config = LocalGrantConfig {
+        toolchain_homes: false,
+        allow_proc: true,
+        extra_read_write: vec!["/proc".into(), "/proc/self".into()],
+        ..LocalGrantConfig::default()
+    };
+    let grants = resolve_local_jail_grants(None, &config, &ProtectedPaths::default());
+    assert_eq!(grants.read_only, vec![PathBuf::from("/proc")]);
+    assert_eq!(grants.read_write, Vec::<PathBuf>::new());
+}

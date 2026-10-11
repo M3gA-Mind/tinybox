@@ -6,7 +6,20 @@ use tinybus::{Connection, broker::Broker, module::ModuleHost, transport::memory:
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn compiled_manifest_admits_and_executes_local_grant_discovery()
 -> Result<(), Box<dyn std::error::Error>> {
-    let artifact = compiled_artifact()?;
+    let built_artifact = compiled_artifact()?;
+    // Cargo output inherits the checkout ACL on Windows, which need not meet
+    // production module admission. Stage the real artifact with private ACLs.
+    let staged = tempfile::Builder::new()
+        .prefix("admitted-module-")
+        .tempdir_in(built_artifact.parent().ok_or("artifact has no directory")?)?;
+    #[cfg(windows)]
+    secure_staging_directory(staged.path())?;
+    let artifact = staged.path().join(
+        built_artifact
+            .file_name()
+            .ok_or("artifact has no filename")?,
+    );
+    std::fs::copy(&built_artifact, &artifact)?;
     assert!(
         artifact.is_file(),
         "compiled TinyBox artifact missing: {}",
@@ -115,4 +128,32 @@ fn compiled_artifact() -> Result<std::path::PathBuf, Box<dyn std::error::Error>>
         "default-feature dynamic artifact build failed: {status}"
     );
     Ok(target.join("debug").join(filename))
+}
+
+#[cfg(windows)]
+fn secure_staging_directory(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let identity = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+        ])
+        .output()?;
+    assert!(
+        identity.status.success(),
+        "current-user SID query failed: {identity:?}"
+    );
+    let sid = String::from_utf8(identity.stdout)?;
+    let grant = format!("*{}:(OI)(CI)F", sid.trim());
+    let acl = std::process::Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(grant)
+        .output()?;
+    assert!(
+        acl.status.success(),
+        "private module staging ACL failed: {acl:?}"
+    );
+    Ok(())
 }
