@@ -22,7 +22,7 @@ non-login -c. Bash prepends "set -o pipefail" unless preservation is requested;
 sh never receives that Bash-only prefix. For "false | true", Bash's default
 selection reports the failing stage; preservation retains the last-stage status.
 
-Windows selects cmd with /D /S /C. /D suppresses registry AutoRun. /S strips
+Windows selects cmd with /D /E:ON /V:OFF /S /C. /D suppresses registry AutoRun. /S strips
 exactly one supplied outer wrapper around the raw payload, leaving inner quoted
 executable paths, argument pairs and redirection paths intact. Native builders
 must use raw_arg for this payload rather than ordinary argument escaping.
@@ -48,3 +48,7 @@ approved environment, working directory, pipes and lifecycle.
 
 There are no open decisions for discovery. The pending execution slice must
 retain process supervision and prove actual module execution on Windows.
+
+Windows explicitly enables extensions and disables delayed expansion.
+Unix builders remove BASH_ENV and ENV; ShellInvocation returns those removal
+names. Providers apply them after approved environment overrides.

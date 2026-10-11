@@ -265,6 +265,7 @@ fn shell_selection_wire_defaults_preserve_safe_pipeline_behavior() -> Result<(),
         arguments: vec!["/C".into()],
         raw_arguments: Some(r#"echo "quoted payload""#.into()),
         bootstrap_environment: vec!["SystemRoot".into()],
+        remove_environment: Vec::new(),
     };
     let value = serde_json::to_value(&invocation)?;
     assert_eq!(value["flavor"], "cmd");
@@ -276,5 +277,16 @@ fn shell_selection_wire_defaults_preserve_safe_pipeline_behavior() -> Result<(),
     assert_eq!(METHODS[28], "ResolveLocalGrants");
     assert_eq!(METHODS[29], "SelectShell");
     assert!(!is_compatible((1, 9)));
+    Ok(())
+}
+
+#[test]
+fn older_shell_invocations_default_the_startup_removal_vocabulary() -> Result<(), serde_json::Error>
+{
+    let invocation: ShellInvocation = serde_json::from_value(serde_json::json!({
+        "flavor":"posix", "program":"sh", "arguments":["-c","true"],
+        "raw_arguments":null, "bootstrap_environment":[]
+    }))?;
+    assert_eq!(invocation.remove_environment, Vec::<String>::new());
     Ok(())
 }

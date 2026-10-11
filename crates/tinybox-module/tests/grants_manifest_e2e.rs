@@ -97,12 +97,13 @@ async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
     if cfg!(windows) {
         assert_eq!(selection.flavor, tinybox_bus::ShellFlavor::Cmd);
         assert_eq!(selection.program, "cmd");
-        assert_eq!(selection.arguments, ["/D", "/S", "/C"]);
+        assert_eq!(selection.arguments, ["/D", "/E:ON", "/V:OFF", "/S", "/C"]);
         assert_eq!(selection.raw_arguments.as_deref(), Some("\"false | true\""));
     } else {
         assert_eq!(selection.flavor, tinybox_bus::ShellFlavor::Posix);
         assert_eq!(selection.arguments[0], "-c");
         assert_eq!(selection.raw_arguments, None);
+        assert_eq!(selection.remove_environment, ["BASH_ENV", "ENV"]);
     }
     proxy.call::<()>("Shutdown", ()).await?;
     broker_task.abort();

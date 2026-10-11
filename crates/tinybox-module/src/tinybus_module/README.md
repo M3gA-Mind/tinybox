@@ -300,7 +300,7 @@ Contract 1.10 adds `SelectShell`. The request carries command text and an option
 pipeline-status preservation flag. Unix selects Bash at a standard path with
 `set -o pipefail` by default, or sh without that Bash-only flag when Bash is
 absent. Unix uses non-login `-c` to avoid loading login profiles before the
-payload. Windows selects cmd `/D /S /C`, disabling registry AutoRun hooks and
+payload. Windows selects cmd `/D /E:ON /V:OFF /S /C`, disabling registry AutoRun hooks and
 stripping one explicit outer wrapper around the raw command-line payload.
 Quoted executable/argument pairs, redirection paths and percent expansion remain
 inside that wrapper.
@@ -308,3 +308,7 @@ The result includes Windows bootstrap environment names, never their values.
 Selection does not execute a command, authorize access or provide confinement;
 hosts continue to execute through the module. Native providers can use the
 shared quote-preserving TinyBox command builder.
+
+Windows explicitly enables extensions and disables delayed expansion.
+Unix builders remove BASH_ENV and ENV; ShellInvocation returns those removal
+names. Providers apply them after approved environment overrides.

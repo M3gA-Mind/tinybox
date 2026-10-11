@@ -115,7 +115,10 @@ fn bash_startup_environment_cannot_replace_the_requested_payload()
 -> Result<(), Box<dyn std::error::Error>> {
     const CHILD: &str = "TINYBOX_SHELL_ENV_REGRESSION_CHILD";
     if std::env::var_os(CHILD).is_some() {
-        let request = SelectShellRequest { command: "exit 0".into(), preserve_pipeline_status: false };
+        let request = SelectShellRequest {
+            command: "exit 0".into(),
+            preserve_pipeline_status: false,
+        };
         assert!(build_shell_command(&request).status()?.success());
         return Ok(());
     }
@@ -123,9 +126,17 @@ fn bash_startup_environment_cannot_replace_the_requested_payload()
     let startup = fixture.path().join("startup.sh");
     std::fs::write(&startup, "exit 77\n")?;
     let status = std::process::Command::new(std::env::current_exe()?)
-        .args(["--exact", "local::shell::tests::bash_startup_environment_cannot_replace_the_requested_payload", "--nocapture"])
-        .env(CHILD, "1").env("BASH_ENV", &startup)
+        .args([
+            "--exact",
+            "local::shell::tests::bash_startup_environment_cannot_replace_the_requested_payload",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .env("BASH_ENV", &startup)
         .status()?;
-    assert!(status.success(), "startup environment changed the child payload result");
+    assert!(
+        status.success(),
+        "startup environment changed the child payload result"
+    );
     Ok(())
 }

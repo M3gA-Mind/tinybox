@@ -11,7 +11,7 @@ shell execution is tracked separately and remains unfinished.
 2. Implement platform selection and the native quote-preserving builder in
    crates/tinybox-host/src/local/shell.rs; centralize exports in src/lib.rs.
    Portable regressions in local/shell_tests.rs pin non-login startup,
-   Bash pipefail, preservation, sh fallback and cmd /D /S /C raw wrapping.
+   Bash pipefail, preservation, sh fallback and cmd /D /E:ON /V:OFF /S /C raw wrapping.
    The startup regressions failed before the review corrections.
 3. Add module dispatch and manifest declaration in
    crates/tinybox-module/src/tinybus_module/mod.rs. Extend
@@ -36,3 +36,7 @@ Hosted validation is reported on the pull request. The native consumer remains
 open: add a supervised module operation that accepts shell text directly,
 preserves raw Windows quoting and uses existing output/cancellation ownership.
 Do not mark that consumer objection resolved on discovery-only evidence.
+
+Windows explicitly enables extensions and disables delayed expansion.
+Unix builders remove BASH_ENV and ENV; ShellInvocation returns those removal
+names. Providers apply them after approved environment overrides.

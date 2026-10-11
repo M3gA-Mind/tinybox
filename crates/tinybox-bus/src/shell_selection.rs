@@ -39,4 +39,7 @@ pub struct ShellInvocation {
     /// Parent environment names needed to bootstrap Windows child tools.
     /// Values are never returned by shell discovery.
     pub bootstrap_environment: Vec<String>,
+    /// Remove these startup-hook variables after applying the approved environment.
+    #[serde(default)]
+    pub remove_environment: Vec<String>,
 }

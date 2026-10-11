@@ -37,6 +37,9 @@ pub fn build_shell_command(request: &SelectShellRequest) -> std::process::Comman
     let selection = select_shell(request);
     let mut command = std::process::Command::new(selection.program);
     command.args(selection.arguments);
+    for name in selection.remove_environment {
+        command.env_remove(name);
+    }
     #[cfg(windows)]
     if let Some(raw) = selection.raw_arguments {
         use std::os::windows::process::CommandExt;
@@ -56,12 +59,19 @@ fn selection_for(
             program: "cmd".into(),
             // Disable registry AutoRun and make cmd strip exactly our outer
             // wrapper, preserving quoted executable/argument pairs inside.
-            arguments: vec!["/D".into(), "/S".into(), "/C".into()],
+            arguments: vec![
+                "/D".into(),
+                "/E:ON".into(),
+                "/V:OFF".into(),
+                "/S".into(),
+                "/C".into(),
+            ],
             raw_arguments: Some(format!("\"{}\"", request.command)),
             bootstrap_environment: WINDOWS_BOOTSTRAP_ENVIRONMENT
                 .iter()
                 .map(|name| (*name).into())
                 .collect(),
+            remove_environment: Vec::new(),
         },
         ShellFlavor::Posix => ShellInvocation {
             flavor,
@@ -76,6 +86,7 @@ fn selection_for(
             ],
             raw_arguments: None,
             bootstrap_environment: Vec::new(),
+            remove_environment: vec!["BASH_ENV".into(), "ENV".into()],
         },
     }
 }
