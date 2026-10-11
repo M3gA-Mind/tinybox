@@ -282,6 +282,16 @@ state. Commands that fetch dependencies
 need a separately authorized disposable Cargo home. Hosts must supply their complete floor
 and apply authorization before using the returned grants in `StartJailedExec`.
 
+Directory grants are inspected recursively for protected component names and
+component pairs before admission. The scan preserves requested alias names,
+does not follow nested symlinks, and rejects symlinks named as a protected
+pair's first component. Inspection errors, more than 1,000,000 entries, or
+more than 128 directory levels refuse the grant. This also applies to automatic
+system toolchain roots, which may therefore be omitted. Discovery is a
+point-in-time snapshot: hosts must prevent concurrent mutation and creation of
+protected entries within a granted tree, or use isolated disposable state.
+It does not install a kernel deny rule for filenames created later.
+
 ### Platform shell discovery
 
 Contract 1.10 adds `SelectShell`. The request carries command text and an optional

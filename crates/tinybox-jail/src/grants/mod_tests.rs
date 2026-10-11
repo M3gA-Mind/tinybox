@@ -117,11 +117,6 @@ fn toolchain_homes_are_granted_when_they_exist() -> Result<(), Box<dyn std::erro
             "{ro} must not be writable"
         );
     }
-    for sys in ["/usr/local", "/opt"] {
-        if Path::new(sys).exists() {
-            assert!(has(&g.read_only, &canon(Path::new(sys))?), "{sys} missing");
-        }
-    }
     Ok(())
 }
 
@@ -812,5 +807,189 @@ fn discovered_git_configuration_cannot_be_poisoned_via_its_target_ancestor()
     };
     let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default());
     assert_eq!(grants.read_write, Vec::<PathBuf>::new());
+    Ok(())
+}
+
+#[test]
+fn directory_extras_cannot_expose_nested_protected_components()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir_all(home.path().join("project/nested"))?;
+    fs::write(home.path().join("project/nested/.npmrc"), "secret")?;
+    let protected = ProtectedPaths {
+        components: vec![".npmrc".into()],
+        ..ProtectedPaths::default()
+    };
+    let config = LocalGrantConfig {
+        toolchain_homes: false,
+        extra_read_only: vec!["~/project".into()],
+        extra_read_write: vec!["~/project".into()],
+        ..LocalGrantConfig::default()
+    };
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &protected);
+    assert_eq!(grants, JailGrants::default());
+    Ok(())
+}
+
+#[test]
+fn directory_extras_cannot_expose_nested_protected_component_pairs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir_all(home.path().join("project/nested/.docker"))?;
+    fs::write(
+        home.path().join("project/nested/.docker/config.json"),
+        "secret",
+    )?;
+    let protected = ProtectedPaths {
+        component_pairs: vec![[".docker".into(), "config.json".into()]],
+        ..ProtectedPaths::default()
+    };
+    let config = LocalGrantConfig {
+        toolchain_homes: false,
+        extra_read_only: vec!["~/project".into()],
+        ..LocalGrantConfig::default()
+    };
+    assert_eq!(
+        resolve_local_jail_grants(Some(home.path()), &config, &protected),
+        JailGrants::default()
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn aliased_directory_extras_preserve_logical_parent_component_pairs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir(home.path().join("neutral"))?;
+    fs::write(home.path().join("neutral/credentials.toml"), "secret")?;
+    std::os::unix::fs::symlink(home.path().join("neutral"), home.path().join(".cargo"))?;
+    let protected = ProtectedPaths {
+        component_pairs: vec![[".cargo".into(), "credentials.toml".into()]],
+        ..ProtectedPaths::default()
+    };
+    let config = LocalGrantConfig {
+        toolchain_homes: false,
+        extra_read_only: vec!["~/.cargo".into()],
+        ..LocalGrantConfig::default()
+    };
+    assert_eq!(
+        resolve_local_jail_grants(Some(home.path()), &config, &protected),
+        JailGrants::default()
+    );
+    Ok(())
+}
+
+#[test]
+fn subtree_inspection_accepts_safe_trees_and_fails_closed_at_its_bounds()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    fs::write(root.path().join("safe"), "fixture")?;
+    let protected = ProtectedPaths {
+        components: vec![".npmrc".into()],
+        ..ProtectedPaths::default()
+    };
+    let builder = Builder::new(None, &protected);
+    assert!(builder.subtree_is_clear(root.path(), root.path(), 1, 1)?);
+    assert!(
+        builder
+            .subtree_is_clear(root.path(), root.path(), 0, 1)
+            .is_err()
+    );
+    fs::create_dir(root.path().join("nested"))?;
+    assert!(
+        builder
+            .subtree_is_clear(root.path(), root.path(), 2, 1)
+            .is_err()
+    );
+    assert!(builder.subtree_is_clear(root.path(), root.path(), 2, 2)?);
+    let missing = root.path().join("missing");
+    assert!(
+        builder
+            .subtree_is_clear(&missing, &missing, 10, 10)
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn subtree_inspection_does_not_follow_cycles_but_rejects_protected_symlink_names()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    std::os::unix::fs::symlink(root.path(), root.path().join("cycle"))?;
+    let protected = ProtectedPaths {
+        components: vec![".npmrc".into()],
+        ..ProtectedPaths::default()
+    };
+    let builder = Builder::new(None, &protected);
+    assert!(builder.subtree_is_clear(root.path(), root.path(), 1, 1)?);
+    std::os::unix::fs::symlink(root.path().join("missing"), root.path().join(".npmrc"))?;
+    assert!(!builder.subtree_is_clear(root.path(), root.path(), 2, 1)?);
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn subtree_pair_protection_cannot_be_bypassed_by_a_directory_symlink()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    fs::create_dir(root.path().join("neutral"))?;
+    fs::write(root.path().join("neutral/config.json"), "secret")?;
+    std::os::unix::fs::symlink(root.path().join("neutral"), root.path().join(".docker"))?;
+    let protected = ProtectedPaths {
+        component_pairs: vec![[".docker".into(), "config.json".into()]],
+        ..ProtectedPaths::default()
+    };
+    let config = LocalGrantConfig {
+        toolchain_homes: false,
+        extra_read_only: vec![root.path().to_str().ok_or("non-UTF8 fixture")?.into()],
+        ..LocalGrantConfig::default()
+    };
+    assert_eq!(
+        resolve_local_jail_grants(None, &config, &protected),
+        JailGrants::default()
+    );
+    Ok(())
+}
+
+#[test]
+fn git_includes_strip_unquoted_comments_but_preserve_quoted_markers() {
+    assert_eq!(
+        include_paths(
+            r#"[include]
+path = ~/work.conf # local
+path = other.conf ; explanation
+path = "quoted#name;value.conf" # trailing
+path = prefix"quoted#part"suffix.conf ; trailing
+"#
+        ),
+        [
+            "~/work.conf",
+            "other.conf",
+            "quoted#name;value.conf",
+            "prefixquoted#partsuffix.conf"
+        ]
+    );
+}
+
+#[test]
+fn git_include_with_a_trailing_comment_grants_the_actual_file()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::write(
+        home.path().join(".gitconfig"),
+        "[include]\npath = ~/work.conf # local\n",
+    )?;
+    fs::write(home.path().join("work.conf"), "[core]\n")?;
+    let grants = resolve_local_jail_grants(
+        Some(home.path()),
+        &LocalGrantConfig::default(),
+        &ProtectedPaths::default(),
+    );
+    assert!(has(
+        &grants.read_only,
+        &canon(&home.path().join("work.conf"))?
+    ));
     Ok(())
 }
