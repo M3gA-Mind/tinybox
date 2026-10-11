@@ -1523,6 +1523,246 @@ fn cleanup_kills_a_term_ignoring_descendant_while_its_uuid_anchor_stays_owned() 
 
 #[cfg(target_os = "linux")]
 #[test]
+fn generated_supervisor_publishes_status_with_atomic_rename() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let target = SshTarget::new("builder")?;
+    let state = observed::RemoteCleanupState::default();
+    let (id, directory) = state.reserve();
+    let prepare = observed::prepare_request(&target, &id, &directory);
+    let prepared = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(last_arg(&prepare, "read status-publish setup")?)
+        .output()
+        .map_err(|error| Error::io("prepare status-publish fixture", &error))?;
+    assert!(prepared.status.success());
+
+    let fake_bin = format!("/tmp/tinybox-observed-mv-{id}");
+    std::fs::create_dir(&fake_bin)
+        .map_err(|error| Error::io("create fake mv directory", &error))?;
+    let mv_started = format!("/tmp/tinybox-observed-mv-started-{id}");
+    let mv_release = format!("/tmp/tinybox-observed-mv-release-{id}");
+    let mv_path = format!("{fake_bin}/mv");
+    std::fs::write(
+        &mv_path,
+        "#!/bin/sh\nprintf 'ready\\n' > \"$TINYBOX_TEST_MV_STARTED\"\nwhile [ ! -f \"$TINYBOX_TEST_MV_RELEASE\" ]; do sleep 0.01; done\nexec /bin/mv \"$@\"\n",
+    )
+    .map_err(|error| Error::io("write fake mv command", &error))?;
+    let mut permissions = std::fs::metadata(&mv_path)
+        .map_err(|error| Error::io("inspect fake mv command", &error))?
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&mv_path, permissions)
+        .map_err(|error| Error::io("make fake mv executable", &error))?;
+
+    let launch = observed::request(
+        &target,
+        &ExecRequest::new(["/bin/sh", "-c", "exit 7"]),
+        &id,
+        &directory,
+    )?;
+    let launch_script = last_arg(&launch, "read status-race launcher")?;
+    let mut wrapper = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(launch_script)
+        .env("PATH", format!("{fake_bin}:/usr/bin:/bin"))
+        .env("TINYBOX_TEST_MV_STARTED", &mv_started)
+        .env("TINYBOX_TEST_MV_RELEASE", &mv_release)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| Error::io("start status-publish supervisor", &error))?;
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !std::path::Path::new(&mv_started).exists() && Instant::now() < deadline {
+        if wrapper
+            .try_wait()
+            .map_err(|error| Error::io("poll status-publish supervisor", &error))?
+            .is_some()
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let publisher_reached = std::path::Path::new(&mv_started).exists();
+    let status_path = format!("{directory}/status");
+    let status_tmp_path = format!("{directory}/status.tmp");
+    let final_status_visible = std::path::Path::new(&status_path).exists();
+    let temporary_status = std::fs::read_to_string(&status_tmp_path).ok();
+    std::fs::write(&mv_release, "release\n")
+        .map_err(|error| Error::io("release fake mv command", &error))?;
+    let status = wrapper
+        .wait()
+        .map_err(|error| Error::io("wait for status-publish supervisor", &error))?;
+
+    let _ = std::fs::remove_file(&mv_started);
+    let _ = std::fs::remove_file(&mv_release);
+    let _ = std::fs::remove_dir_all(&fake_bin);
+    state.remove(&id);
+    assert!(
+        publisher_reached,
+        "supervisor did not publish through the atomic rename gate"
+    );
+    assert!(
+        !final_status_visible,
+        "final status was visible before the complete temporary value was renamed"
+    );
+    assert_eq!(temporary_status.as_deref(), Some("7\n"));
+    assert_eq!(status.code(), Some(7));
+    assert!(!std::path::Path::new(&directory).exists());
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn generated_supervisor_does_not_wait_for_a_lonely_group_anchor() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+
+    let target = SshTarget::new("builder")?;
+    let state = observed::RemoteCleanupState::default();
+    let (id, directory) = state.reserve();
+    let prepare = observed::prepare_request(&target, &id, &directory);
+    let prepared = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(last_arg(&prepare, "read anchor-only setup")?)
+        .output()
+        .map_err(|error| Error::io("prepare anchor-only fixture", &error))?;
+    assert!(prepared.status.success());
+
+    let fake_bin = format!("{directory}/bin");
+    std::fs::create_dir(&fake_bin)
+        .map_err(|error| Error::io("create fake ps directory", &error))?;
+    let ps_path = format!("{fake_bin}/ps");
+    let ps_calls = format!("/tmp/tinybox-observed-ps-calls-{id}");
+    std::fs::write(
+        &ps_path,
+        "#!/bin/sh\nprintf 'called\\n' >> \"$TINYBOX_TEST_PS_CALLS\"\ngroup=$(cat \"$TINYBOX_TEST_GROUP_FILE\") || exit 1\nprintf '%s %s\\n' \"$group\" \"$group\"\n",
+    )
+    .map_err(|error| Error::io("write fake ps command", &error))?;
+    let mut permissions = std::fs::metadata(&ps_path)
+        .map_err(|error| Error::io("inspect fake ps command", &error))?
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&ps_path, permissions)
+        .map_err(|error| Error::io("make fake ps executable", &error))?;
+
+    let launch = observed::request(
+        &target,
+        &ExecRequest::new(["/bin/sh", "-c", "exit 7"]),
+        &id,
+        &directory,
+    )?;
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(last_arg(&launch, "read anchor-only launcher")?)
+        .env("PATH", format!("{fake_bin}:/usr/bin:/bin"))
+        .env("TINYBOX_TEST_PS_CALLS", &ps_calls)
+        .env("TINYBOX_TEST_GROUP_FILE", format!("{directory}/pid"))
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| Error::io("run anchor-only supervisor", &error))?;
+
+    if !output.status.success() {
+        let cleanup = observed::cleanup_request(&target, &id, &directory, false);
+        if let Ok(script) = last_arg(&cleanup, "read anchor-only cleanup") {
+            let _ = Command::new("/bin/sh").arg("-c").arg(script).status();
+        }
+    }
+    state.remove(&id);
+    assert_eq!(output.status.code(), Some(7));
+    let calls = std::fs::read_to_string(&ps_calls)
+        .map_err(|error| Error::io("read fake ps call log", &error))?;
+    std::fs::remove_file(&ps_calls)
+        .map_err(|error| Error::io("remove fake ps call log", &error))?;
+    assert_eq!(
+        calls.lines().count(),
+        2,
+        "the TERM grace loop should see that the anchor is the only remaining group member"
+    );
+    assert!(!std::path::Path::new(&directory).exists());
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn generated_supervisor_keeps_grace_period_when_group_inspection_fails() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+
+    let target = SshTarget::new("builder")?;
+    let state = observed::RemoteCleanupState::default();
+    let (id, directory) = state.reserve();
+    let prepare = observed::prepare_request(&target, &id, &directory);
+    let prepared = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(last_arg(&prepare, "read inspection-failure setup")?)
+        .output()
+        .map_err(|error| Error::io("prepare inspection-failure fixture", &error))?;
+    assert!(prepared.status.success());
+
+    let fake_bin = format!("{directory}/bin");
+    std::fs::create_dir(&fake_bin)
+        .map_err(|error| Error::io("create failed-inspection tool directory", &error))?;
+    let ps_calls = format!("/tmp/tinybox-observed-failed-ps-{id}");
+    let fake_ps = format!("{fake_bin}/ps");
+    std::fs::write(
+        &fake_ps,
+        "#!/bin/sh\nprintf 'called\\n' >> \"$TINYBOX_TEST_PS_CALLS\"\nexit 1\n",
+    )
+    .map_err(|error| Error::io("write failing ps command", &error))?;
+    let fake_sleep = format!("{fake_bin}/sleep");
+    std::fs::write(
+        &fake_sleep,
+        "#!/bin/sh\nif [ \"$1\" = 3600 ]; then exec /bin/sleep 3600; fi\nexit 0\n",
+    )
+    .map_err(|error| Error::io("write immediate test sleep command", &error))?;
+    for path in [&fake_ps, &fake_sleep] {
+        let mut permissions = std::fs::metadata(path)
+            .map_err(|error| Error::io("inspect fake process command", &error))?
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions)
+            .map_err(|error| Error::io("make fake process command executable", &error))?;
+    }
+
+    let launch = observed::request(
+        &target,
+        &ExecRequest::new(["/bin/sh", "-c", "exit 7"]),
+        &id,
+        &directory,
+    )?;
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(last_arg(&launch, "read inspection-failure launcher")?)
+        .env("PATH", format!("{fake_bin}:/usr/bin:/bin"))
+        .env("TINYBOX_TEST_PS_CALLS", &ps_calls)
+        .env("TINYBOX_TEST_GROUP_FILE", format!("{directory}/pid"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|error| Error::io("run inspection-failure supervisor", &error))?;
+
+    let calls = std::fs::read_to_string(&ps_calls)
+        .map_err(|error| Error::io("read failing ps call log", &error))?;
+    let _ = std::fs::remove_file(&ps_calls);
+    state.remove(&id);
+    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(
+        calls.lines().count(),
+        101,
+        "failed process inspection must retain the bounded TERM grace period"
+    );
+    assert!(!std::path::Path::new(&directory).exists());
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn generated_supervisor_escalates_after_term_is_ignored_by_its_group() -> Result<()> {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
@@ -1541,7 +1781,7 @@ fn generated_supervisor_escalates_after_term_is_ignored_by_its_group() -> Result
 
     let launch = observed::request(
         &target,
-        &ExecRequest::new(["/bin/sh", "-c", "exit 7"]),
+        &ExecRequest::new(["/bin/sh", "-c", "trap '' TERM; sleep 600 & exit 7"]),
         &id,
         &directory,
     )?;
@@ -1558,7 +1798,7 @@ fn generated_supervisor_escalates_after_term_is_ignored_by_its_group() -> Result
         .spawn()
         .map_err(|error| Error::io("start TERM-ignore supervisor", &error))?;
 
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(10);
     let mut exit_status = None;
     while Instant::now() < deadline {
         if let Some(status) = wrapper
