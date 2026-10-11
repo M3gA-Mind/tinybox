@@ -3,6 +3,20 @@ use super::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// These fixtures deliberately exercise ~/.config, so run in a child without
+// the runner's XDG override rather than mutating the parallel test environment.
+fn run_without_xdg_override(test: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    if std::env::var_os("XDG_CONFIG_HOME").is_none() {
+        return Ok(false);
+    }
+    let status = std::process::Command::new(std::env::current_exe()?)
+        .args(["--exact", &format!("grants::tests::{test}"), "--nocapture"])
+        .env_remove("XDG_CONFIG_HOME")
+        .status()?;
+    assert!(status.success(), "isolated Git fixture failed");
+    Ok(true)
+}
+
 fn fake_home() -> std::io::Result<tempfile::TempDir> {
     let home = tempfile::tempdir()?;
     for d in [
@@ -668,6 +682,9 @@ fn explicit_writable_grants_cannot_promote_shared_cargo_sources()
 #[test]
 fn git_ignore_patterns_cannot_add_config_include_grants() -> Result<(), Box<dyn std::error::Error>>
 {
+    if run_without_xdg_override("git_ignore_patterns_cannot_add_config_include_grants")? {
+        return Ok(());
+    }
     let home = tempfile::tempdir()?;
     fs::create_dir_all(home.path().join(".config/git"))?;
     fs::write(
@@ -1004,6 +1021,11 @@ fn git_include_with_a_trailing_comment_grants_the_actual_file()
 #[cfg(unix)]
 fn discovered_git_config_links_cannot_be_replaced_through_writable_parents()
 -> Result<(), Box<dyn std::error::Error>> {
+    if run_without_xdg_override(
+        "discovered_git_config_links_cannot_be_replaced_through_writable_parents",
+    )? {
+        return Ok(());
+    }
     let home = tempfile::tempdir()?;
     fs::create_dir_all(home.path().join(".config/git"))?;
     fs::create_dir(home.path().join("dotfiles"))?;
@@ -1023,6 +1045,11 @@ fn discovered_git_config_links_cannot_be_replaced_through_writable_parents()
 #[cfg(unix)]
 fn duplicate_git_config_targets_keep_each_discovered_alias_read_only()
 -> Result<(), Box<dyn std::error::Error>> {
+    if run_without_xdg_override(
+        "duplicate_git_config_targets_keep_each_discovered_alias_read_only",
+    )? {
+        return Ok(());
+    }
     let home = tempfile::tempdir()?;
     fs::create_dir_all(home.path().join(".config/git"))?;
     fs::create_dir(home.path().join("dotfiles"))?;
