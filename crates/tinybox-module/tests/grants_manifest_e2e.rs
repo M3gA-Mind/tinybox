@@ -123,7 +123,13 @@ async fn verify_discovery(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::err
         assert_eq!(selection.raw_arguments, None);
         assert_eq!(
             selection.remove_environment,
-            ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS"]
+            [
+                "BASH_ENV",
+                "ENV",
+                "SHELLOPTS",
+                "BASHOPTS",
+                "POSIXLY_CORRECT"
+            ]
         );
     }
     for include in ["~other/shared.conf", "%(prefix)/shared.conf"] {
