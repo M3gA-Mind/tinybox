@@ -1018,13 +1018,17 @@ async fn unsupported_git_include_expansions_refuse_the_whole_discovery()
 -> Result<(), Box<dyn std::error::Error>> {
     for include in ["~other/shared.conf", "%(prefix)/shared.conf"] {
         let home = tempfile::tempdir()?;
-        std::fs::write(home.path().join(".gitconfig"), format!("[include]\npath = {include}\n"))?;
+        std::fs::write(
+            home.path().join(".gitconfig"),
+            format!("[include]\npath = {include}\n"),
+        )?;
         let result = BoxService::default()
             .resolve_local_grants(tinybox_bus::ResolveLocalGrantsRequest {
                 home: Some(home.path().to_str().ok_or("non-UTF8 fixture")?.into()),
                 config: tinybox_bus::LocalGrantConfig::default(),
                 protected: tinybox_bus::ProtectedPaths::default(),
-            }).await;
+            })
+            .await;
         assert!(
             matches!(result, Err(tinybus::Error::MethodFailed { ref name, .. }) if name.as_str() == tinybox_bus::UNSUPPORTED_OPERATION),
             "{include}: {result:?}"

@@ -42,7 +42,7 @@ fn reaches_credentials(grants: &[PathBuf], home: &Path) -> Option<PathBuf> {
 #[test]
 fn credential_dirs_are_never_granted_by_default() -> Result<(), Box<dyn std::error::Error>> {
     let home = fake_home()?;
-    let g = resolve(Some(home.path()), &LocalGrantConfig::default());
+    let g = resolve(Some(home.path()), &LocalGrantConfig::default())?;
     assert_eq!(reaches_credentials(&all(&g), home.path()), None);
     Ok(())
 }
@@ -63,7 +63,7 @@ fn credential_dirs_are_never_granted_even_when_extras_ask() -> Result<(), Box<dy
         extra_read_write: vec!["~/.ssh".into(), "~".into()],
         ..LocalGrantConfig::default()
     };
-    let g = resolve(Some(home.path()), &cfg);
+    let g = resolve(Some(home.path()), &cfg)?;
     assert_eq!(reaches_credentials(&all(&g), home.path()), None);
     assert!(!g.read_only.iter().any(|p| p == Path::new("/")));
     Ok(())
@@ -79,7 +79,7 @@ fn credential_floor_holds_for_a_symlink_into_a_credential_dir()
         extra_read_only: vec!["~/innocent".into()],
         ..LocalGrantConfig::default()
     };
-    let g = resolve(Some(home.path()), &cfg);
+    let g = resolve(Some(home.path()), &cfg)?;
     assert_eq!(reaches_credentials(&all(&g), home.path()), None);
     Ok(())
 }
@@ -94,7 +94,7 @@ fn toolchain_homes_are_granted_when_they_exist() -> Result<(), Box<dyn std::erro
     for file in ["config.toml", "config", "env"] {
         fs::write(cargo.join(file), "")?;
     }
-    let g = resolve(Some(home.path()), &LocalGrantConfig::default());
+    let g = resolve(Some(home.path()), &LocalGrantConfig::default())?;
     let h = canon(home.path())?;
     let cargo = h.join(".cargo");
     assert!(
@@ -124,7 +124,7 @@ fn toolchain_homes_are_granted_when_they_exist() -> Result<(), Box<dyn std::erro
 fn absent_toolchain_homes_are_not_granted() -> Result<(), Box<dyn std::error::Error>> {
     let home = tempfile::tempdir()?;
     fs::create_dir_all(home.path().join(".nvm"))?;
-    let g = resolve(Some(home.path()), &LocalGrantConfig::default());
+    let g = resolve(Some(home.path()), &LocalGrantConfig::default())?;
     let h = canon(home.path())?;
     assert!(has(&g.read_only, &h.join(".nvm")));
     assert!(!all(&g).iter().any(|p| p.starts_with(h.join(".cargo"))));
@@ -140,7 +140,7 @@ fn toolchain_homes_can_be_switched_off() -> Result<(), Box<dyn std::error::Error
         toolchain_homes: false,
         ..LocalGrantConfig::default()
     };
-    let g = resolve(Some(home.path()), &cfg);
+    let g = resolve(Some(home.path()), &cfg)?;
     assert!(g.read_only.is_empty() && g.read_write.is_empty(), "{g:?}");
     Ok(())
 }
@@ -158,7 +158,7 @@ fn cargo_home_with_registry_credentials_is_granted_piecewise()
         "[registry]\ntoken = \"x\"\n",
     )?;
     fs::write(cargo.join("config.toml"), "")?;
-    let g = resolve(Some(home.path()), &LocalGrantConfig::default());
+    let g = resolve(Some(home.path()), &LocalGrantConfig::default())?;
     let c = canon(&cargo)?;
     assert!(
         !has(&g.read_write, &c),
@@ -181,7 +181,7 @@ fn a_writable_grant_subsumes_the_same_path_read_only() -> Result<(), Box<dyn std
         extra_read_write: vec!["~/.npm".into()],
         ..LocalGrantConfig::default()
     };
-    let g = resolve(Some(home.path()), &cfg);
+    let g = resolve(Some(home.path()), &cfg)?;
     let npm = canon(&home.path().join(".npm"))?;
     assert!(has(&g.read_write, &npm));
     assert!(!has(&g.read_only, &npm));
@@ -193,7 +193,7 @@ fn a_writable_grant_subsumes_the_same_path_read_only() -> Result<(), Box<dyn std
 fn proc_is_off_by_default_and_only_the_toggle_grants_it() -> Result<(), Box<dyn std::error::Error>>
 {
     let home = fake_home()?;
-    let g = resolve(Some(home.path()), &LocalGrantConfig::default());
+    let g = resolve(Some(home.path()), &LocalGrantConfig::default())?;
     assert!(!all(&g).iter().any(|p| p.starts_with("/proc")));
 
     // An `extra_*` entry cannot smuggle it in: only `allow_proc` does.
@@ -201,14 +201,14 @@ fn proc_is_off_by_default_and_only_the_toggle_grants_it() -> Result<(), Box<dyn 
         extra_read_only: vec!["/proc".into()],
         ..LocalGrantConfig::default()
     };
-    let g = resolve(Some(home.path()), &cfg);
+    let g = resolve(Some(home.path()), &cfg)?;
     assert!(!all(&g).iter().any(|p| p.starts_with("/proc")));
 
     let cfg = LocalGrantConfig {
         allow_proc: true,
         ..LocalGrantConfig::default()
     };
-    let g = resolve(Some(home.path()), &cfg);
+    let g = resolve(Some(home.path()), &cfg)?;
     assert!(has(&g.read_only, Path::new("/proc")));
     assert!(!has(&g.read_write, Path::new("/proc")));
     Ok(())
@@ -224,7 +224,7 @@ fn extras_expand_tilde_and_skip_missing_paths() -> Result<(), Box<dyn std::error
         extra_read_write: vec!["~/data/../data".into()],
         ..LocalGrantConfig::default()
     };
-    let g = resolve(Some(home.path()), &cfg);
+    let g = resolve(Some(home.path()), &cfg)?;
     assert!(has(&g.read_only, &canon(&home.path().join("dotfiles"))?));
     assert!(has(&g.read_write, &canon(&home.path().join("data"))?));
     assert!(!all(&g).iter().any(|p| p.ends_with("nope")));
@@ -250,7 +250,7 @@ fn gitconfig_symlink_and_include_targets_are_canonicalized()
     // The credential include must be dropped even though the file exists.
     fs::write(home.path().join(".ssh/leaky"), "")?;
 
-    let g = resolve(Some(home.path()), &LocalGrantConfig::default());
+    let g = resolve(Some(home.path()), &LocalGrantConfig::default())?;
     let d = canon(&dots)?;
     assert!(has(&g.read_only, &d.join("gitconfig")), "{g:?}");
     assert!(has(&g.read_only, &d.join("work.gitconfig")), "{g:?}");
@@ -264,20 +264,21 @@ fn gitconfig_include_cycles_terminate() -> Result<(), Box<dyn std::error::Error>
     let home = fake_home()?;
     fs::write(home.path().join(".gitconfig"), "[include]\n path = ~/b\n")?;
     fs::write(home.path().join("b"), "[include]\n path = ~/.gitconfig\n")?;
-    let g = resolve(Some(home.path()), &LocalGrantConfig::default());
+    let g = resolve(Some(home.path()), &LocalGrantConfig::default())?;
     assert!(has(&g.read_only, &canon(&home.path().join("b"))?));
     Ok(())
 }
 
 #[test]
-fn no_home_yields_only_system_toolchain_dirs() {
-    let g = resolve(None, &LocalGrantConfig::default());
+fn no_home_yields_only_system_toolchain_dirs() -> Result<(), Box<dyn std::error::Error>> {
+    let g = resolve(None, &LocalGrantConfig::default())?;
     assert_eq!(g.read_write, Vec::<PathBuf>::new());
     assert!(
         g.read_only
             .iter()
             .all(|p| p.starts_with("/usr/local") || p.starts_with("/opt"))
     );
+    Ok(())
 }
 
 fn floor(home: Option<&Path>) -> ProtectedPaths {
@@ -323,7 +324,7 @@ fn floor(home: Option<&Path>) -> ProtectedPaths {
             .unwrap_or_default(),
     }
 }
-fn resolve(home: Option<&Path>, config: &LocalGrantConfig) -> JailGrants {
+fn resolve(home: Option<&Path>, config: &LocalGrantConfig) -> tinybox_core::Result<JailGrants> {
     resolve_local_jail_grants(home, config, &floor(home))
 }
 
@@ -342,7 +343,7 @@ fn custom_host_floor_excludes_direct_and_ancestor_grants() -> Result<(), Box<dyn
         credential_roots: vec![private.to_string_lossy().into_owned()],
         ..ProtectedPaths::default()
     };
-    let grants = resolve_local_jail_grants(Some(home.path()), &config, &protected);
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &protected)?;
     assert_eq!(grants.read_only, Vec::<PathBuf>::new());
     Ok(())
 }
@@ -358,20 +359,21 @@ fn host_floor_matches_component_pairs_and_case_insensitive_components()
         extra_read_only: vec!["~/.SSH".into(), "~/.cargo/credentials.toml".into()],
         ..LocalGrantConfig::default()
     };
-    let grants = resolve(Some(home.path()), &config);
+    let grants = resolve(Some(home.path()), &config)?;
     assert_eq!(grants.read_only, Vec::<PathBuf>::new());
     Ok(())
 }
 
 #[test]
-fn extras_without_home_and_empty_values_are_skipped() {
+fn extras_without_home_and_empty_values_are_skipped() -> Result<(), Box<dyn std::error::Error>> {
     let config = LocalGrantConfig {
         toolchain_homes: false,
         extra_read_only: vec![" ".into(), "~".into(), "~/unknown".into()],
         ..LocalGrantConfig::default()
     };
-    let grants = resolve(None, &config);
+    let grants = resolve(None, &config)?;
     assert_eq!(grants.read_only, Vec::<PathBuf>::new());
+    Ok(())
 }
 
 #[test]
@@ -414,7 +416,7 @@ fn gitconfig_include_depth_is_bounded_and_non_files_are_skipped()
             format!("[include]\n path = ~/next-{}\n", index + 1),
         )?;
     }
-    let grants = resolve(Some(home.path()), &LocalGrantConfig::default());
+    let grants = resolve(Some(home.path()), &LocalGrantConfig::default())?;
     assert!(has(&grants.read_only, &canon(&home.path().join("next-7"))?));
     assert!(!has(
         &grants.read_only,
@@ -495,37 +497,41 @@ fn protected_credential_alias_does_not_grant_its_neutral_target()
         components: vec![".npmrc".into()],
         ..ProtectedPaths::default()
     };
-    let grants = resolve_local_jail_grants(Some(home.path()), &config, &protected);
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &protected)?;
     assert_eq!(grants.read_only, Vec::<PathBuf>::new());
     Ok(())
 }
 
 #[test]
 #[cfg(target_os = "linux")]
-fn procfs_extras_cannot_bypass_the_dedicated_toggle_with_an_empty_floor() {
+fn procfs_extras_cannot_bypass_the_dedicated_toggle_with_an_empty_floor()
+-> Result<(), Box<dyn std::error::Error>> {
     let config = LocalGrantConfig {
         toolchain_homes: false,
         extra_read_only: vec!["/proc".into(), "/proc/self".into()],
         extra_read_write: vec!["/proc".into(), "/proc/self".into()],
         ..LocalGrantConfig::default()
     };
-    let grants = resolve_local_jail_grants(None, &config, &ProtectedPaths::default());
+    let grants = resolve_local_jail_grants(None, &config, &ProtectedPaths::default())?;
     assert_eq!(grants.read_only, Vec::<PathBuf>::new());
     assert_eq!(grants.read_write, Vec::<PathBuf>::new());
+    Ok(())
 }
 
 #[test]
 #[cfg(target_os = "linux")]
-fn procfs_toggle_grants_read_only_access_even_when_extras_ask_for_writes() {
+fn procfs_toggle_grants_read_only_access_even_when_extras_ask_for_writes()
+-> Result<(), Box<dyn std::error::Error>> {
     let config = LocalGrantConfig {
         toolchain_homes: false,
         allow_proc: true,
         extra_read_write: vec!["/proc".into(), "/proc/self".into()],
         ..LocalGrantConfig::default()
     };
-    let grants = resolve_local_jail_grants(None, &config, &ProtectedPaths::default());
+    let grants = resolve_local_jail_grants(None, &config, &ProtectedPaths::default())?;
     assert_eq!(grants.read_only, vec![PathBuf::from("/proc")]);
     assert_eq!(grants.read_write, Vec::<PathBuf>::new());
+    Ok(())
 }
 
 #[test]
@@ -541,7 +547,7 @@ fn discovered_cargo_dependency_sources_cannot_be_poisoned_for_later_host_builds(
         Some(home.path()),
         &LocalGrantConfig::default(),
         &ProtectedPaths::default(),
-    );
+    )?;
     for cache in ["git", "registry"] {
         let source = home.path().join(".cargo").join(cache).canonicalize()?;
         assert!(has(&grants.read_only, &source), "{grants:?}");
@@ -569,7 +575,7 @@ fn rejected_git_config_cannot_grant_its_nested_includes() -> Result<(), Box<dyn 
         ..ProtectedPaths::default()
     };
     let grants =
-        resolve_local_jail_grants(Some(home.path()), &LocalGrantConfig::default(), &protected);
+        resolve_local_jail_grants(Some(home.path()), &LocalGrantConfig::default(), &protected)?;
     assert!(
         !has(
             &grants.read_only,
@@ -600,7 +606,7 @@ fn protected_prefixes_also_reject_recursive_ancestor_grants()
         extra_read_write: vec![home.path().to_str().ok_or("non-UTF8 fixture")?.into()],
         ..LocalGrantConfig::default()
     };
-    let grants = resolve_local_jail_grants(None, &config, &protected);
+    let grants = resolve_local_jail_grants(None, &config, &protected)?;
     assert_eq!(grants.read_write, Vec::<PathBuf>::new());
     Ok(())
 }
@@ -628,7 +634,7 @@ fn protected_prefix_alias_also_blocks_its_canonical_spelling()
         extra_read_only: vec![target.to_str().ok_or("non-UTF8 fixture")?.into()],
         ..LocalGrantConfig::default()
     };
-    let grants = resolve_local_jail_grants(None, &config, &protected);
+    let grants = resolve_local_jail_grants(None, &config, &protected)?;
     assert_eq!(grants.read_only, Vec::<PathBuf>::new());
     Ok(())
 }
@@ -645,7 +651,7 @@ fn explicit_writable_grants_cannot_promote_shared_cargo_sources()
         extra_read_write: vec!["~/.cargo/git".into(), "~/.cargo/registry".into()],
         ..LocalGrantConfig::default()
     };
-    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default());
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default())?;
     assert_eq!(grants.read_write, Vec::<PathBuf>::new());
     for cache in ["git", "registry"] {
         assert!(
@@ -673,7 +679,7 @@ fn git_ignore_patterns_cannot_add_config_include_grants() -> Result<(), Box<dyn 
         Some(home.path()),
         &LocalGrantConfig::default(),
         &ProtectedPaths::default(),
-    );
+    )?;
     assert!(
         has(
             &grants.read_only,
@@ -713,7 +719,7 @@ fn credential_root_alias_keeps_its_requested_ancestor_protected()
         extra_read_only: vec!["~".into()],
         ..LocalGrantConfig::default()
     };
-    let grants = resolve_local_jail_grants(Some(home.path()), &config, &protected);
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &protected)?;
     assert_eq!(grants.read_only, Vec::<PathBuf>::new());
     Ok(())
 }
@@ -747,7 +753,7 @@ fn credential_floor_preserves_alias_locations_under_aliased_parent_directories()
             extra_read_only: vec!["~".into()],
             ..LocalGrantConfig::default()
         };
-        let grants = resolve_local_jail_grants(Some(&home), &config, &protected);
+        let grants = resolve_local_jail_grants(Some(&home), &config, &protected)?;
         assert_eq!(grants.read_only, Vec::<PathBuf>::new(), "{credential}");
     }
     Ok(())
@@ -768,7 +774,7 @@ fn writable_extras_cannot_replace_cargo_executables_or_launch_configuration()
             .collect(),
         ..LocalGrantConfig::default()
     };
-    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default());
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default())?;
     assert_eq!(grants.read_write, Vec::<PathBuf>::new());
     Ok(())
 }
@@ -787,7 +793,7 @@ fn automatic_toolchain_roots_cannot_be_promoted_through_writable_descendants()
             .collect(),
         ..LocalGrantConfig::default()
     };
-    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default());
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default())?;
     assert_eq!(grants.read_write, Vec::<PathBuf>::new());
     Ok(())
 }
@@ -805,7 +811,7 @@ fn discovered_git_configuration_cannot_be_poisoned_via_its_target_ancestor()
         extra_read_write: vec!["~/dotfiles".into()],
         ..LocalGrantConfig::default()
     };
-    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default());
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default())?;
     assert_eq!(grants.read_write, Vec::<PathBuf>::new());
     Ok(())
 }
@@ -826,7 +832,7 @@ fn directory_extras_cannot_expose_nested_protected_components()
         extra_read_write: vec!["~/project".into()],
         ..LocalGrantConfig::default()
     };
-    let grants = resolve_local_jail_grants(Some(home.path()), &config, &protected);
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &protected)?;
     assert_eq!(grants, JailGrants::default());
     Ok(())
 }
@@ -850,7 +856,7 @@ fn directory_extras_cannot_expose_nested_protected_component_pairs()
         ..LocalGrantConfig::default()
     };
     assert_eq!(
-        resolve_local_jail_grants(Some(home.path()), &config, &protected),
+        resolve_local_jail_grants(Some(home.path()), &config, &protected)?,
         JailGrants::default()
     );
     Ok(())
@@ -874,7 +880,7 @@ fn aliased_directory_extras_preserve_logical_parent_component_pairs()
         ..LocalGrantConfig::default()
     };
     assert_eq!(
-        resolve_local_jail_grants(Some(home.path()), &config, &protected),
+        resolve_local_jail_grants(Some(home.path()), &config, &protected)?,
         JailGrants::default()
     );
     Ok(())
@@ -947,7 +953,7 @@ fn subtree_pair_protection_cannot_be_bypassed_by_a_directory_symlink()
         ..LocalGrantConfig::default()
     };
     assert_eq!(
-        resolve_local_jail_grants(None, &config, &protected),
+        resolve_local_jail_grants(None, &config, &protected)?,
         JailGrants::default()
     );
     Ok(())
@@ -986,7 +992,7 @@ fn git_include_with_a_trailing_comment_grants_the_actual_file()
         Some(home.path()),
         &LocalGrantConfig::default(),
         &ProtectedPaths::default(),
-    );
+    )?;
     assert!(has(
         &grants.read_only,
         &canon(&home.path().join("work.conf"))?
@@ -1008,7 +1014,7 @@ fn discovered_git_config_links_cannot_be_replaced_through_writable_parents()
         extra_read_write: vec!["~/.config".into(), "~/.config/git".into()],
         ..LocalGrantConfig::default()
     };
-    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default());
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default())?;
     assert_eq!(grants.read_write, Vec::<PathBuf>::new());
     Ok(())
 }
@@ -1028,7 +1034,7 @@ fn duplicate_git_config_targets_keep_each_discovered_alias_read_only()
         extra_read_write: vec!["~/.config/git".into()],
         ..LocalGrantConfig::default()
     };
-    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default());
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default())?;
     assert_eq!(grants.read_write, Vec::<PathBuf>::new());
     Ok(())
 }
@@ -1038,16 +1044,32 @@ fn duplicate_git_config_targets_keep_each_discovered_alias_read_only()
 fn git_include_aliases_preserve_each_logical_sibling_location()
 -> Result<(), Box<dyn std::error::Error>> {
     let home = tempfile::tempdir()?;
-    fs::write(home.path().join(".gitconfig"), "[include]\npath = one/alias\npath = two/alias\n")?;
+    fs::write(
+        home.path().join(".gitconfig"),
+        "[include]\npath = one/alias\npath = two/alias\n",
+    )?;
     fs::write(home.path().join("shared"), "[include]\npath = sibling\n")?;
     for directory in ["one", "two"] {
         fs::create_dir(home.path().join(directory))?;
-        std::os::unix::fs::symlink(home.path().join("shared"), home.path().join(directory).join("alias"))?;
+        std::os::unix::fs::symlink(
+            home.path().join("shared"),
+            home.path().join(directory).join("alias"),
+        )?;
         fs::write(home.path().join(directory).join("sibling"), "[core]\n")?;
     }
-    let grants = resolve_local_jail_grants(Some(home.path()), &LocalGrantConfig::default(), &ProtectedPaths::default());
+    let grants = resolve_local_jail_grants(
+        Some(home.path()),
+        &LocalGrantConfig::default(),
+        &ProtectedPaths::default(),
+    )?;
     for directory in ["one", "two"] {
-        assert!(has(&grants.read_only, &canon(&home.path().join(directory).join("sibling"))?), "{directory}");
+        assert!(
+            has(
+                &grants.read_only,
+                &canon(&home.path().join(directory).join("sibling"))?
+            ),
+            "{directory}"
+        );
     }
     Ok(())
 }
@@ -1058,7 +1080,7 @@ fn empty_xdg_config_home_does_not_grant_relative_git_configuration()
     let home = tempfile::tempdir()?;
     let protected = ProtectedPaths::default();
     let mut builder = Builder::new(Some(home.path()), &protected);
-    builder.add_gitconfig_at(home.path(), Some(std::ffi::OsStr::new("")));
+    builder.add_gitconfig_at(home.path(), Some(std::ffi::OsStr::new("")))?;
     // No HOME config exists. In particular, the empty value must not make
     // ambient git/config or git/ignore into candidate protected state.
     assert_eq!(builder.fixed_read_only, Vec::<PathBuf>::new());
