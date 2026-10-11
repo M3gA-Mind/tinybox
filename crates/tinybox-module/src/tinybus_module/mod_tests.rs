@@ -962,7 +962,7 @@ fn local_grant_discovery_rejects_non_utf8_canonical_targets()
     // APFS refuses invalid UTF-8 filenames. Supply the canonical path directly
     // at the serialization boundary instead of depending on filesystem encoding.
     let target = std::path::PathBuf::from(std::ffi::OsString::from_vec(vec![b'/', b'd', 0xff]));
-    let error = grant_paths_to_wire(vec!["/valid".into(), target])
+    let error = super::grant_paths_to_wire(vec!["/valid".into(), target])
         .err()
         .ok_or("non-UTF8 grant must be rejected")?;
     assert_eq!(error.wire_name(), tinybox_bus::INVALID_FILE_PATH);
