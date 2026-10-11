@@ -178,6 +178,7 @@ async fn cleanup_failure_retains_the_native_child_and_checked_drain_retries_it()
         .spawn()
         .map_err(|error| Error::io("fixture spawn", &error))?;
     let group = process::group(&child)?;
+    #[cfg(target_os = "linux")]
     let pid = child
         .id()
         .ok_or_else(|| Error::io("fixture pid", &std::io::Error::other("missing")))?;

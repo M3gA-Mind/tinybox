@@ -332,7 +332,7 @@ async fn terminate(child: &mut std::process::Child, group: i32) -> Result<()> {
             .try_wait()
             .map_err(|error| Error::io("inspect jail child", &error))?
             .is_none()
-            || super::process::group_alive(group)?
+            || super::process::group_alive(group).await?
         {
             match killpg(Pid::from_raw(group), Signal::SIGKILL) {
                 Ok(()) | Err(Errno::ESRCH) => {}
@@ -346,7 +346,7 @@ async fn terminate(child: &mut std::process::Child, group: i32) -> Result<()> {
             .map_err(|error| Error::io("kill jail child", &error))?;
         wait_child(child).await?;
         #[cfg(unix)]
-        while super::process::group_alive(group)? {
+        while super::process::group_alive(group).await? {
             tokio::task::yield_now().await;
         }
         Ok(())

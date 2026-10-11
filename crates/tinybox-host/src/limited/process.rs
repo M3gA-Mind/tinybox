@@ -324,8 +324,13 @@ async fn terminate_native(child: &mut NativeChild, group: i32) -> Result<()> {
             sys::signal::{Signal, killpg},
             unistd::Pid,
         };
-        if child.id().is_some() || group_alive(group)? {
-            kill_group_with(group, |group| killpg(Pid::from_raw(group), Signal::SIGKILL))?;
+        if child.id().is_some() || group_alive(group).await? {
+            kill_group_checked(
+                group,
+                |group| killpg(Pid::from_raw(group), Signal::SIGKILL),
+                group_alive,
+            )
+            .await?;
         }
         child
             .kill()
@@ -372,13 +377,16 @@ fn kill_group_with(
 }
 
 #[cfg(unix)]
-async fn wait_group(
+async fn wait_group<F>(
     group: i32,
     deadline: std::time::Duration,
-    mut alive: impl FnMut(i32) -> Result<bool>,
-) -> Result<()> {
+    mut alive: impl FnMut(i32) -> F,
+) -> Result<()>
+where
+    F: std::future::Future<Output = Result<bool>>,
+{
     tokio::time::timeout(deadline, async {
-        while alive(group)? {
+        while alive(group).await? {
             tokio::task::yield_now().await;
         }
         Ok(())
@@ -392,7 +400,8 @@ async fn wait_group(
 }
 
 #[cfg(target_os = "linux")]
-pub(super) fn group_alive(group: i32) -> Result<bool> {
+pub(super) async fn group_alive(group: i32) -> Result<bool> {
+    tokio::task::yield_now().await;
     for entry in
         std::fs::read_dir("/proc").map_err(|error| Error::io("read process table", &error))?
     {
@@ -423,24 +432,98 @@ fn stat_has_live_group(stat: &str, group: i32) -> bool {
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]
-pub(super) fn group_alive(group: i32) -> Result<bool> {
-    use nix::{errno::Errno, sys::signal::killpg, unistd::Pid};
-    match killpg(Pid::from_raw(group), None) {
-        Ok(()) => Ok(true),
-        Err(Errno::ESRCH) => Ok(false),
-        Err(error) => Err(Error::Backend {
+pub(super) async fn group_alive(group: i32) -> Result<bool> {
+    // Darwin can report EPERM for an empty group and retains zombies in
+    // signal probes. Inspect executable members instead of probing a signal.
+    let mut command = Command::new("/bin/ps");
+    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+    command.args(["-e", "-o", "pgid=,s="]);
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
+    command.args(["-axo", "pgid=,stat="]);
+    command
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| Error::io("read process table", &error))?;
+    let output = process_table_output(&mut child, std::time::Duration::from_secs(5)).await?;
+    if !output.status.success() {
+        return Err(Error::Backend {
             sandbox: crate::LOCAL.into(),
             operation: "observe process group",
-            message: error.to_string(),
-        }),
+            message: "process table command failed".into(),
+        });
     }
+    Ok(ps_has_live_group(
+        &String::from_utf8_lossy(&output.stdout),
+        group,
+    ))
 }
 
 #[cfg(not(any(unix, windows)))]
-pub(super) fn group_alive(_: i32) -> Result<bool> {
+pub(super) async fn group_alive(_: i32) -> Result<bool> {
     Ok(false)
 }
 
 #[cfg(test)]
 #[path = "process_tests.rs"]
 mod tests;
+
+#[cfg(unix)]
+async fn kill_group_checked<F>(
+    group: i32,
+    kill: impl FnOnce(i32) -> std::result::Result<(), nix::errno::Errno>,
+    alive: impl FnOnce(i32) -> F,
+) -> Result<()>
+where
+    F: std::future::Future<Output = Result<bool>>,
+{
+    match kill(group) {
+        Err(nix::errno::Errno::EPERM) if !alive(group).await? => Ok(()),
+        result => kill_group_with(group, |_| result),
+    }
+}
+
+#[cfg(all(unix, any(test, not(target_os = "linux"))))]
+fn ps_has_live_group(table: &str, group: i32) -> bool {
+    table.lines().any(|line| {
+        let mut fields = line.split_whitespace();
+        fields.next().and_then(|value| value.parse::<i32>().ok()) == Some(group)
+            && fields
+                .next()
+                .is_some_and(|state| !state.starts_with(['Z', 'X']))
+    })
+}
+
+#[cfg(all(unix, any(test, not(target_os = "linux"))))]
+async fn process_table_output(
+    child: &mut Child,
+    deadline: std::time::Duration,
+) -> Result<std::process::Output> {
+    use tokio::io::AsyncReadExt;
+    let mut stdout = child.stdout.take().ok_or_else(|| Error::Backend {
+        sandbox: crate::LOCAL.into(),
+        operation: "read process table",
+        message: "missing process table output".into(),
+    })?;
+    let mut bytes = Vec::new();
+    let work = async { tokio::try_join!(child.wait(), stdout.read_to_end(&mut bytes)) };
+    let (status, _) = if let Ok(result) = tokio::time::timeout(deadline, work).await {
+        result.map_err(|error| Error::io("read process table", &error))?
+    } else {
+        child
+            .kill()
+            .await
+            .map_err(|error| Error::io("kill process table probe", &error))?;
+        return Err(Error::Backend {
+            sandbox: crate::LOCAL.into(),
+            operation: "read process table",
+            message: "cleanup deadline exceeded".into(),
+        });
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: bytes,
+        stderr: Vec::new(),
+    })
+}
