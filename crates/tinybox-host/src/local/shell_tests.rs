@@ -1,3 +1,4 @@
+//! Shell startup isolation, quoting and pipeline-status regressions.
 use super::*;
 
 fn request(preserve_pipeline_status: bool) -> SelectShellRequest {
@@ -10,16 +11,16 @@ fn request(preserve_pipeline_status: bool) -> SelectShellRequest {
 #[test]
 fn bash_surfaces_pipe_failures_and_preservation_keeps_the_original_payload() {
     let selected = selection_for(&request(false), ShellFlavor::Posix, Some("/bin/bash"));
-    assert_eq!(selected.arguments, ["-lc", "set -o pipefail\nfalse | true"]);
+    assert_eq!(selected.arguments, ["-c", "set -o pipefail\nfalse | true"]);
     let preserved = selection_for(&request(true), ShellFlavor::Posix, Some("/bin/bash"));
-    assert_eq!(preserved.arguments, ["-lc", "false | true"]);
+    assert_eq!(preserved.arguments, ["-c", "false | true"]);
 }
 
 #[test]
 fn sh_fallback_never_receives_bash_only_flags() {
     let selected = selection_for(&request(false), ShellFlavor::Posix, None);
     assert_eq!(selected.program, "sh");
-    assert_eq!(selected.arguments, ["-lc", "false | true"]);
+    assert_eq!(selected.arguments, ["-c", "false | true"]);
     assert_eq!(selected.raw_arguments, None);
     assert_eq!(selected.bootstrap_environment, Vec::<String>::new());
 }
@@ -36,12 +37,30 @@ fn cmd_preserves_quoted_payload_and_lists_bootstrap_names_without_values() {
         None,
     );
     assert_eq!(selected.program, "cmd");
-    assert_eq!(selected.arguments, ["/C"]);
-    assert_eq!(selected.raw_arguments.as_deref(), Some(payload));
+    assert_eq!(selected.arguments, ["/D", "/S", "/C"]);
+    assert_eq!(selected.raw_arguments, Some(format!("\"{payload}\"")));
     assert_eq!(
         selected.bootstrap_environment,
         WINDOWS_BOOTSTRAP_ENVIRONMENT
     );
+}
+
+#[test]
+#[cfg(windows)]
+fn actual_cmd_raw_payload_keeps_a_quoted_executable_and_argument()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let executable = root.path().join("tool with spaces.exe");
+    std::fs::copy(std::env::current_exe()?, &executable)?;
+    let output = root.path().join("quoted executable output.txt");
+    let requested = SelectShellRequest {
+        command: format!("\"{}\" \"--list\" > \"{}\"", executable.display(), output.display()),
+        preserve_pipeline_status: false,
+    };
+    assert!(build_shell_command(&requested).status()?.success());
+    assert!(std::fs::read_to_string(output)?
+        .contains("actual_cmd_raw_payload_keeps_a_quoted_executable_and_argument"));
+    Ok(())
 }
 
 #[test]
