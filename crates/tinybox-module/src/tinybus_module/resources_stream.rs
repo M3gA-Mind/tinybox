@@ -129,6 +129,48 @@ fn select_collector(
         }
     })
 }
+fn prepare_execution(
+    entry: &super::Resource,
+    request: &SpawnRequest,
+    jail: Option<&tinybox_bus::NativeJailConfig>,
+    shell: Option<&tinybox_bus::SelectShellRequest>,
+) -> Result<(tinybox_core::ExecRequest, Collector)> {
+    if shell.is_some() && (!entry.native_host || entry.local_sandbox.is_none()) {
+        return Err(failure(
+            tinybox_bus::UNSUPPORTED_OPERATION,
+            "platform shell execution requires local passthrough",
+        ));
+    }
+    let mut native_request = command(request.command.clone());
+    if shell.is_some() {
+        // Passthrough resolution still supplies resource cwd and environment.
+        // The placeholder is never executed; the native builder owns argv.
+        native_request.argv = vec!["shell".into()];
+    }
+    let resolved = if let Some(sandbox) = &entry.local_sandbox {
+        sandbox
+            .resolve_command(&entry.id, &native_request)
+            .map_err(|error| backend_error(&error))?
+    } else {
+        let command = native_request;
+        if command.argv.is_empty() {
+            return Err(failure(tinybox_bus::INVALID_ID, "empty execution command"));
+        }
+        command
+    };
+    let collector = if let Some(shell) = shell {
+        Collector::Shell(
+            Arc::new(tinybox_host::LimitedLocalHost::new(
+                tinybox_bus::MAX_OUTPUT_BYTES,
+            )),
+            shell.clone(),
+        )
+    } else {
+        select_collector(entry, jail, &resolved)?
+    };
+    Ok((resolved, collector))
+}
+
 impl StreamExecution {
     fn start(
         request: SpawnRequest,
@@ -277,42 +319,9 @@ impl Resources {
                 "owned native collector unavailable",
             ));
         }
-        if shell.is_some() && (!entry.native_host || entry.local_sandbox.is_none()) {
-            return Err(failure(
-                tinybox_bus::UNSUPPORTED_OPERATION,
-                "platform shell execution requires local passthrough",
-            ));
-        }
-        // Each execution owns its cleanup collector. Cancelling one stream must
-        // not drain an unrelated running supervisor or inherit its failure.
-        // Resolve before consuming admission, and fence native start against Close.
-        let mut native_request = command(request.command.clone());
-        if shell.is_some() {
-            // Passthrough resolution still supplies resource cwd and environment.
-            // The placeholder is never executed; the native builder owns argv.
-            native_request.argv = vec!["shell".into()];
-        }
-        let resolved = if let Some(sandbox) = &entry.local_sandbox {
-            sandbox
-                .resolve_command(&entry.id, &native_request)
-                .map_err(|error| backend_error(&error))?
-        } else {
-            let command = native_request;
-            if command.argv.is_empty() {
-                return Err(failure(tinybox_bus::INVALID_ID, "empty execution command"));
-            }
-            command
-        };
-        let collector = if let Some(shell) = &shell {
-            Collector::Shell(
-                Arc::new(tinybox_host::LimitedLocalHost::new(
-                    tinybox_bus::MAX_OUTPUT_BYTES,
-                )),
-                shell.clone(),
-            )
-        } else {
-            select_collector(entry, jail.as_ref(), &resolved)?
-        };
+        // Each execution owns its collector; resolve before consuming admission.
+        let (resolved, collector) =
+            prepare_execution(entry, &request, jail.as_ref(), shell.as_ref())?;
         let mut state = self.state.lock().await;
         let executions = self
             .executions

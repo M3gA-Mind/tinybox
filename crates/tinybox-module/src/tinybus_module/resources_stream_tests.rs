@@ -664,3 +664,39 @@ async fn native_shell_execution_preserves_admission_and_request_identity() -> Re
     resources.close(&resource).await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn shell_execution_rejects_remote_selection_without_consuming_admission() -> Result<()> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let request = request(&resources, &resource, Vec::new()).await?;
+    let shell = tinybox_bus::SelectShellRequest {
+        command: "echo fixture".into(),
+        preserve_pipeline_status: false,
+    };
+    let slot = resources.slot(&resource).await?;
+    {
+        let mut guard = slot.lock().await;
+        let entry = guard
+            .as_mut()
+            .ok_or_else(|| Error::failed("fixture resource missing"))?;
+        entry.native_host = false;
+    }
+    assert!(
+        matches!(resources.start_shell_exec(request.clone(), shell.clone()).await,
+        Err(tinybus::Error::MethodFailed { ref name, .. }) if name.as_str() == tinybox_bus::UNSUPPORTED_OPERATION)
+    );
+    {
+        let mut guard = slot.lock().await;
+        let entry = guard
+            .as_mut()
+            .ok_or_else(|| Error::failed("fixture resource missing"))?;
+        entry.native_host = true;
+    }
+    let process = resources.start_shell_exec(request, shell).await?;
+    completed(&resources, &process).await?;
+    resources.cancel(&process).await?;
+    resources.release_output(&process).await?;
+    resources.close(&resource).await?;
+    Ok(())
+}
