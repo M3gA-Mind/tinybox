@@ -14,12 +14,16 @@ impl Builder<'_> {
     /// `include`, each canonicalized (a config is often a symlink into a
     /// dotfiles repo, and the jail needs the target).
     pub(super) fn add_gitconfig(&mut self, home: &Path) {
+        self.add_gitconfig_at(home, std::env::var_os("XDG_CONFIG_HOME").as_deref());
+    }
+
+    pub(super) fn add_gitconfig_at(&mut self, home: &Path, xdg: Option<&std::ffi::OsStr>) {
         let mut roots: Vec<PathBuf> = GITCONFIG_FILES.iter().map(|f| home.join(f)).collect();
-        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        if let Some(xdg) = xdg_root(xdg) {
             roots.push(Path::new(&xdg).join("git/config"));
         }
         self.fixed_read_only(&home.join(".config/git/ignore"), "gitignore");
-        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        if let Some(xdg) = xdg_root(xdg) {
             self.fixed_read_only(&Path::new(&xdg).join("git/ignore"), "gitignore");
         }
         let mut visited = HashSet::new();
@@ -132,3 +136,7 @@ fn include_value(value: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "git_config_tests.rs"]
 mod tests;
+
+fn xdg_root(value: Option<&std::ffi::OsStr>) -> Option<&Path> {
+    value.map(Path::new)
+}

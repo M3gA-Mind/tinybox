@@ -25,3 +25,13 @@ fn malformed_or_empty_include_values_are_not_granted() {
         assert_eq!(include_value(value), None, "{value}");
     }
 }
+
+#[test]
+fn empty_xdg_config_home_is_unset_in_git_root_selection() {
+    assert_eq!(xdg_root(Some(std::ffi::OsStr::new(""))), None);
+    assert_eq!(xdg_root(None), None);
+    assert_eq!(
+        xdg_root(Some(std::ffi::OsStr::new("config-root"))),
+        Some(Path::new("config-root"))
+    );
+}

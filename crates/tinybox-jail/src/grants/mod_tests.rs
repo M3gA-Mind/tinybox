@@ -1032,3 +1032,36 @@ fn duplicate_git_config_targets_keep_each_discovered_alias_read_only()
     assert_eq!(grants.read_write, Vec::<PathBuf>::new());
     Ok(())
 }
+
+#[test]
+#[cfg(unix)]
+fn git_include_aliases_preserve_each_logical_sibling_location()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::write(home.path().join(".gitconfig"), "[include]\npath = one/alias\npath = two/alias\n")?;
+    fs::write(home.path().join("shared"), "[include]\npath = sibling\n")?;
+    for directory in ["one", "two"] {
+        fs::create_dir(home.path().join(directory))?;
+        std::os::unix::fs::symlink(home.path().join("shared"), home.path().join(directory).join("alias"))?;
+        fs::write(home.path().join(directory).join("sibling"), "[core]\n")?;
+    }
+    let grants = resolve_local_jail_grants(Some(home.path()), &LocalGrantConfig::default(), &ProtectedPaths::default());
+    for directory in ["one", "two"] {
+        assert!(has(&grants.read_only, &canon(&home.path().join(directory).join("sibling"))?), "{directory}");
+    }
+    Ok(())
+}
+
+#[test]
+fn empty_xdg_config_home_does_not_grant_relative_git_configuration()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    let protected = ProtectedPaths::default();
+    let mut builder = Builder::new(Some(home.path()), &protected);
+    builder.add_gitconfig_at(home.path(), Some(std::ffi::OsStr::new("")));
+    // No HOME config exists. In particular, the empty value must not make
+    // ambient git/config or git/ignore into candidate protected state.
+    assert_eq!(builder.fixed_read_only, Vec::<PathBuf>::new());
+    assert_eq!(builder.grants, JailGrants::default());
+    Ok(())
+}
