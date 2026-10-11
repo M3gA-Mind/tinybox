@@ -17,7 +17,7 @@ pub(super) struct StreamExecution {
 }
 #[derive(Clone)]
 enum Collector {
-    Local(Arc<tinybox_host::LimitedLocalHost>),
+    Host(Arc<dyn tinybox_core::Host>),
     Jailed(Arc<tinybox_host::JailLocalHost>),
 }
 impl Collector {
@@ -27,19 +27,19 @@ impl Collector {
         observer: Arc<OutputJournal>,
     ) -> tinybox_core::Result<tinybox_core::ExecOutput> {
         match self {
-            Self::Local(host) => host.run_observed(command, observer).await,
+            Self::Host(host) => host.run_observed(command, observer).await,
             Self::Jailed(host) => host.run_observed(command, observer).await,
         }
     }
     fn pending(&self) -> bool {
         match self {
-            Self::Local(host) => host.has_pending_cleanup(),
+            Self::Host(host) => host.has_pending_observed_cleanup(),
             Self::Jailed(host) => host.has_pending_cleanup(),
         }
     }
     async fn drain(&self) -> tinybox_core::Result<()> {
         match self {
-            Self::Local(host) => host.drain_checked().await,
+            Self::Host(host) => host.retry_observed_cleanup().await,
             Self::Jailed(host) => host.drain_checked().await,
         }
     }
@@ -50,6 +50,12 @@ fn select_collector(
     resolved: &tinybox_core::ExecRequest,
 ) -> Result<Collector> {
     Ok(if let Some(config) = jail {
+        if !entry.native_host {
+            return Err(failure(
+                tinybox_bus::UNSUPPORTED_OPERATION,
+                "native jail requires local execution",
+            ));
+        }
         let root = entry.workspace_root.as_ref().ok_or_else(|| {
             failure(
                 tinybox_bus::UNSUPPORTED_OPERATION,
@@ -60,9 +66,12 @@ fn select_collector(
             root, config, resolved,
         )?)
     } else {
-        Collector::Local(Arc::new(tinybox_host::LimitedLocalHost::new(
-            tinybox_bus::MAX_OUTPUT_BYTES,
-        )))
+        Collector::Host(super::configured_host(
+            &entry.host_config,
+            Arc::new(tinybox_host::LimitedLocalHost::new(
+                tinybox_bus::MAX_OUTPUT_BYTES,
+            )),
+        )?)
     })
 }
 impl StreamExecution {
@@ -179,7 +188,7 @@ impl Resources {
         let entry = slot
             .as_ref()
             .ok_or_else(|| failure(tinybox_bus::UNKNOWN_RESOURCE, "closed resource"))?;
-        if !entry.execution_supported || !entry.native_host || entry.local_sandbox.is_none() {
+        if !entry.execution_supported || entry.local_sandbox.is_none() {
             return Err(failure(
                 tinybox_bus::UNSUPPORTED_OPERATION,
                 "live output is unavailable for this provider",

@@ -208,7 +208,7 @@ async fn a_panicked_job_is_joined_and_cleanup_failure_stays_owned_until_retry() 
         jail: None,
         journal,
         task: Mutex::new(Some(task)),
-        collector: Collector::Local(Arc::new(tinybox_host::LimitedLocalHost::new(64))),
+        collector: Collector::Host(Arc::new(tinybox_host::LimitedLocalHost::new(64))),
     };
     assert!(stream.running());
     stream.stop().await?;
@@ -294,4 +294,102 @@ async fn jailed_start_rejects_missing_grants_without_consuming_reservation() -> 
     let process = resources.start_exec(pending).await?;
     completed(&resources, &process).await?;
     resources.close(&resource).await
+}
+
+#[derive(Debug)]
+struct RemoteObservedFixture {
+    pending: std::sync::atomic::AtomicBool,
+    reject_retry: std::sync::atomic::AtomicBool,
+    collected_calls: std::sync::atomic::AtomicUsize,
+}
+#[async_trait::async_trait]
+impl tinybox_core::Host for RemoteObservedFixture {
+    fn name(&self) -> &'static str {
+        "ssh"
+    }
+    async fn run(
+        &self,
+        _: &tinybox_core::ExecRequest,
+    ) -> tinybox_core::Result<tinybox_core::ExecOutput> {
+        self.collected_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(tinybox_core::Error::UnsupportedStreaming {
+            provider: "fixture".into(),
+        })
+    }
+    async fn run_observed(
+        &self,
+        _: &tinybox_core::ExecRequest,
+        observer: Arc<dyn tinybox_core::ExecutionObserver>,
+    ) -> tinybox_core::Result<tinybox_core::ExecOutput> {
+        observer.output(tinybox_core::OutputStream::Stdout, &[255, 0])?;
+        self.pending
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Err(tinybox_core::Error::ObservedCleanupPending {
+            provider: "fixture".into(),
+        })
+    }
+    fn has_pending_observed_cleanup(&self) -> bool {
+        self.pending.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    async fn retry_observed_cleanup(&self) -> tinybox_core::Result<()> {
+        if self.reject_retry.load(std::sync::atomic::Ordering::SeqCst) {
+            Err(tinybox_core::Error::ObservedCleanupPending {
+                provider: "fixture".into(),
+            })
+        } else {
+            self.pending
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+}
+#[tokio::test]
+async fn remote_cleanup_failure_keeps_binary_output_and_owner_until_retry_ack() -> Result<()> {
+    let host = Arc::new(RemoteObservedFixture {
+        pending: std::sync::atomic::AtomicBool::new(false),
+        reject_retry: std::sync::atomic::AtomicBool::new(true),
+        collected_calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let resource = ResourceId("fixture-resource".into());
+    let command = tinybox_core::ExecRequest::new(["fixture"]);
+    let stream = StreamExecution::start(
+        SpawnRequest {
+            process: ResourceId("fixture-process".into()),
+            command: ExecRequest {
+                resource,
+                argv: vec!["fixture".into()],
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+                stdin: None,
+            },
+        },
+        command,
+        Collector::Host(host.clone()),
+        None,
+    );
+    assert!(stream.stop().await.is_err());
+    assert!(stream.running());
+    let batch = stream
+        .journal
+        .read(0)
+        .map_err(|_| tinybus::Error::failed("fixture read failed"))?;
+    assert_eq!(
+        batch.state,
+        ExecutionState::Failed {
+            code: ExecutionFailure::CleanupFailed
+        }
+    );
+    assert_eq!(batch.chunks[0].bytes, [255, 0]);
+    host.reject_retry
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    stream.stop().await?;
+    assert!(!stream.running());
+    assert!(stream.cleanup_acknowledged());
+    assert_eq!(
+        host.collected_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    Ok(())
 }
