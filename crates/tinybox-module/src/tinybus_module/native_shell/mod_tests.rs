@@ -242,14 +242,27 @@ fn native_shell_preserves_resource_environment_and_request_overrides()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let state = tempfile::tempdir()?;
     let mut resolved = tinybox_core::ExecRequest::new(["unused"]);
-    resolved.env.insert("RESOURCE_CONFIG".into(), "preserved".into());
+    resolved
+        .env
+        .insert("RESOURCE_CONFIG".into(), "preserved".into());
     resolved.env.insert("TMPDIR".into(), "resource-temp".into());
     resolved.env.insert("OVERRIDE".into(), "resource".into());
     let mut request = request(state.path());
-    request.extra_env.insert("OVERRIDE".into(), "request".into());
+    request
+        .extra_env
+        .insert("OVERRIDE".into(), "request".into());
     let shell = ShellContext::prepare(request, state.path(), &resolved)?;
-    assert_eq!(shell.environment.get("RESOURCE_CONFIG").map(String::as_str), Some("preserved"));
-    assert_eq!(shell.environment.get("TMPDIR").map(String::as_str), Some("resource-temp"));
-    assert_eq!(shell.environment.get("OVERRIDE").map(String::as_str), Some("request"));
+    assert_eq!(
+        shell.environment.get("RESOURCE_CONFIG").map(String::as_str),
+        Some("preserved")
+    );
+    assert_eq!(
+        shell.environment.get("TMPDIR").map(String::as_str),
+        Some("resource-temp")
+    );
+    assert_eq!(
+        shell.environment.get("OVERRIDE").map(String::as_str),
+        Some("request")
+    );
     Ok(())
 }

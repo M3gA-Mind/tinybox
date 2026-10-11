@@ -26,3 +26,9 @@ publish an execution for a closed resource.
 A prepared shell that loses admission is explicitly disposed on the blocking
 pool. Failed deletion retains its context in the resource registry; a later
 Close (including for an already closed resource) or Shutdown retries cleanup.
+
+Preparation validates the process reservation and claims a bounded pending slot
+before scheduling blocking work. Pending preparations and retained journals
+share the module admission budget. Close fences the resource and stops owned
+work before reporting failed scratch deletion. The sanitized child environment
+includes resource variables, with explicit shell-request overrides applied last.

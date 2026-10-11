@@ -1184,16 +1184,26 @@ async fn unreserved_shell_processes_are_rejected_before_preparation() -> Result<
     let resource = local_resource(&resources).await?;
     let request = SpawnRequest {
         process: ResourceId("unreserved-process".into()),
-        command: ExecRequest { resource: resource.clone(), argv: true_command(), cwd: None,
-            env: std::collections::BTreeMap::default(), stdin: None },
+        command: ExecRequest {
+            resource: resource.clone(),
+            argv: true_command(),
+            cwd: None,
+            env: std::collections::BTreeMap::default(),
+            stdin: None,
+        },
     };
     let called = std::sync::atomic::AtomicBool::new(false);
-    let result = resources.start_with_preparation(request, None, None, None, |preparation| async {
-        called.store(true, std::sync::atomic::Ordering::SeqCst);
-        preparation.finish().await
-    }).await;
+    let result = resources
+        .start_with_preparation(request, None, None, None, |preparation| async {
+            called.store(true, std::sync::atomic::Ordering::SeqCst);
+            preparation.finish().await
+        })
+        .await;
     assert!(result.is_err());
-    assert!(!called.load(std::sync::atomic::Ordering::SeqCst), "unreserved requests must not allocate scratch or run preflight");
+    assert!(
+        !called.load(std::sync::atomic::Ordering::SeqCst),
+        "unreserved requests must not allocate scratch or run preflight"
+    );
     resources.close(&resource).await?;
     Ok(())
 }
@@ -1206,16 +1216,37 @@ async fn rejected_scratch_failure_does_not_prevent_close_from_fencing_and_stoppi
     let state = tempfile::tempdir()?;
     let shell_request = shell_request(&resources, &resource, state.path(), "echo unused").await?;
     let context = super::super::super::native_shell::ShellContext::prepare(
-        shell_request, state.path(), &tinybox_core::ExecRequest::new(["unused"]))?;
-    context.scratch_deletion_blocked.store(true, std::sync::atomic::Ordering::SeqCst);
-    resources.rejected_shells.lock().await.push((resource.clone(), context.clone()));
-    let process = resources.start_exec(request(&resources, &resource, true_command()).await?).await?;
+        shell_request,
+        state.path(),
+        &tinybox_core::ExecRequest::new(["unused"]),
+    )?;
+    context
+        .scratch_deletion_blocked
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    resources
+        .rejected_shells
+        .lock()
+        .await
+        .push((resource.clone(), context.clone()));
+    let process = resources
+        .start_exec(request(&resources, &resource, true_command()).await?)
+        .await?;
     let stream = resources.stream(&process)?.ok_or("missing stream")?;
     assert!(resources.close(&resource).await.is_err());
-    assert!(stream.cleanup_acknowledged(), "scratch failure must not bypass stream shutdown");
-    assert!(resources.reserve(ReserveRequest::Process(resource.clone())).await.is_err(),
-        "scratch failure must not leave the resource open");
-    context.scratch_deletion_blocked.store(false, std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        stream.cleanup_acknowledged(),
+        "scratch failure must not bypass stream shutdown"
+    );
+    assert!(
+        resources
+            .reserve(ReserveRequest::Process(resource.clone()))
+            .await
+            .is_err(),
+        "scratch failure must not leave the resource open"
+    );
+    context
+        .scratch_deletion_blocked
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     resources.close(&resource).await?;
     Ok(())
 }

@@ -6,7 +6,7 @@ use super::{
 use crate::tinybus_module::output::OutputJournal;
 use tinybox_bus::{ExecutionFailure, OutputBatch};
 
-const MAX_STREAM_EXECUTIONS: usize = 32;
+pub(super) const MAX_STREAM_EXECUTIONS: usize = 32;
 
 pub(super) struct StreamExecution {
     request: SpawnRequest,
@@ -483,6 +483,7 @@ impl Resources {
         let entry = guard
             .as_ref()
             .ok_or_else(|| failure(tinybox_bus::UNKNOWN_RESOURCE, "closed resource"))?;
+        let _preparation = self.claim_preparation(entry, &request).await?;
         let (resolved, collector) = prepare_execution(
             entry,
             &request,
@@ -560,6 +561,48 @@ impl Resources {
         }
         admitted?;
         Ok(process)
+    }
+
+    async fn claim_preparation(
+        &self,
+        entry: &super::Resource,
+        request: &SpawnRequest,
+    ) -> Result<tokio::sync::SemaphorePermit<'_>> {
+        let mut state = self.state.lock().await;
+        let executions = self
+            .executions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        check_resource_open(&state, &executions, &request.command.resource)?;
+        self.check_reservation(
+            &mut state,
+            &request.process,
+            &ReserveRequest::Process(request.command.resource.clone()),
+        )?;
+        let streams = self
+            .streams
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pending = MAX_STREAM_EXECUTIONS - self.preparations.available_permits();
+        if streams.len() + pending >= MAX_STREAM_EXECUTIONS
+            || entry.processes.len()
+                + streams
+                    .values()
+                    .filter(|stream| stream.request.command.resource == request.command.resource)
+                    .count()
+                >= tinybox_bus::MAX_PROCESSES_PER_RESOURCE
+        {
+            return Err(failure(
+                tinybox_bus::RESOURCE_LIMIT,
+                "execution preparation limit reached",
+            ));
+        }
+        self.preparations.try_acquire().map_err(|_| {
+            failure(
+                tinybox_bus::RESOURCE_LIMIT,
+                "execution preparation limit reached",
+            )
+        })
     }
 
     async fn dispose_rejected_collector(

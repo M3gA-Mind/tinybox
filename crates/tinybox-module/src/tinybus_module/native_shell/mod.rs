@@ -76,7 +76,7 @@ impl ShellContext {
                 environment.insert(name.to_owned(), value);
             }
         }
-        for (name, value) in &request.extra_env {
+        for (name, value) in resolved.env.iter().chain(&request.extra_env) {
             if name.is_empty() || name.contains(['=', '\0']) || value.contains('\0') {
                 return Err(invalid());
             }
@@ -86,13 +86,18 @@ impl ShellContext {
             environment.insert(name.clone(), value.clone());
         }
         for name in ["TMPDIR", "TEMP", "TMP"] {
-            if !request.extra_env.keys().any(|key| {
-                if cfg!(windows) {
-                    key.eq_ignore_ascii_case(name)
-                } else {
-                    key == name
-                }
-            }) {
+            if !resolved
+                .env
+                .keys()
+                .chain(request.extra_env.keys())
+                .any(|key| {
+                    if cfg!(windows) {
+                        key.eq_ignore_ascii_case(name)
+                    } else {
+                        key == name
+                    }
+                })
+            {
                 environment.insert(
                     name.into(),
                     scratch.path().to_str().ok_or_else(invalid)?.into(),
