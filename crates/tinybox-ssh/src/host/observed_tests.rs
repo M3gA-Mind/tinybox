@@ -1758,13 +1758,26 @@ exit 1
 
     let calls = std::fs::read_to_string(&ps_calls)
         .map_err(|error| Error::io("read failing ps call log", &error))?;
+    let child_log = format!("{ps_calls}.child");
+    let child_calls = match std::fs::read_to_string(&child_log) {
+        Ok(calls) => calls,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(Error::io("read child process inspection log", &error)),
+    };
     let _ = std::fs::remove_file(&ps_calls);
+    let _ = std::fs::remove_file(&child_log);
     state.remove(&id);
     assert_eq!(output.status.code(), Some(7));
     assert_eq!(
         calls.lines().count(),
-        101,
-        "failed process inspection must retain the bounded TERM grace period"
+        100,
+        "failed process inspection must retain all supervisor TERM grace probes"
+    );
+    // The child can inspect its group once after recording status, unless TERM
+    // reaches it first. That optional probe is separate from the supervisor grace.
+    assert!(
+        child_calls.lines().count() <= 1,
+        "the child performs at most one process-group inspection before TERM"
     );
     assert!(!std::path::Path::new(&directory).exists());
     Ok(())
