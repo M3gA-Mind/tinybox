@@ -50,15 +50,23 @@ pub struct DockerSandbox {
     namespace: String,
     failed_create_attempts: Arc<std::sync::Mutex<HashMap<BoxId, String>>>,
     pending_observed_cleanup: Arc<Mutex<HashMap<String, CleanupHandle>>>,
+    observed_boxes: Arc<Mutex<HashMap<BoxId, ObservedBoxState>>>,
 }
 
 #[derive(Debug, Clone)]
 struct CleanupHandle {
     id: BoxId,
     token: String,
+    generation: u64,
     launched: bool,
     acknowledged: Arc<AtomicBool>,
     unsupported: Arc<AtomicBool>,
+}
+
+#[derive(Debug, Default)]
+struct ObservedBoxState {
+    generation: u64,
+    destroyed: bool,
 }
 
 #[derive(Debug, Default)]
@@ -69,6 +77,7 @@ struct ObservedControl {
 
 #[derive(Debug)]
 struct RetainCleanupOnDrop {
+    observed_boxes: Arc<Mutex<HashMap<BoxId, ObservedBoxState>>>,
     pending: Arc<Mutex<HashMap<String, CleanupHandle>>>,
     handle: CleanupHandle,
     armed: bool,
@@ -83,7 +92,7 @@ impl RetainCleanupOnDrop {
 impl Drop for RetainCleanupOnDrop {
     fn drop(&mut self) {
         if self.armed {
-            lock(&self.pending).insert(self.handle.token.clone(), self.handle.clone());
+            retain_observed_cleanup(&self.observed_boxes, &self.pending, self.handle.clone());
         }
     }
 }
@@ -93,6 +102,7 @@ struct DockerExecutionObserver {
     host: Arc<dyn Host>,
     namespace: String,
     handle: CleanupHandle,
+    observed_boxes: Arc<Mutex<HashMap<BoxId, ObservedBoxState>>>,
     pending: Arc<Mutex<HashMap<String, CleanupHandle>>>,
     control: Arc<ObservedControl>,
 }
@@ -122,7 +132,7 @@ impl ExecutionObserver for DockerExecutionObserver {
                 self.control.acknowledged.store(true, Ordering::Release);
             }
             Err(_) => {
-                lock(&self.pending).insert(self.handle.token.clone(), self.handle.clone());
+                retain_observed_cleanup(&self.observed_boxes, &self.pending, self.handle.clone());
             }
         }
     }
@@ -147,6 +157,7 @@ impl DockerSandbox {
             namespace: DEFAULT_NAMESPACE.to_owned(),
             failed_create_attempts: Arc::default(),
             pending_observed_cleanup: Arc::default(),
+            observed_boxes: Arc::default(),
         }
     }
 
@@ -188,6 +199,7 @@ impl DockerSandbox {
             namespace,
             failed_create_attempts: Arc::default(),
             pending_observed_cleanup: Arc::default(),
+            observed_boxes: Arc::default(),
         })
     }
 
@@ -210,6 +222,7 @@ impl DockerSandbox {
             namespace: self.namespace.clone(),
             failed_create_attempts: self.failed_create_attempts.clone(),
             pending_observed_cleanup: Arc::default(),
+            observed_boxes: self.observed_boxes.clone(),
         }
     }
 
@@ -284,8 +297,43 @@ impl DockerSandbox {
         }
     }
 
-    fn remember_observed_cleanup(&self, handle: CleanupHandle) {
-        lock(&self.pending_observed_cleanup).insert(handle.token.clone(), handle);
+    fn remember_observed_cleanup(&self, handle: CleanupHandle) -> bool {
+        retain_observed_cleanup(&self.observed_boxes, &self.pending_observed_cleanup, handle)
+    }
+
+    fn observed_generation_for_exec(&self, id: &BoxId) -> Result<u64> {
+        let mut boxes = lock(&self.observed_boxes);
+        let state = boxes.entry(id.clone()).or_default();
+        if state.destroyed {
+            return Err(Error::InvalidState {
+                id: id.as_str().to_owned(),
+                actual: BoxState::Archived,
+                expected: BoxState::Ready,
+            });
+        }
+        Ok(state.generation)
+    }
+
+    fn mark_observed_box_created(&self, id: &BoxId) {
+        let mut boxes = lock(&self.observed_boxes);
+        let state = boxes.entry(id.clone()).or_default();
+        state.generation = state.generation.wrapping_add(1);
+        state.destroyed = false;
+    }
+
+    fn mark_observed_box_destroyed(&self, id: &BoxId) {
+        let mut boxes = lock(&self.observed_boxes);
+        let state = boxes.entry(id.clone()).or_default();
+        state.generation = state.generation.wrapping_add(1);
+        state.destroyed = true;
+        lock(&self.pending_observed_cleanup).retain(|_, handle| &handle.id != id);
+    }
+
+    fn observed_handle_is_current(&self, handle: &CleanupHandle) -> bool {
+        let boxes = lock(&self.observed_boxes);
+        boxes
+            .get(&handle.id)
+            .is_none_or(|state| !state.destroyed && state.generation == handle.generation)
     }
 
     fn clear_observed_cleanup(&self, token: &str) {
@@ -312,11 +360,12 @@ impl DockerSandbox {
     async fn cleanup_or_retain(&self, handle: CleanupHandle) -> Result<bool> {
         if let Ok(unsupported) = cleanup_remote(self.host.clone(), &self.namespace, &handle).await {
             Ok(unsupported)
-        } else {
-            self.remember_observed_cleanup(handle);
+        } else if self.remember_observed_cleanup(handle) {
             Err(Error::ObservedCleanupPending {
                 provider: NAME.to_owned(),
             })
+        } else {
+            Ok(false)
         }
     }
 }
@@ -413,6 +462,7 @@ impl Sandbox for DockerSandbox {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&info.id);
+        self.mark_observed_box_created(&info.id);
         Ok(info)
     }
 
@@ -480,15 +530,18 @@ impl Sandbox for DockerSandbox {
             });
         }
 
+        let generation = self.observed_generation_for_exec(id)?;
         let handle = CleanupHandle {
             id: id.clone(),
             token: uuid::Uuid::new_v4().simple().to_string(),
+            generation,
             launched: false,
             acknowledged: Arc::default(),
             unsupported: Arc::default(),
         };
         let observed_request = observed::exec(&self.namespace, id, request, &handle.token)?;
         let mut retain_on_drop = RetainCleanupOnDrop {
+            observed_boxes: self.observed_boxes.clone(),
             pending: self.pending_observed_cleanup.clone(),
             handle: handle.clone(),
             armed: true,
@@ -508,6 +561,7 @@ impl Sandbox for DockerSandbox {
             host: self.host.clone(),
             namespace: self.namespace.clone(),
             handle: handle.clone(),
+            observed_boxes: self.observed_boxes.clone(),
             pending: self.pending_observed_cleanup.clone(),
             control: control.clone(),
         });
@@ -546,8 +600,7 @@ impl Sandbox for DockerSandbox {
             {
                 control.unsupported.store(unsupported, Ordering::Release);
                 control.acknowledged.store(true, Ordering::Release);
-            } else {
-                self.remember_observed_cleanup(handle);
+            } else if self.remember_observed_cleanup(handle) {
                 return Err(Error::ObservedCleanupPending {
                     provider: NAME.to_owned(),
                 });
@@ -576,9 +629,13 @@ impl Sandbox for DockerSandbox {
         let handles = self.pending_observed_handles();
         let mut failed = false;
         for handle in handles {
+            if !self.observed_handle_is_current(&handle) {
+                self.clear_observed_cleanup(&handle.token);
+                continue;
+            }
             match cleanup_remote(self.host.clone(), &self.namespace, &handle).await {
-                Ok(_) => self.clear_observed_cleanup(&handle.token),
-                Err(_) => failed = true,
+                Err(_) if self.observed_handle_is_current(&handle) => failed = true,
+                _ => self.clear_observed_cleanup(&handle.token),
             }
         }
         if failed {
@@ -676,6 +733,7 @@ impl Sandbox for DockerSandbox {
         // recoverable, a container without a record is a leak.
         self.remove_container(args::remove(&self.namespace, id))
             .await?;
+        self.mark_observed_box_destroyed(id);
         self.acknowledge_observed_cleanup_for_destroyed_box(id);
         self.store.remove(id)?;
         self.failed_create_attempts
@@ -693,6 +751,21 @@ fn is_name_conflict(error: &Error) -> bool {
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn retain_observed_cleanup(
+    observed_boxes: &Mutex<HashMap<BoxId, ObservedBoxState>>,
+    pending: &Mutex<HashMap<String, CleanupHandle>>,
+    handle: CleanupHandle,
+) -> bool {
+    let boxes = lock(observed_boxes);
+    let is_current = boxes
+        .get(&handle.id)
+        .is_none_or(|state| !state.destroyed && state.generation == handle.generation);
+    if is_current {
+        lock(pending).insert(handle.token.clone(), handle);
+    }
+    is_current
 }
 
 async fn cleanup_remote(

@@ -220,8 +220,10 @@ an earlier cancellation without launching the requested command. The waiter
 keeps its done receipt until the sandbox has observed the acknowledgement, then
 releases it in a separate idempotent request. A per-execution sandbox view can
 retire its local failed-cleanup handle only after the owner confirms that the
-same container was destroyed. Images without `setsid` refuse observed
-execution before running the requested command.
+same container was destroyed. Confirmed destruction also invalidates any
+in-flight cleanup generation, so a late failure cannot retain a handle for the
+removed container. Images without `setsid` refuse observed execution before
+running the requested command.
 
 ### Snapshot identifiers
 

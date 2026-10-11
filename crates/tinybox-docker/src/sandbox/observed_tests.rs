@@ -391,3 +391,64 @@ async fn cancellation_waits_for_container_side_waiter_acknowledgement() -> Resul
     drop(temporary);
     Ok(())
 }
+
+#[tokio::test]
+async fn cancelling_a_workload_does_not_leak_the_supervisors_wait_diagnostic() -> Result<()> {
+    let token = format!(
+        "cancel-diagnostic-fixture-{}",
+        uuid::Uuid::new_v4().simple()
+    );
+    let dir = reserve_fixture(&token).await?;
+    let child = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(SUPERVISOR)
+        .arg("tinybox-observed")
+        .arg(&dir)
+        .arg(&token)
+        .arg("sh")
+        .arg("-c")
+        .arg("printf 'ready'; sleep 60")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| Error::io("spawn diagnostic cancellation fixture", &error))?;
+
+    let pid_path = std::path::Path::new(&dir).join("pid");
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !pid_path.exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .map_err(|_| Error::Backend {
+        sandbox: NAME.to_owned(),
+        operation: "start diagnostic cancellation fixture",
+        message: "supervisor did not publish its process-group identity".to_owned(),
+    })?;
+
+    let acknowledgement = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(CANCEL_AND_ACK)
+        .arg("tinybox-observed-cancel")
+        .arg(&dir)
+        .arg(&token)
+        .output()
+        .await
+        .map_err(|error| Error::io("cancel diagnostic fixture", &error))?;
+    assert!(acknowledgement.status.success());
+
+    let output = tokio::time::timeout(Duration::from_secs(3), child.wait_with_output())
+        .await
+        .map_err(|_| Error::Backend {
+            sandbox: NAME.to_owned(),
+            operation: "reap diagnostic cancellation fixture",
+            message: "supervisor did not exit after acknowledging cleanup".to_owned(),
+        })?
+        .map_err(|error| Error::io("wait for diagnostic cancellation fixture", &error))?;
+    assert_ne!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"ready");
+    assert_eq!(output.stderr, b"");
+    let _ = std::fs::remove_dir_all(dir);
+    Ok(())
+}
