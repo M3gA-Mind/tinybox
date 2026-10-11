@@ -83,5 +83,5 @@ docker run --rm \
     scripts/build-module.sh --crate "$MODULE_CRATE" --version "$MODULE_VERSION" \
       --target "$MODULE_TARGET" --host "$MODULE_HOST" \
       --extra-files-json "$EXTRA_PACKAGED_FILES" --output-dir "$OUTPUT_DIR"
-    scripts/verify-module.sh --archive "$OUTPUT_DIR/$MODULE_CRATE-$MODULE_VERSION-$MODULE_HOST.tar.gz"
+    scripts/verify-module.sh --archive "$OUTPUT_DIR/tinybox-$MODULE_VERSION-$MODULE_HOST.tar.gz"
   '

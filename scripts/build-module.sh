@@ -70,6 +70,6 @@ while IFS= read -r file; do
   mkdir -p "$stage/$(dirname "$file")"
   cp "$file" "$stage/$file"
 done < <(jq -r '.[]' <<<"$extras")
-archive="$output/${crate}-${version}-${host}.tar.gz"
+archive="$output/tinybox-${version}-${host}.tar.gz"
 tar -C "$stage" -czf "$archive" .
 echo "$archive"

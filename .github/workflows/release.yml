@@ -40,3 +40,4 @@ jobs:
       tag: ${{ needs.resolve.outputs.tag }}
       version: ${{ needs.resolve.outputs.version }}
       module-crate: tinybox-module
+      asset-name: tinybox

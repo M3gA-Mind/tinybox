@@ -69,6 +69,6 @@ foreach ($file in $extraFiles) {
     New-Item -ItemType Directory -Force (Split-Path $destination) | Out-Null
     Copy-Item -LiteralPath $file -Destination $destination
 }
-$archive = Join-Path $outputPath "$Crate-$Version-$HostKey.zip"
+$archive = Join-Path $outputPath "tinybox-$Version-$HostKey.zip"
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -Force
 Write-Output $archive
