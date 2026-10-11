@@ -779,3 +779,29 @@ async fn native_shell_output_limit_terminates_and_reaps_before_release()
     resources.close(&resource).await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn failed_scratch_deletion_keeps_output_and_close_retryable()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    let request = shell_request(&resources, &resource, state.path(), "echo owned").await?;
+    let process = resources.start_shell_exec(request).await?;
+    completed(&resources, &process).await?;
+    let scratch = std::fs::read_dir(state.path().join("artifacts/sandbox-scratch"))?
+        .next().ok_or("missing scratch")??.path();
+    let retained = scratch.with_extension("retained");
+    std::fs::rename(&scratch, &retained)?;
+    std::fs::write(&scratch, "blocks directory removal")?;
+    assert!(resources.release_output(&process).await.is_err());
+    assert!(resources.stream(&process)?.is_some());
+    assert!(resources.close(&resource).await.is_err());
+    assert!(resources.stream(&process)?.is_some());
+    std::fs::remove_file(&scratch)?;
+    std::fs::rename(&retained, &scratch)?;
+    resources.close(&resource).await?;
+    assert!(!scratch.exists());
+    assert!(resources.stream(&process)?.is_none());
+    Ok(())
+}
