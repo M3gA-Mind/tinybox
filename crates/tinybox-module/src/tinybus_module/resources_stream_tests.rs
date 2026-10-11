@@ -659,7 +659,7 @@ async fn native_shell_replay_uses_original_request_and_retains_scratch_until_rel
     completed(&resources, &process).await?;
     assert_eq!(
         resources.read_output(&process, 0).await?.state,
-        ExecutionState::Exited(0)
+        ExecutionState::Exited { exit_code: 0 }
     );
     let scratch = state.path().join("artifacts/sandbox-scratch");
     assert_eq!(std::fs::read_dir(&scratch)?.count(), 1);
@@ -704,7 +704,9 @@ async fn native_shell_timeout_acknowledges_child_cleanup_before_output_release()
     let output = resources.read_output(&process, 0).await?;
     assert_eq!(
         output.state,
-        ExecutionState::Failed(ExecutionFailure::TimedOut)
+        ExecutionState::Failed {
+            code: ExecutionFailure::TimedOut
+        }
     );
     resources.release_output(&process).await?;
     resources.close(&resource).await?;
