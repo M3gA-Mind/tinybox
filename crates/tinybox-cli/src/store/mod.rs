@@ -141,7 +141,11 @@ impl FileStore {
 
         let file = File::options()
             .create(true)
-            .append(true)
+            // Append-only handles lack the access required by LockFileEx on
+            // Windows. Keep the existing lockfile intact when opening it.
+            .read(true)
+            .write(true)
+            .truncate(false)
             .open(&path)
             .map_err(|error| Error::Store {
                 operation: "open the lock",

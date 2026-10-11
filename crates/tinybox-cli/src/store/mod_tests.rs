@@ -406,7 +406,14 @@ fn the_lock_lives_beside_the_store_and_not_inside_it() -> Result<()> {
 #[test]
 fn the_store_lock_is_exclusive_and_released_when_its_guard_drops() -> Result<()> {
     let (store, _dir) = store()?;
+    let lock_path = store.path().with_extension("lock");
+    std::fs::write(&lock_path, b"existing lockfile")
+        .map_err(|error| Error::io("seed lockfile", &error))?;
     let guard = store.lock()?;
+    assert_eq!(
+        std::fs::read(&lock_path).map_err(|error| Error::io("read lockfile", &error))?,
+        b"existing lockfile"
+    );
     let second = std::fs::File::options()
         .read(true)
         .write(true)
