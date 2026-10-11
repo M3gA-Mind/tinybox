@@ -1112,3 +1112,47 @@ async fn shell_dispatch_uses_supervised_output_and_cleanup() -> tinybus::Result<
     service.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn shell_discovery_preserves_the_requested_pipeline_status() -> tinybus::Result<()> {
+    let service = BoxService::default();
+    let selected = service
+        .select_shell(tinybox_bus::SelectShellRequest {
+            command: "false | true".into(),
+            preserve_pipeline_status: true,
+        })
+        .await?;
+    if cfg!(windows) {
+        assert_eq!(selected.flavor, tinybox_bus::ShellFlavor::Cmd);
+        assert_eq!(selected.raw_arguments.as_deref(), Some("\"false | true\""));
+    } else {
+        assert_eq!(selected.flavor, tinybox_bus::ShellFlavor::Posix);
+        assert_eq!(
+            selected.arguments.last().map(String::as_str),
+            Some("false | true")
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn docker_control_dispatch_rejects_unbounded_deadlines() {
+    let service = BoxService::default();
+    let status = service
+        .docker_status(tinybox_bus::DockerStatusRequest { timeout_ms: 0 })
+        .await;
+    assert!(
+        matches!(status, Err(tinybus::Error::MethodFailed { name, .. })
+        if name == tinybox_bus::INVALID_DOCKER_CONTROL)
+    );
+    let cleanup = service
+        .cleanup_docker(tinybox_bus::CleanupDockerRequest {
+            label: "openhuman.sandbox=true".into(),
+            timeout_ms: tinybox_bus::MAX_DOCKER_CONTROL_TIMEOUT_MS + 1,
+        })
+        .await;
+    assert!(
+        matches!(cleanup, Err(tinybus::Error::MethodFailed { name, .. })
+        if name == tinybox_bus::INVALID_DOCKER_CONTROL)
+    );
+}
