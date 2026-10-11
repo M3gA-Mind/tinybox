@@ -125,6 +125,38 @@ async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
             "{include}: {result:?}"
         );
     }
+    let workspace = tempfile::tempdir()?;
+    let state_dir = tempfile::tempdir()?;
+    let resource: tinybox_bus::ResourceId = proxy.call("Reserve", (tinybox_bus::ReserveRequest::Resource,)).await?;
+    let _: tinybox_bus::ResourceInfo = proxy.call("Create", (tinybox_bus::CreateRequest {
+        resource: resource.clone(),
+        backend: "passthrough".into(),
+        workspace: tinybox_bus::Workspace::Directory(workspace.path().to_str().ok_or("non-UTF8 fixture")?.into()),
+        ..Default::default()
+    },)).await?;
+    let process: tinybox_bus::ResourceId = proxy.call("Reserve", (tinybox_bus::ReserveRequest::Process(resource.clone()),)).await?;
+    let running: tinybox_bus::ProcessRef = proxy.call("StartShellExec", (serde_json::json!({
+        "process":process, "resource":resource,
+        "shell":{"command":"echo native-fixture"},
+        "state_dir":state_dir.path().to_str().ok_or("non-UTF8 fixture")?,
+        "timeout_ms":5000
+    }),)).await?;
+    let batch = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let batch: tinybox_bus::OutputBatch = proxy.call("ReadOutput", (running.clone(), 0_u64)).await?;
+            if batch.state != tinybox_bus::ExecutionState::Running {
+                return Ok::<_, tinybus::Error>(batch);
+            }
+            tokio::task::yield_now().await;
+        }
+    }).await??;
+    assert_eq!(batch.state, tinybox_bus::ExecutionState::Exited { exit_code: 0 });
+    let stdout: Vec<u8> = batch.chunks.into_iter()
+        .filter(|chunk| chunk.stream == tinybox_bus::OutputStream::Stdout)
+        .flat_map(|chunk| chunk.bytes).collect();
+    assert_eq!(String::from_utf8(stdout)?.trim(), "native-fixture");
+    proxy.call::<()>("ReleaseOutput", (running,)).await?;
+    proxy.call::<()>("Close", (resource,)).await?;
     proxy.call::<()>("Shutdown", ()).await?;
     broker_task.abort();
     Ok(())
