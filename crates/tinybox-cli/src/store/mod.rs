@@ -148,11 +148,9 @@ impl FileStore {
                 message: error.to_string(),
             })?;
 
-        rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive).map_err(|error| {
-            Error::Store {
-                operation: "lock",
-                message: error.to_string(),
-            }
+        fs2::FileExt::lock_exclusive(&file).map_err(|error| Error::Store {
+            operation: "lock",
+            message: error.to_string(),
         })?;
         Ok(Lock { _file: file })
     }

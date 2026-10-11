@@ -402,3 +402,22 @@ fn the_lock_lives_beside_the_store_and_not_inside_it() -> Result<()> {
     assert_eq!(store.list()?.len(), 1);
     Ok(())
 }
+
+#[test]
+fn the_store_lock_is_exclusive_and_released_when_its_guard_drops() -> Result<()> {
+    let (store, _dir) = store()?;
+    let guard = store.lock()?;
+    let second = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .open(store.path().with_extension("lock"))
+        .map_err(|error| Error::io("open competing lock", &error))?;
+    let contested = fs2::FileExt::try_lock_exclusive(&second);
+    assert!(
+        matches!(contested, Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error())
+    );
+    drop(guard);
+    fs2::FileExt::try_lock_exclusive(&second)
+        .map_err(|error| Error::io("acquire released lock", &error))?;
+    Ok(())
+}

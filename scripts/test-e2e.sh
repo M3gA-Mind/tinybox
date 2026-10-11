@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 target="$(rustc -vV | sed -n 's/^host: //p')"
-version="$(cargo metadata --manifest-path Cargo.toml --format-version 1 --no-deps | jq -er '.packages[] | select(.name == +crate+) | .version')"
+version="$(cargo metadata --manifest-path Cargo.toml --format-version 1 --no-deps | jq -er '.packages[] | select(.name == "tinybox-module") | .version')"
 case "${RUNNER_OS:-$(uname -s)}" in
   Windows|MINGW*|MSYS*|CYGWIN*)
     pwsh -NoProfile -File scripts/build-module.ps1 -Crate tinybox-module -Version "$version" -Target "$target" -HostKey ci -OutputDir target/module-e2e
