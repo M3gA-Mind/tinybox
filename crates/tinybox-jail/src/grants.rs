@@ -129,18 +129,17 @@ impl<'a> Builder<'a> {
 
     /// True when `path` is, contains, or sits inside a credential directory.
     fn exposes_credentials(&self, path: &Path) -> bool {
+        let path = normalized_floor_path(&path.to_string_lossy());
         self.protected.credential_roots.iter().any(|root| {
             let cred = PathBuf::from(root);
             let cred = cred.canonicalize().unwrap_or(cred);
-            path.starts_with(&cred) || cred.starts_with(path)
+            let cred = normalized_floor_path(&cred.to_string_lossy());
+            same_or_descendant(&path, &cred) || same_or_descendant(&cred, &path)
         })
     }
 
     fn is_protected(&self, path: &Path) -> bool {
-        let normalized = path
-            .to_string_lossy()
-            .to_ascii_lowercase()
-            .replace('\\', "/");
+        let normalized = normalized_floor_path(&path.to_string_lossy());
         let components: Vec<_> = normalized
             .split('/')
             .filter(|part| !part.is_empty())
@@ -155,10 +154,11 @@ impl<'a> Builder<'a> {
                 pair[0].eq_ignore_ascii_case(&blocked[0])
                     && pair[1].eq_ignore_ascii_case(&blocked[1])
             })
-        }) || self.protected.prefixes.iter().any(|prefix| {
-            let prefix = prefix.to_ascii_lowercase().replace('\\', "/");
-            normalized == prefix || normalized.starts_with(&format!("{prefix}/"))
-        })
+        }) || self
+            .protected
+            .prefixes
+            .iter()
+            .any(|prefix| same_or_descendant(&normalized, &normalized_floor_path(prefix)))
     }
 
     fn read_only(&mut self, path: &Path, source: &str) {
@@ -244,6 +244,31 @@ impl<'a> Builder<'a> {
             self.add_gitconfig_file(&resolved, home, depth + 1, visited);
         }
     }
+}
+
+// Windows canonical paths may carry an extended drive or UNC namespace;
+// compare the underlying filesystem path, regardless of spelling or case.
+fn normalized_floor_path(path: &str) -> String {
+    let normalized = path.to_ascii_lowercase().replace('\\', "/");
+    if let Some(rest) = normalized.strip_prefix("//?/unc/") {
+        format!("//{rest}")
+    } else {
+        normalized
+            .strip_prefix("//?/")
+            .unwrap_or(&normalized)
+            .to_owned()
+    }
+}
+
+fn same_or_descendant(candidate: &str, parent: &str) -> bool {
+    let root = parent.trim_end_matches('/');
+    if root.is_empty() {
+        return parent.starts_with('/') && candidate.starts_with('/');
+    }
+    candidate == root
+        || candidate
+            .strip_prefix(root)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// `path = …` values inside `[include]` / `[includeIf …]` sections.

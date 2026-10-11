@@ -1,0 +1,118 @@
+//! Unconditional compiled-artifact admission and local grant discovery proof.
+
+use std::time::Duration;
+use tinybus::{Connection, broker::Broker, module::ModuleHost, transport::memory::MemoryBus};
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compiled_manifest_admits_and_executes_local_grant_discovery()
+-> Result<(), Box<dyn std::error::Error>> {
+    let artifact = compiled_artifact()?;
+    assert!(
+        artifact.is_file(),
+        "compiled TinyBox artifact missing: {}",
+        artifact.display()
+    );
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let modules = ModuleHost::new(broker);
+    let loaded = modules.load_file(&artifact)?;
+    let declared: Vec<_> = loaded
+        .manifest
+        .provides
+        .iter()
+        .flat_map(|interface| interface.methods.iter())
+        .map(tinybus::MemberName::as_str)
+        .collect();
+    assert_eq!(declared, tinybox_bus::METHODS);
+    let client = Connection::connect(bus.connect().await?).await?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if client
+                .list_names()
+                .await?
+                .iter()
+                .any(|name| name.as_str() == tinybox_bus::INTERFACE)
+            {
+                return Ok::<(), tinybus::Error>(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    let proxy = client.proxy(
+        tinybox_bus::INTERFACE,
+        tinybox_bus::OBJECT_PATH,
+        tinybox_bus::INTERFACE,
+    )?;
+    let home = tempfile::tempdir()?;
+    std::fs::create_dir(home.path().join("data"))?;
+    let result: tinybox_bus::LocalGrants = proxy
+        .call(
+            "ResolveLocalGrants",
+            (tinybox_bus::ResolveLocalGrantsRequest {
+                home: Some(home.path().to_str().ok_or("home is not UTF-8")?.into()),
+                config: tinybox_bus::LocalGrantConfig {
+                    toolchain_homes: false,
+                    extra_read_only: vec!["~/data".into()],
+                    ..tinybox_bus::LocalGrantConfig::default()
+                },
+                protected: tinybox_bus::ProtectedPaths::default(),
+            },),
+        )
+        .await?;
+    assert_eq!(
+        result.read_only,
+        vec![
+            home.path()
+                .join("data")
+                .canonicalize()?
+                .to_str()
+                .ok_or("grant is not UTF-8")?
+        ]
+    );
+    assert_eq!(result.read_write, Vec::<String>::new());
+    proxy.call::<()>("Shutdown", ()).await?;
+    broker_task.abort();
+    Ok(())
+}
+
+fn compiled_artifact() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    let executable = std::env::current_exe()?;
+    let dependencies = executable
+        .parent()
+        .ok_or("integration test has no parent directory")?;
+    let filename = format!(
+        "{}tinybox{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    );
+    // All-feature/static-link builds omit the dynamic ABI. Always build the
+    // dynamic variant separately: another validation command may replace the
+    // ordinary dependency artifact after Cargo releases its compilation lock.
+    let target = dependencies
+        .parent()
+        .and_then(std::path::Path::parent)
+        .ok_or("integration test has no target directory")?
+        .join("module-dynamic-proof");
+    let status = std::process::Command::new(env!("CARGO"))
+        .args([
+            "build",
+            "--locked",
+            "--offline",
+            "-p",
+            "tinybox-module",
+            "--no-default-features",
+            "--lib",
+        ])
+        .arg("--manifest-path")
+        .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(&target)
+        .status()?;
+    assert!(
+        status.success(),
+        "default-feature dynamic artifact build failed: {status}"
+    );
+    Ok(target.join("debug").join(filename))
+}

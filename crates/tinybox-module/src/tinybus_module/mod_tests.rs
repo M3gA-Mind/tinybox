@@ -959,3 +959,56 @@ async fn local_grant_discovery_rejects_non_utf8_canonical_targets()
     assert!(result.is_err());
     Ok(())
 }
+
+#[tokio::test]
+async fn local_grant_discovery_bounds_final_toolchain_and_extra_grants()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    std::fs::create_dir(home.path().join(".rustup"))?;
+    let mut extra_read_only = Vec::new();
+    for index in 0..tinybox_bus::MAX_NATIVE_JAIL_GRANTS {
+        let path = home.path().join(format!("data-{index}"));
+        std::fs::create_dir(&path)?;
+        extra_read_only.push(path.to_str().ok_or("grant is not UTF-8")?.into());
+    }
+    let result = BoxService::default()
+        .resolve_local_grants(tinybox_bus::ResolveLocalGrantsRequest {
+            home: Some(home.path().to_str().ok_or("home is not UTF-8")?.into()),
+            config: tinybox_bus::LocalGrantConfig {
+                extra_read_only,
+                ..tinybox_bus::LocalGrantConfig::default()
+            },
+            protected: tinybox_bus::ProtectedPaths::default(),
+        })
+        .await;
+    assert!(
+        matches!(result, Err(tinybus::Error::MethodFailed { ref name, .. }) if name.as_str() == tinybox_bus::RESOURCE_LIMIT)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_grant_discovery_accepts_exactly_the_final_limit()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    let mut extra_read_only = Vec::new();
+    for index in 0..tinybox_bus::MAX_NATIVE_JAIL_GRANTS {
+        let path = home.path().join(format!("data-{index}"));
+        std::fs::create_dir(&path)?;
+        extra_read_only.push(path.to_str().ok_or("grant is not UTF-8")?.into());
+    }
+    let result = BoxService::default()
+        .resolve_local_grants(tinybox_bus::ResolveLocalGrantsRequest {
+            home: Some(home.path().to_str().ok_or("home is not UTF-8")?.into()),
+            config: tinybox_bus::LocalGrantConfig {
+                toolchain_homes: false,
+                extra_read_only,
+                ..tinybox_bus::LocalGrantConfig::default()
+            },
+            protected: tinybox_bus::ProtectedPaths::default(),
+        })
+        .await?;
+    assert_eq!(result.read_only.len(), tinybox_bus::MAX_NATIVE_JAIL_GRANTS);
+    assert_eq!(result.read_write, Vec::<String>::new());
+    Ok(())
+}

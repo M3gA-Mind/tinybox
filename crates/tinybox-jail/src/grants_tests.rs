@@ -3,18 +3,18 @@ use super::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-fn fake_home() -> tempfile::TempDir {
-    let home = tempfile::tempdir().unwrap();
+fn fake_home() -> std::io::Result<tempfile::TempDir> {
+    let home = tempfile::tempdir()?;
     for d in [
         ".ssh", ".gnupg", ".aws", ".cargo", ".rustup", ".nvm", ".npm",
     ] {
-        fs::create_dir_all(home.path().join(d)).unwrap();
+        fs::create_dir_all(home.path().join(d))?;
     }
-    home
+    Ok(home)
 }
 
-fn canon(p: &Path) -> PathBuf {
-    p.canonicalize().unwrap()
+fn canon(p: &Path) -> std::io::Result<PathBuf> {
+    p.canonicalize()
 }
 
 fn has(grants: &[PathBuf], p: &Path) -> bool {
@@ -40,15 +40,17 @@ fn reaches_credentials(grants: &[PathBuf], home: &Path) -> Option<PathBuf> {
 }
 
 #[test]
-fn credential_dirs_are_never_granted_by_default() {
-    let home = fake_home();
+fn credential_dirs_are_never_granted_by_default() -> Result<(), Box<dyn std::error::Error>> {
+    let home = fake_home()?;
     let g = resolve(Some(home.path()), &LocalGrantConfig::default());
     assert_eq!(reaches_credentials(&all(&g), home.path()), None);
+    Ok(())
 }
 
 #[test]
-fn credential_dirs_are_never_granted_even_when_extras_ask() {
-    let home = fake_home();
+fn credential_dirs_are_never_granted_even_when_extras_ask() -> Result<(), Box<dyn std::error::Error>>
+{
+    let home = fake_home()?;
     let cfg = LocalGrantConfig {
         extra_read_only: vec![
             "~/.ssh".into(),
@@ -64,33 +66,36 @@ fn credential_dirs_are_never_granted_even_when_extras_ask() {
     let g = resolve(Some(home.path()), &cfg);
     assert_eq!(reaches_credentials(&all(&g), home.path()), None);
     assert!(!g.read_only.iter().any(|p| p == Path::new("/")));
+    Ok(())
 }
 
 #[test]
 #[cfg(unix)]
-fn credential_floor_holds_for_a_symlink_into_a_credential_dir() {
-    let home = fake_home();
-    std::os::unix::fs::symlink(home.path().join(".ssh"), home.path().join("innocent")).unwrap();
+fn credential_floor_holds_for_a_symlink_into_a_credential_dir()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = fake_home()?;
+    std::os::unix::fs::symlink(home.path().join(".ssh"), home.path().join("innocent"))?;
     let cfg = LocalGrantConfig {
         extra_read_only: vec!["~/innocent".into()],
         ..LocalGrantConfig::default()
     };
     let g = resolve(Some(home.path()), &cfg);
     assert_eq!(reaches_credentials(&all(&g), home.path()), None);
+    Ok(())
 }
 
 #[test]
-fn toolchain_homes_are_granted_when_they_exist() {
-    let home = fake_home();
+fn toolchain_homes_are_granted_when_they_exist() -> Result<(), Box<dyn std::error::Error>> {
+    let home = fake_home()?;
     let cargo = home.path().join(".cargo");
     for dir in ["bin", "registry", "git"] {
-        fs::create_dir_all(cargo.join(dir)).unwrap();
+        fs::create_dir_all(cargo.join(dir))?;
     }
     for file in ["config.toml", "config", "env"] {
-        fs::write(cargo.join(file), "").unwrap();
+        fs::write(cargo.join(file), "")?;
     }
     let g = resolve(Some(home.path()), &LocalGrantConfig::default());
-    let h = canon(home.path());
+    let h = canon(home.path())?;
     let cargo = h.join(".cargo");
     assert!(
         !has(&g.read_write, &cargo),
@@ -114,49 +119,52 @@ fn toolchain_homes_are_granted_when_they_exist() {
     }
     for sys in ["/usr/local", "/opt"] {
         if Path::new(sys).exists() {
-            assert!(has(&g.read_only, &canon(Path::new(sys))), "{sys} missing");
+            assert!(has(&g.read_only, &canon(Path::new(sys))?), "{sys} missing");
         }
     }
+    Ok(())
 }
 
 #[test]
-fn absent_toolchain_homes_are_not_granted() {
-    let home = tempfile::tempdir().unwrap();
-    fs::create_dir_all(home.path().join(".nvm")).unwrap();
+fn absent_toolchain_homes_are_not_granted() -> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir_all(home.path().join(".nvm"))?;
     let g = resolve(Some(home.path()), &LocalGrantConfig::default());
-    let h = canon(home.path());
+    let h = canon(home.path())?;
     assert!(has(&g.read_only, &h.join(".nvm")));
     assert!(!all(&g).iter().any(|p| p.starts_with(h.join(".cargo"))));
     assert!(!all(&g).iter().any(|p| p.starts_with(h.join(".rustup"))));
+    Ok(())
 }
 
 #[test]
-fn toolchain_homes_can_be_switched_off() {
-    let home = fake_home();
-    fs::write(home.path().join(".gitconfig"), "[user]\n name = x\n").unwrap();
+fn toolchain_homes_can_be_switched_off() -> Result<(), Box<dyn std::error::Error>> {
+    let home = fake_home()?;
+    fs::write(home.path().join(".gitconfig"), "[user]\n name = x\n")?;
     let cfg = LocalGrantConfig {
         toolchain_homes: false,
         ..LocalGrantConfig::default()
     };
     let g = resolve(Some(home.path()), &cfg);
     assert!(g.read_only.is_empty() && g.read_write.is_empty(), "{g:?}");
+    Ok(())
 }
 
 #[test]
-fn cargo_home_with_registry_credentials_is_granted_piecewise() {
-    let home = fake_home();
+fn cargo_home_with_registry_credentials_is_granted_piecewise()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = fake_home()?;
     let cargo = home.path().join(".cargo");
     for d in ["bin", "registry", "git"] {
-        fs::create_dir_all(cargo.join(d)).unwrap();
+        fs::create_dir_all(cargo.join(d))?;
     }
     fs::write(
         cargo.join("credentials.toml"),
         "[registry]\ntoken = \"x\"\n",
-    )
-    .unwrap();
-    fs::write(cargo.join("config.toml"), "").unwrap();
+    )?;
+    fs::write(cargo.join("config.toml"), "")?;
     let g = resolve(Some(home.path()), &LocalGrantConfig::default());
-    let c = canon(&cargo);
+    let c = canon(&cargo)?;
     assert!(
         !has(&g.read_write, &c),
         "whole ~/.cargo would expose credentials.toml"
@@ -166,26 +174,29 @@ fn cargo_home_with_registry_credentials_is_granted_piecewise() {
     assert!(has(&g.read_write, &c.join("git")));
     assert!(has(&g.read_only, &c.join("bin")));
     assert!(has(&g.read_only, &c.join("config.toml")));
+    Ok(())
 }
 
 #[test]
-fn a_writable_grant_subsumes_the_same_path_read_only() {
-    let home = fake_home();
+fn a_writable_grant_subsumes_the_same_path_read_only() -> Result<(), Box<dyn std::error::Error>> {
+    let home = fake_home()?;
     let cfg = LocalGrantConfig {
         extra_read_only: vec!["~/.npm".into()],
         extra_read_write: vec!["~/.npm".into()],
         ..LocalGrantConfig::default()
     };
     let g = resolve(Some(home.path()), &cfg);
-    let npm = canon(&home.path().join(".npm"));
+    let npm = canon(&home.path().join(".npm"))?;
     assert!(has(&g.read_write, &npm));
     assert!(!has(&g.read_only, &npm));
+    Ok(())
 }
 
 #[test]
 #[cfg(target_os = "linux")]
-fn proc_is_off_by_default_and_only_the_toggle_grants_it() {
-    let home = fake_home();
+fn proc_is_off_by_default_and_only_the_toggle_grants_it() -> Result<(), Box<dyn std::error::Error>>
+{
+    let home = fake_home()?;
     let g = resolve(Some(home.path()), &LocalGrantConfig::default());
     assert!(!all(&g).iter().any(|p| p.starts_with("/proc")));
 
@@ -204,58 +215,62 @@ fn proc_is_off_by_default_and_only_the_toggle_grants_it() {
     let g = resolve(Some(home.path()), &cfg);
     assert!(has(&g.read_only, Path::new("/proc")));
     assert!(!has(&g.read_write, Path::new("/proc")));
+    Ok(())
 }
 
 #[test]
-fn extras_expand_tilde_and_skip_missing_paths() {
-    let home = fake_home();
-    fs::create_dir_all(home.path().join("dotfiles")).unwrap();
-    fs::create_dir_all(home.path().join("data")).unwrap();
+fn extras_expand_tilde_and_skip_missing_paths() -> Result<(), Box<dyn std::error::Error>> {
+    let home = fake_home()?;
+    fs::create_dir_all(home.path().join("dotfiles"))?;
+    fs::create_dir_all(home.path().join("data"))?;
     let cfg = LocalGrantConfig {
         extra_read_only: vec!["~/dotfiles".into(), "~/nope".into()],
         extra_read_write: vec!["~/data/../data".into()],
         ..LocalGrantConfig::default()
     };
     let g = resolve(Some(home.path()), &cfg);
-    assert!(has(&g.read_only, &canon(&home.path().join("dotfiles"))));
-    assert!(has(&g.read_write, &canon(&home.path().join("data"))));
+    assert!(has(&g.read_only, &canon(&home.path().join("dotfiles"))?));
+    assert!(has(&g.read_write, &canon(&home.path().join("data"))?));
     assert!(!all(&g).iter().any(|p| p.ends_with("nope")));
+    Ok(())
 }
 
 #[test]
 #[cfg(unix)]
-fn gitconfig_symlink_and_include_targets_are_canonicalized() {
-    let home = fake_home();
+fn gitconfig_symlink_and_include_targets_are_canonicalized()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = fake_home()?;
     let dots = home.path().join("dotfiles");
-    fs::create_dir_all(&dots).unwrap();
-    fs::write(dots.join("work.gitconfig"), "[user]\n email = a@b\n").unwrap();
-    fs::write(dots.join("local.gitconfig"), "").unwrap();
+    fs::create_dir_all(&dots)?;
+    fs::write(dots.join("work.gitconfig"), "[user]\n email = a@b\n")?;
+    fs::write(dots.join("local.gitconfig"), "")?;
     fs::write(
         dots.join("gitconfig"),
         "[user]\n name = x\n[include]\n path = dotfiles/work.gitconfig\n\
          [includeIf \"gitdir:~/w/\"]\n\tpath = ~/dotfiles/local.gitconfig\n\
          [include]\n path = ~/.ssh/leaky\n",
-    )
-    .unwrap();
-    std::os::unix::fs::symlink(dots.join("gitconfig"), home.path().join(".gitconfig")).unwrap();
+    )?;
+    std::os::unix::fs::symlink(dots.join("gitconfig"), home.path().join(".gitconfig"))?;
     // The credential include must be dropped even though the file exists.
-    fs::write(home.path().join(".ssh/leaky"), "").unwrap();
+    fs::write(home.path().join(".ssh/leaky"), "")?;
 
     let g = resolve(Some(home.path()), &LocalGrantConfig::default());
-    let d = canon(&dots);
+    let d = canon(&dots)?;
     assert!(has(&g.read_only, &d.join("gitconfig")), "{g:?}");
     assert!(has(&g.read_only, &d.join("work.gitconfig")), "{g:?}");
     assert!(has(&g.read_only, &d.join("local.gitconfig")), "{g:?}");
     assert_eq!(reaches_credentials(&all(&g), home.path()), None);
+    Ok(())
 }
 
 #[test]
-fn gitconfig_include_cycles_terminate() {
-    let home = fake_home();
-    fs::write(home.path().join(".gitconfig"), "[include]\n path = ~/b\n").unwrap();
-    fs::write(home.path().join("b"), "[include]\n path = ~/.gitconfig\n").unwrap();
+fn gitconfig_include_cycles_terminate() -> Result<(), Box<dyn std::error::Error>> {
+    let home = fake_home()?;
+    fs::write(home.path().join(".gitconfig"), "[include]\n path = ~/b\n")?;
+    fs::write(home.path().join("b"), "[include]\n path = ~/.gitconfig\n")?;
     let g = resolve(Some(home.path()), &LocalGrantConfig::default());
-    assert!(has(&g.read_only, &canon(&home.path().join("b"))));
+    assert!(has(&g.read_only, &canon(&home.path().join("b"))?));
+    Ok(())
 }
 
 #[test]
@@ -317,10 +332,11 @@ fn resolve(home: Option<&Path>, config: &LocalGrantConfig) -> JailGrants {
 }
 
 #[test]
-fn custom_host_floor_excludes_direct_and_ancestor_grants() {
-    let home = fake_home();
+fn custom_host_floor_excludes_direct_and_ancestor_grants() -> Result<(), Box<dyn std::error::Error>>
+{
+    let home = fake_home()?;
     let private = home.path().join("host-secrets");
-    fs::create_dir(&private).unwrap();
+    fs::create_dir(&private)?;
     let config = LocalGrantConfig {
         toolchain_homes: false,
         extra_read_only: vec!["~".into(), "~/host-secrets".into()],
@@ -332,13 +348,15 @@ fn custom_host_floor_excludes_direct_and_ancestor_grants() {
     };
     let grants = resolve_local_jail_grants(Some(home.path()), &config, &protected);
     assert_eq!(grants.read_only, Vec::<PathBuf>::new());
+    Ok(())
 }
 
 #[test]
-fn host_floor_matches_component_pairs_and_case_insensitive_components() {
-    let home = fake_home();
-    fs::create_dir_all(home.path().join(".SSH")).unwrap();
-    fs::write(home.path().join(".cargo/credentials.toml"), "secret").unwrap();
+fn host_floor_matches_component_pairs_and_case_insensitive_components()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = fake_home()?;
+    fs::create_dir_all(home.path().join(".SSH"))?;
+    fs::write(home.path().join(".cargo/credentials.toml"), "secret")?;
     let config = LocalGrantConfig {
         toolchain_homes: false,
         extra_read_only: vec!["~/.SSH".into(), "~/.cargo/credentials.toml".into()],
@@ -346,6 +364,7 @@ fn host_floor_matches_component_pairs_and_case_insensitive_components() {
     };
     let grants = resolve(Some(home.path()), &config);
     assert_eq!(grants.read_only, Vec::<PathBuf>::new());
+    Ok(())
 }
 
 #[test]
@@ -386,21 +405,76 @@ fn host_floor_matches_windows_separators_and_absolute_prefix_boundaries() {
 }
 
 #[test]
-fn gitconfig_include_depth_is_bounded_and_non_files_are_skipped() {
-    let home = fake_home();
+fn gitconfig_include_depth_is_bounded_and_non_files_are_skipped()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = fake_home()?;
     fs::write(
         home.path().join(".gitconfig"),
         "[include]\n path = ~/next-0\n path = ~/.cargo\n",
-    )
-    .unwrap();
+    )?;
     for index in 0..10 {
         fs::write(
             home.path().join(format!("next-{index}")),
             format!("[include]\n path = ~/next-{}\n", index + 1),
-        )
-        .unwrap();
+        )?;
     }
     let grants = resolve(Some(home.path()), &LocalGrantConfig::default());
-    assert!(has(&grants.read_only, &canon(&home.path().join("next-7"))));
-    assert!(!has(&grants.read_only, &canon(&home.path().join("next-8"))));
+    assert!(has(&grants.read_only, &canon(&home.path().join("next-7"))?));
+    assert!(!has(
+        &grants.read_only,
+        &canon(&home.path().join("next-8"))?
+    ));
+    Ok(())
+}
+
+#[test]
+fn protected_absolute_root_blocks_every_descendant() {
+    let protected = ProtectedPaths {
+        prefixes: vec!["/".into()],
+        ..ProtectedPaths::default()
+    };
+    let builder = Builder::new(None, &protected);
+    assert!(builder.is_protected(Path::new("/opt")));
+    assert!(builder.is_protected(Path::new("/usr/local/toolchain")));
+    assert!(!builder.is_protected(Path::new("relative/toolchain")));
+}
+
+#[test]
+fn protected_prefix_trailing_separators_keep_component_boundaries() {
+    let protected = ProtectedPaths {
+        prefixes: vec!["/opt/secrets/".into(), r"C:\Windows\".into()],
+        ..ProtectedPaths::default()
+    };
+    let builder = Builder::new(None, &protected);
+    assert!(builder.is_protected(Path::new("/opt/secrets/key")));
+    assert!(builder.is_protected(Path::new("/opt/secrets")));
+    assert!(!builder.is_protected(Path::new("/opt/secrets-tools/key")));
+    assert!(builder.is_protected(Path::new(r"C:\WINDOWS\System32")));
+    assert!(builder.is_protected(Path::new(r"C:\WINDOWS")));
+    assert!(!builder.is_protected(Path::new(r"C:\WINDOWS-tools")));
+}
+
+#[test]
+fn protected_windows_prefixes_match_canonical_extended_path_names() {
+    let protected = ProtectedPaths {
+        prefixes: vec!["C:/Windows/".into(), "//server/secrets/".into()],
+        ..ProtectedPaths::default()
+    };
+    let builder = Builder::new(None, &protected);
+    assert!(builder.is_protected(Path::new(r"\\?\C:\WINDOWS\System32")));
+    assert!(!builder.is_protected(Path::new(r"\\?\C:\WINDOWS-tools")));
+    assert!(builder.is_protected(Path::new(r"\\?\UNC\SERVER\secrets\key")));
+    assert!(!builder.is_protected(Path::new(r"\\?\UNC\SERVER\secrets-tools")));
+}
+
+#[test]
+fn credential_root_ancestors_match_case_and_separator_styles() {
+    let protected = ProtectedPaths {
+        credential_roots: vec!["c:/users/floor-fixture/.ssh".into()],
+        ..ProtectedPaths::default()
+    };
+    let builder = Builder::new(None, &protected);
+    assert!(builder.exposes_credentials(Path::new(r"\\?\C:\Users\FLOOR-FIXTURE")));
+    assert!(builder.exposes_credentials(Path::new(r"C:\USERS\floor-fixture\.SSH\id_rsa")));
+    assert!(!builder.exposes_credentials(Path::new(r"C:\Users\floor-fixture-other")));
 }

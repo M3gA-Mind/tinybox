@@ -82,6 +82,12 @@ impl BoxService {
         .map_err(|_| {
             resources::failure(tinybox_bus::UNSUPPORTED_OPERATION, "grant discovery failed")
         })?;
+        if grants.read_only.len() + grants.read_write.len() > tinybox_bus::MAX_NATIVE_JAIL_GRANTS {
+            return Err(resources::failure(
+                tinybox_bus::RESOURCE_LIMIT,
+                "too many discovered local grant paths",
+            ));
+        }
         Ok(tinybox_bus::LocalGrants {
             read_only: grants
                 .read_only
@@ -448,7 +454,7 @@ tinybus_module::module_export_optional_static! {
     setup = setup,
     worker_threads = 1,
     provides = ["ai.tinyhumans.tinybox.Box"],
-    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput", "StartJailedExec", "RunDocker"],
+    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput", "StartJailedExec", "RunDocker", "ResolveLocalGrants"],
     signals = [],
     requires = [],
     optional = [],

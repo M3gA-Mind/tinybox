@@ -33,7 +33,8 @@ pub struct ProtectedPaths {
     pub components: Vec<String>,
     /// Forbidden consecutive path-component pairs.
     pub component_pairs: Vec<[String; 2]>,
-    /// Forbidden absolute roots and their descendants.
+    /// Forbidden absolute roots and their descendants. Trailing separators and
+    /// Windows extended-path namespaces are normalized before matching.
     pub prefixes: Vec<String>,
     /// Credential roots whose ancestors must also never be granted.
     pub credential_roots: Vec<String>,
