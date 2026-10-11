@@ -147,12 +147,51 @@ impl LimitedLocalHost {
 }
 
 impl LimitedLocalHost {
+    /// Execute platform shell text with the ordinary output and cleanup supervisor.
+    /// The request supplies cwd, environment and stdin; its argv is unused.
+    ///
+    /// # Errors
+    /// Returns native startup, output-limit and cleanup errors just like observed argv execution.
+    pub async fn run_shell_observed(
+        &self,
+        request: &ExecRequest,
+        shell: &tinybox_bus::SelectShellRequest,
+        observer: Arc<dyn ExecutionObserver>,
+    ) -> Result<ExecOutput> {
+        let mut command = crate::build_shell_command(shell);
+        command.envs(&request.env);
+        if let Some(cwd) = &request.cwd {
+            command.current_dir(cwd);
+        }
+        command.stdin(if request.stdin.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        });
+        // Apply startup removals after provider/caller environment overrides.
+        for name in crate::select_shell(shell).remove_environment {
+            command.env_remove(name);
+        }
+        let mut command = tokio::process::Command::from(command);
+        command.kill_on_drop(true);
+        self.collect_command(request, Some(observer), command).await
+    }
+
     async fn collect(
         &self,
         request: &ExecRequest,
         observer: Option<Arc<dyn ExecutionObserver>>,
     ) -> Result<ExecOutput> {
-        let mut command = LocalHost::command(request)?;
+        self.collect_command(request, observer, LocalHost::command(request)?)
+            .await
+    }
+
+    async fn collect_command(
+        &self,
+        request: &ExecRequest,
+        observer: Option<Arc<dyn ExecutionObserver>>,
+        mut command: tokio::process::Command,
+    ) -> Result<ExecOutput> {
         process::prepare(&mut command)?;
         command
             .stdout(std::process::Stdio::piped())

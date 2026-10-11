@@ -44,7 +44,8 @@ pub use files::{
 /// 1.7 adds explicitly approved native directory-jail execution. 1.8 adds a
 /// bounded, module-owned one-shot Docker operation. 1.9 adds local grant discovery.
 /// 1.10 adds platform shell selection.
-pub const CONTRACT_VERSION: (u32, u32) = (1, 10);
+/// 1.11 adds supervised native shell execution on local passthrough resources.
+pub const CONTRACT_VERSION: (u32, u32) = (1, 11);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.
@@ -116,6 +117,7 @@ pub const METHODS: &[&str] = &[
     "RunDocker",
     "ResolveLocalGrants",
     "SelectShell",
+    "StartShellExec",
 ];
 
 /// Facts about the detected native directory-jail backend.

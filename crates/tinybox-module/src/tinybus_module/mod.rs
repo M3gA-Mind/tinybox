@@ -265,6 +265,19 @@ impl BoxService {
         ))
         .await
     }
+    /// Execute native shell text on a local passthrough resource with supervised output.
+    async fn start_shell_exec(
+        &self,
+        request: SpawnRequest,
+        shell: tinybox_bus::SelectShellRequest,
+    ) -> TinyBusResult<ProcessRef> {
+        let resources = self.resources.clone();
+        finish_operation(tokio::spawn(async move {
+            resources.start_shell_exec(request, shell).await
+        }))
+        .await
+    }
+
     /// Start an execution in the resource's native directory jail.
     async fn start_jailed_exec(
         &self,
@@ -467,7 +480,7 @@ tinybus_module::module_export_optional_static! {
     setup = setup,
     worker_threads = 1,
     provides = ["ai.tinyhumans.tinybox.Box"],
-    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput", "StartJailedExec", "RunDocker", "ResolveLocalGrants", "SelectShell"],
+    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput", "StartJailedExec", "RunDocker", "ResolveLocalGrants", "SelectShell", "StartShellExec"],
     signals = [],
     requires = [],
     optional = [],

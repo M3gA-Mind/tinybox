@@ -11,12 +11,17 @@ const MAX_STREAM_EXECUTIONS: usize = 32;
 pub(super) struct StreamExecution {
     request: SpawnRequest,
     jail: Option<tinybox_bus::NativeJailConfig>,
+    shell: Option<tinybox_bus::SelectShellRequest>,
     journal: Arc<OutputJournal>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     collector: Collector,
 }
 #[derive(Clone)]
 enum Collector {
+    Shell(
+        Arc<tinybox_host::LimitedLocalHost>,
+        tinybox_bus::SelectShellRequest,
+    ),
     Host(
         Arc<dyn tinybox_core::Host>,
         Option<Arc<tinybox_host::LimitedLocalHost>>,
@@ -35,6 +40,7 @@ impl Collector {
         observer: Arc<OutputJournal>,
     ) -> tinybox_core::Result<tinybox_core::ExecOutput> {
         match self {
+            Self::Shell(host, shell) => host.run_shell_observed(command, shell, observer).await,
             Self::Host(host, _) => host.run_observed(command, observer).await,
             Self::Jailed(host) => host.run_observed(command, observer).await,
             Self::Sandbox(sandbox, id, _) => sandbox.exec_observed(id, command, observer).await,
@@ -42,6 +48,7 @@ impl Collector {
     }
     fn pending(&self) -> bool {
         match self {
+            Self::Shell(host, _) => host.has_pending_cleanup(),
             Self::Host(host, native) => {
                 host.has_pending_observed_cleanup()
                     || native
@@ -66,6 +73,7 @@ impl Collector {
     }
     async fn drain(&self) -> tinybox_core::Result<()> {
         match self {
+            Self::Shell(host, _) => host.drain_checked().await,
             Self::Host(host, native) => {
                 let remote = host.retry_observed_cleanup().await;
                 if let Some(native) = native {
@@ -127,6 +135,7 @@ impl StreamExecution {
         resolved: tinybox_core::ExecRequest,
         collector: Collector,
         jail: Option<tinybox_bus::NativeJailConfig>,
+        shell: Option<tinybox_bus::SelectShellRequest>,
     ) -> Self {
         let journal = Arc::new(OutputJournal::default());
         let observer = journal.clone();
@@ -151,6 +160,7 @@ impl StreamExecution {
         Self {
             request,
             jail,
+            shell,
             journal,
             task: Mutex::new(Some(task)),
             collector,
@@ -200,19 +210,34 @@ impl Resources {
         &self,
         request: SpawnRequest,
     ) -> Result<ProcessRef> {
-        self.start_with_jail(request, None).await
+        self.start_with_jail(request, None, None).await
     }
     pub(in crate::tinybus_module) async fn start_jailed_exec(
         &self,
         request: SpawnRequest,
         config: tinybox_bus::NativeJailConfig,
     ) -> Result<ProcessRef> {
-        self.start_with_jail(request, Some(config)).await
+        self.start_with_jail(request, Some(config), None).await
     }
+    pub(in crate::tinybus_module) async fn start_shell_exec(
+        &self,
+        request: SpawnRequest,
+        shell: tinybox_bus::SelectShellRequest,
+    ) -> Result<ProcessRef> {
+        if !request.command.argv.is_empty() {
+            return Err(failure(
+                tinybox_bus::INVALID_ID,
+                "shell execution requires empty argv",
+            ));
+        }
+        self.start_with_jail(request, None, Some(shell)).await
+    }
+
     async fn start_with_jail(
         &self,
         request: SpawnRequest,
         jail: Option<tinybox_bus::NativeJailConfig>,
+        shell: Option<tinybox_bus::SelectShellRequest>,
     ) -> Result<ProcessRef> {
         validate_id(&request.process)?;
         validate_id(&request.command.resource)?;
@@ -221,7 +246,10 @@ impl Resources {
             process: request.process.clone(),
         };
         if let Some(existing) = self.stream(&process)? {
-            return if existing.request == request && existing.jail == jail {
+            return if existing.request == request
+                && existing.jail == jail
+                && existing.shell == shell
+            {
                 Ok(process)
             } else {
                 Err(failure(
@@ -249,21 +277,42 @@ impl Resources {
                 "owned native collector unavailable",
             ));
         }
+        if shell.is_some() && (!entry.native_host || entry.local_sandbox.is_none()) {
+            return Err(failure(
+                tinybox_bus::UNSUPPORTED_OPERATION,
+                "platform shell execution requires local passthrough",
+            ));
+        }
         // Each execution owns its cleanup collector. Cancelling one stream must
         // not drain an unrelated running supervisor or inherit its failure.
         // Resolve before consuming admission, and fence native start against Close.
+        let mut native_request = command(request.command.clone());
+        if shell.is_some() {
+            // Passthrough resolution still supplies resource cwd and environment.
+            // The placeholder is never executed; the native builder owns argv.
+            native_request.argv = vec!["shell".into()];
+        }
         let resolved = if let Some(sandbox) = &entry.local_sandbox {
             sandbox
-                .resolve_command(&entry.id, &command(request.command.clone()))
+                .resolve_command(&entry.id, &native_request)
                 .map_err(|error| backend_error(&error))?
         } else {
-            let command = command(request.command.clone());
+            let command = native_request;
             if command.argv.is_empty() {
                 return Err(failure(tinybox_bus::INVALID_ID, "empty execution command"));
             }
             command
         };
-        let collector = select_collector(entry, jail.as_ref(), &resolved)?;
+        let collector = if let Some(shell) = &shell {
+            Collector::Shell(
+                Arc::new(tinybox_host::LimitedLocalHost::new(
+                    tinybox_bus::MAX_OUTPUT_BYTES,
+                )),
+                shell.clone(),
+            )
+        } else {
+            select_collector(entry, jail.as_ref(), &resolved)?
+        };
         let mut state = self.state.lock().await;
         let executions = self
             .executions
@@ -275,7 +324,10 @@ impl Resources {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(existing) = streams.get(&process.process) {
-            return if existing.request == request && existing.jail == jail {
+            return if existing.request == request
+                && existing.jail == jail
+                && existing.shell == shell
+            {
                 Ok(process)
             } else {
                 Err(failure(
@@ -309,7 +361,9 @@ impl Resources {
         )?;
         streams.insert(
             process.process.clone(),
-            Arc::new(StreamExecution::start(request, resolved, collector, jail)),
+            Arc::new(StreamExecution::start(
+                request, resolved, collector, jail, shell,
+            )),
         );
         Ok(process)
     }
