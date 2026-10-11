@@ -116,6 +116,24 @@ pub trait Host: std::fmt::Debug + Send + Sync + 'static {
         })
     }
 
+    /// Whether this host retains remote cleanup handles from failed observed
+    /// execution cleanup.
+    ///
+    /// This reports only cleanup that failed, not executions still in
+    /// progress. Providers with no remote cleanup state return `false`.
+    fn has_pending_observed_cleanup(&self) -> bool {
+        false
+    }
+
+    /// Retry cleanup of remote observed executions whose previous cleanup
+    /// attempt could not be confirmed.
+    ///
+    /// Active executions are not waited on or otherwise affected. Providers
+    /// that do not retain remote cleanup handles return success.
+    async fn retry_observed_cleanup(&self) -> Result<()> {
+        Ok(())
+    }
+
     /// Open a workspace-relative file for bounded reading.
     ///
     /// Hosts that cannot provide safe path-confined file access return
