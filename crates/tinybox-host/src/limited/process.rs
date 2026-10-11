@@ -325,7 +325,11 @@ async fn terminate_native(child: &mut NativeChild, group: i32) -> Result<()> {
             unistd::Pid,
         };
         if child.id().is_some() || group_alive(group)? {
-            kill_group_with(group, |group| killpg(Pid::from_raw(group), Signal::SIGKILL))?;
+            kill_group_checked(
+                group,
+                |group| killpg(Pid::from_raw(group), Signal::SIGKILL),
+                group_alive,
+            )?;
         }
         child
             .kill()
@@ -424,16 +428,23 @@ fn stat_has_live_group(stat: &str, group: i32) -> bool {
 
 #[cfg(all(unix, not(target_os = "linux")))]
 pub(super) fn group_alive(group: i32) -> Result<bool> {
-    use nix::{errno::Errno, sys::signal::killpg, unistd::Pid};
-    match killpg(Pid::from_raw(group), None) {
-        Ok(()) => Ok(true),
-        Err(Errno::ESRCH) => Ok(false),
-        Err(error) => Err(Error::Backend {
+    // Darwin can report EPERM for an empty group and retains zombies in
+    // signal probes. Inspect executable members instead of probing a signal.
+    let output = std::process::Command::new("ps")
+        .args(["-axo", "pgid=,stat="])
+        .output()
+        .map_err(|error| Error::io("read process table", &error))?;
+    if !output.status.success() {
+        return Err(Error::Backend {
             sandbox: crate::LOCAL.into(),
             operation: "observe process group",
-            message: error.to_string(),
-        }),
+            message: "process table command failed".into(),
+        });
     }
+    Ok(ps_has_live_group(
+        &String::from_utf8_lossy(&output.stdout),
+        group,
+    ))
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -449,14 +460,21 @@ mod tests;
 fn kill_group_checked(
     group: i32,
     kill: impl FnOnce(i32) -> std::result::Result<(), nix::errno::Errno>,
-    _alive: impl FnOnce(i32) -> Result<bool>,
+    alive: impl FnOnce(i32) -> Result<bool>,
 ) -> Result<()> {
-    kill_group_with(group, kill)
+    match kill(group) {
+        Err(nix::errno::Errno::EPERM) if !alive(group)? => Ok(()),
+        result => kill_group_with(group, |_| result),
+    }
 }
 
 #[cfg(all(unix, any(test, not(target_os = "linux"))))]
 fn ps_has_live_group(table: &str, group: i32) -> bool {
     table.lines().any(|line| {
-        line.split_whitespace().next().and_then(|value| value.parse::<i32>().ok()) == Some(group)
+        let mut fields = line.split_whitespace();
+        fields.next().and_then(|value| value.parse::<i32>().ok()) == Some(group)
+            && fields
+                .next()
+                .is_some_and(|state| !state.starts_with(['Z', 'X']))
     })
 }
