@@ -131,7 +131,7 @@ and returns an error; retry Shutdown before unloading. Command errors can be
 returned after complete resource release; repeating Shutdown then succeeds. The terminal instance
 never restarts. Host ordering is stop submissions, await Shutdown, then unload
 the ABI/module runtime. The SDK shutdown timeout alone is not this barrier.
-Live local execution uses `StartExec(SpawnRequest)` with a Process reservation,
+Live passthrough execution uses `StartExec(SpawnRequest)` with a Process reservation,
 `ReadOutput(ProcessRef, sequence)` for replayable binary stdout/stderr batches,
 and `ReleaseOutput(ProcessRef)` after completion. Each execution owns its native
 collector, so cancellation joins its own cleanup without waiting for another
@@ -141,11 +141,11 @@ Nonzero exits remain results. Cancellation is acknowledged only after kill/reap;
 failed cleanup retains native ownership for Cancel, Close or Shutdown retry.
 Release refuses running or unacknowledged cleanup. Resource Close retires its
 journals after stream cleanup is acknowledged. Streaming is currently available
-for local passthrough resources; other providers explicitly refuse it.
+for local and SSH passthrough resources; sandbox providers explicitly refuse it.
 
 Workspace file transfer uses the bounded Begin/Read/Write/Finish/Abort operations
-above. MicroVM configuration and streaming for other providers remain subsequent
-slices.
+above. MicroVM configuration and streaming for sandbox providers remain
+subsequent slices.
 
 Operations serialize within each resource; unrelated resources have independent
 locks. Spawn uses an owned local process group on Unix and a Job Object on
