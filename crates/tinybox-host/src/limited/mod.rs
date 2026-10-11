@@ -120,6 +120,10 @@ impl LimitedLocalHost {
     /// A failed kill/reap retains its native child for a later public cleanup retry.
     pub async fn drain_checked(&self) -> Result<()> {
         self.drain().await;
+        self.retry_retained_cleanup().await
+    }
+
+    async fn retry_retained_cleanup(&self) -> Result<()> {
         let _guard = self.state.cleanup_lock.lock().await;
         let groups: Vec<_> = self
             .state
@@ -260,7 +264,7 @@ impl Host for LimitedLocalHost {
     }
 
     async fn retry_observed_cleanup(&self) -> Result<()> {
-        self.drain_checked().await
+        self.retry_retained_cleanup().await
     }
 
     async fn forward(&self, remote: std::net::SocketAddr) -> Result<Forward> {
