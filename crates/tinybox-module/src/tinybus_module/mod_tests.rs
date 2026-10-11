@@ -876,3 +876,86 @@ async fn bounded_live_output_roundtrips_through_the_bus_codec() -> tinybus::Resu
     proxy.call::<()>("Close", (resource,)).await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn local_grant_discovery_refuses_home_ancestors_of_credentials()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    std::fs::create_dir(home.path().join(".ssh"))?;
+    std::fs::create_dir(home.path().join("data"))?;
+    let service = BoxService::default();
+    let result = service
+        .resolve_local_grants(tinybox_bus::ResolveLocalGrantsRequest {
+            home: Some(home.path().to_str().ok_or("home is not UTF-8")?.into()),
+            config: tinybox_bus::LocalGrantConfig {
+                toolchain_homes: false,
+                extra_read_only: vec!["~".into(), "~/.ssh".into(), "~/data".into()],
+                ..tinybox_bus::LocalGrantConfig::default()
+            },
+            protected: tinybox_bus::ProtectedPaths {
+                components: vec![".ssh".into()],
+                credential_roots: vec![
+                    home.path()
+                        .join(".ssh")
+                        .to_str()
+                        .ok_or("credential root is not UTF-8")?
+                        .into(),
+                ],
+                ..tinybox_bus::ProtectedPaths::default()
+            },
+        })
+        .await?;
+    assert_eq!(
+        result.read_only,
+        vec![
+            home.path()
+                .join("data")
+                .canonicalize()?
+                .to_str()
+                .ok_or("grant is not UTF-8")?
+        ]
+    );
+    assert!(result.read_write.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_grant_discovery_rejects_excessive_requested_grants() {
+    let result = BoxService::default()
+        .resolve_local_grants(tinybox_bus::ResolveLocalGrantsRequest {
+            home: None,
+            config: tinybox_bus::LocalGrantConfig {
+                extra_read_only: vec!["/missing".into(); tinybox_bus::MAX_NATIVE_JAIL_GRANTS + 1],
+                ..tinybox_bus::LocalGrantConfig::default()
+            },
+            protected: tinybox_bus::ProtectedPaths::default(),
+        })
+        .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn local_grant_discovery_rejects_non_utf8_canonical_targets()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::ffi::OsStringExt;
+    let home = tempfile::tempdir()?;
+    let target = home
+        .path()
+        .join(std::ffi::OsString::from_vec(vec![b'd', 0xff]));
+    std::fs::create_dir(&target)?;
+    std::os::unix::fs::symlink(&target, home.path().join("data"))?;
+    let result = BoxService::default()
+        .resolve_local_grants(tinybox_bus::ResolveLocalGrantsRequest {
+            home: Some(home.path().to_str().ok_or("home is not UTF-8")?.into()),
+            config: tinybox_bus::LocalGrantConfig {
+                toolchain_homes: false,
+                extra_read_only: vec!["~/data".into()],
+                ..tinybox_bus::LocalGrantConfig::default()
+            },
+            protected: tinybox_bus::ProtectedPaths::default(),
+        })
+        .await;
+    assert!(result.is_err());
+    Ok(())
+}

@@ -58,6 +58,57 @@ impl BoxService {
     ) -> TinyBusResult<tinybox_bus::CommandAnalysis> {
         std::future::ready(Ok(tinybox_core::shell::analysis::analyze_command(&command))).await
     }
+    /// Discover canonical grants using the caller's protected-path floor.
+    async fn resolve_local_grants(
+        &self,
+        request: tinybox_bus::ResolveLocalGrantsRequest,
+    ) -> TinyBusResult<tinybox_bus::LocalGrants> {
+        if request.config.extra_read_only.len() + request.config.extra_read_write.len()
+            > tinybox_bus::MAX_NATIVE_JAIL_GRANTS
+        {
+            return Err(resources::failure(
+                tinybox_bus::RESOURCE_LIMIT,
+                "too many local grant paths",
+            ));
+        }
+        let grants = tokio::task::spawn_blocking(move || {
+            tinybox_jail::grants::resolve_local_jail_grants(
+                request.home.as_deref().map(std::path::Path::new),
+                &request.config,
+                &request.protected,
+            )
+        })
+        .await
+        .map_err(|_| {
+            resources::failure(tinybox_bus::UNSUPPORTED_OPERATION, "grant discovery failed")
+        })?;
+        Ok(tinybox_bus::LocalGrants {
+            read_only: grants
+                .read_only
+                .into_iter()
+                .map(|path| {
+                    path.into_os_string().into_string().map_err(|_| {
+                        resources::failure(
+                            tinybox_bus::INVALID_FILE_PATH,
+                            "grant path is not UTF-8",
+                        )
+                    })
+                })
+                .collect::<TinyBusResult<Vec<_>>>()?,
+            read_write: grants
+                .read_write
+                .into_iter()
+                .map(|path| {
+                    path.into_os_string().into_string().map_err(|_| {
+                        resources::failure(
+                            tinybox_bus::INVALID_FILE_PATH,
+                            "grant path is not UTF-8",
+                        )
+                    })
+                })
+                .collect::<TinyBusResult<Vec<_>>>()?,
+        })
+    }
     /// Report native jail enforcement facts without starting a workload.
     async fn jail_status(&self) -> TinyBusResult<tinybox_bus::JailStatus> {
         let backend = tinybox_jail::default_backend();

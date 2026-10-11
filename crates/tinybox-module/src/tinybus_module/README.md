@@ -42,7 +42,7 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | FinishFileWrite | FinishFileWriteRequest | FileWriteProgress |
 | AbortFileWrite | AbortFileWriteRequest | unit |
 
-Capabilities advertises contract version 1.8; 1.0 denotes the original
+Capabilities advertises contract version 1.9; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -259,3 +259,14 @@ alongside the SSH fixture in the command above. It executes the generated
 supervisor shell and verifies stream behavior and scoped cancellation without
 a Docker daemon; it does not establish container isolation. Provider live tests
 cover actual Docker when a local daemon is available.
+
+### Local grant discovery
+
+Contract 1.9 adds `ResolveLocalGrants`. The caller supplies its operator home,
+`LocalGrantConfig`, and `ProtectedPaths` floor. TinyBox resolves existing paths,
+canonicalizes symlinks, discovers toolchain homes and Git include chains, and
+returns read-only and writable grants. Discovery does not start a process or
+make an approval decision. Credential roots exclude both descendants and
+ancestors; a grant on the operator home cannot expose `.ssh`. `/proc` is granted
+only by the explicit `allow_proc` flag. Hosts must supply their complete floor
+and apply authorization before using the returned grants in `StartJailedExec`.
