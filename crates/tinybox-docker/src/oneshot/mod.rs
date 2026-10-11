@@ -53,10 +53,12 @@ pub struct OneShot {
     cpus: f64,
     read_only_rootfs: bool,
     workspace: PathBuf,
+    mount_workspace: bool,
     read_only_mounts: Vec<PathBuf>,
     env: Vec<(OsString, OsString)>,
     label: Option<String>,
     command: String,
+    login_shell: bool,
 }
 
 impl OneShot {
@@ -72,11 +74,27 @@ impl OneShot {
             cpus: DEFAULT_ONE_SHOT_CPUS,
             read_only_rootfs: true,
             workspace: workspace.into(),
+            mount_workspace: true,
             read_only_mounts: Vec::new(),
             env: Vec::new(),
             label: None,
             command: command.into(),
+            login_shell: false,
         }
+    }
+
+    /// Run without mounting a host workspace or changing the container working directory.
+    #[must_use]
+    pub fn without_workspace(mut self) -> Self {
+        self.mount_workspace = false;
+        self
+    }
+
+    /// Execute through a login POSIX shell (`sh -lc`).
+    #[must_use]
+    pub fn with_login_shell(mut self) -> Self {
+        self.login_shell = true;
+        self
     }
 
     /// The image to run in.
@@ -185,11 +203,13 @@ impl OneShot {
         push("--security-opt");
         push("no-new-privileges");
 
-        let workspace = resolve(&self.workspace);
-        push("-v");
-        push(&format!("{}:{ONE_SHOT_WORKSPACE}", workspace.display()));
-        push("-w");
-        push(ONE_SHOT_WORKSPACE);
+        if self.mount_workspace {
+            let workspace = resolve(&self.workspace);
+            push("-v");
+            push(&format!("{}:{ONE_SHOT_WORKSPACE}", workspace.display()));
+            push("-w");
+            push(ONE_SHOT_WORKSPACE);
+        }
 
         for ro in &self.read_only_mounts {
             let ro = resolve(ro);
@@ -208,7 +228,7 @@ impl OneShot {
         let mut push = |s: &str| argv.push(OsString::from(s));
         push(&self.image);
         push("sh");
-        push("-c");
+        push(if self.login_shell { "-lc" } else { "-c" });
         push(&self.command);
         argv
     }

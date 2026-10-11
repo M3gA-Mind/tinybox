@@ -12,7 +12,15 @@ use tinybus::{Error, Result};
 
 /// Run a bounded Docker command using the local Docker CLI.
 pub(super) async fn run(request: DockerRunRequest) -> Result<DockerRunOutput> {
-    run_with_cli(&DockerCli::new(), request).await
+    run_with_cli(&DockerCli::new(), request, true).await
+}
+
+/// Run a bounded Docker command without mounting a host workspace.
+pub(super) async fn run_without_workspace(
+    cli: &DockerCli,
+    request: DockerRunRequest,
+) -> Result<DockerRunOutput> {
+    run_with_cli(cli, request, false).await
 }
 
 /// Probe the module host's Docker daemon within the caller's deadline.
@@ -89,10 +97,20 @@ fn control_failure(message: &str) -> Error {
     }
 }
 
-async fn run_with_cli(cli: &DockerCli, request: DockerRunRequest) -> Result<DockerRunOutput> {
-    validate(&request)?;
+async fn run_with_cli(
+    cli: &DockerCli,
+    request: DockerRunRequest,
+    mount_workspace: bool,
+) -> Result<DockerRunOutput> {
+    validate(&request, mount_workspace)?;
 
     let mut spec = OneShot::new(&request.workspace, &request.command);
+    if !mount_workspace {
+        spec = spec.without_workspace();
+    }
+    if request.login_shell {
+        spec = spec.with_login_shell();
+    }
     if let Some(image) = &request.image {
         spec = spec.with_image(image);
     }
@@ -133,8 +151,10 @@ async fn run_with_cli(cli: &DockerCli, request: DockerRunRequest) -> Result<Dock
     })
 }
 
-fn validate(request: &DockerRunRequest) -> Result<()> {
-    if request.timeout_ms > tinybox_bus::MAX_DOCKER_RUN_TIMEOUT_MS {
+fn validate(request: &DockerRunRequest, mount_workspace: bool) -> Result<()> {
+    if request.timeout_ms > tinybox_bus::MAX_DOCKER_RUN_TIMEOUT_MS
+        || (!mount_workspace && !request.workspace.is_empty())
+    {
         return Err(failure("Docker run request is invalid"));
     }
     Ok(())

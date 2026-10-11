@@ -20,6 +20,7 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | Reserve | ReserveRequest | ResourceId |
 | Create | CreateRequest | ResourceInfo |
 | RunDocker | DockerRunRequest | DockerRunOutput |
+| RunDockerWithoutWorkspace | DockerRunRequest with an empty `workspace` | DockerRunOutput |
 | DockerStatus | DockerStatusRequest | DockerStatus |
 | CleanupDocker | CleanupDockerRequest | CleanupDockerOutput |
 | Forward | ForwardRequest | ForwardInfo |
@@ -44,7 +45,7 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | FinishFileWrite | FinishFileWriteRequest | FileWriteProgress |
 | AbortFileWrite | AbortFileWriteRequest | unit |
 
-Capabilities advertises contract version 1.9; 1.0 denotes the original
+Capabilities advertises contract version 1.10; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -87,6 +88,15 @@ requested deadline. Cleanup lists and stops containers matching the requested
 `key=value` label and reports the number of IDs submitted to Docker. Invalid
 labels and deadlines are refused; daemon or cleanup failures return a stable
 module error rather than claiming successful cleanup.
+
+Version 1.10 adds `RunDockerWithoutWorkspace` for Docker runtimes that do not
+mount a host workspace. It accepts the same bounded Docker settings as
+`RunDocker`, requires an empty `workspace`, and omits both the workspace bind
+mount and working-directory override. `login_shell` defaults to false for
+existing callers; when true, the command runs through `sh -lc` rather than
+`sh -c`, preserving login-shell runtime behavior. All other image, network,
+resource, rootfs, read-only mount, capability-drop, environment, label, output,
+and timeout behavior remains shared with `RunDocker`.
 
 Create requires an explicit backend and rejects one unavailable on the current
 platform before it creates a resource slot. `passthrough` is record-only on
