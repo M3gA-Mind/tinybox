@@ -410,10 +410,6 @@ fn the_store_lock_is_exclusive_and_released_when_its_guard_drops() -> Result<()>
     std::fs::write(&lock_path, b"existing lockfile")
         .map_err(|error| Error::io("seed lockfile", &error))?;
     let guard = store.lock()?;
-    assert_eq!(
-        std::fs::read(&lock_path).map_err(|error| Error::io("read lockfile", &error))?,
-        b"existing lockfile"
-    );
     let second = std::fs::File::options()
         .read(true)
         .write(true)
@@ -426,5 +422,12 @@ fn the_store_lock_is_exclusive_and_released_when_its_guard_drops() -> Result<()>
     drop(guard);
     fs2::FileExt::try_lock_exclusive(&second)
         .map_err(|error| Error::io("acquire released lock", &error))?;
+    // Windows locks prohibit reads through another handle, so verify that
+    // opening the lockfile preserved its contents after releasing both locks.
+    drop(second);
+    assert_eq!(
+        std::fs::read(&lock_path).map_err(|error| Error::io("read lockfile", &error))?,
+        b"existing lockfile"
+    );
     Ok(())
 }
