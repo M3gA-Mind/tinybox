@@ -23,7 +23,7 @@ pub enum ShellFlavor {
     Posix,
 }
 
-/// Selected invocation, returned for discovery and consumed inside TinyBox.
+/// Selected invocation, returned for discovery and consumed inside `TinyBox`.
 /// Hosts execute commands through the module rather than spawning this plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShellInvocation {
