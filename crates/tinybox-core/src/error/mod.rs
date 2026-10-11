@@ -46,6 +46,14 @@ pub enum Error {
         provider: String,
     },
 
+    /// A provider could not confirm cleanup of an observed execution and
+    /// retains the cleanup handle for a later retry.
+    #[error("provider {provider} has observed execution cleanup pending")]
+    ObservedCleanupPending {
+        /// Provider retaining the cleanup handle.
+        provider: String,
+    },
+
     /// A host cannot safely access files in the workspace mounted for a box.
     #[error("host {host} does not support workspace file transfer")]
     UnsupportedHostFileTransfer {

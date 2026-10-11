@@ -19,7 +19,7 @@ async-trait.workspace = true
 # every other operation here it cannot be handed to the inner host. `net` and
 # `time` are what waiting for the tunnel's local listener needs without
 # blocking a runtime worker for the whole timeout.
-tokio = { workspace = true, features = ["net", "time"] }
+tokio = { workspace = true, features = ["net", "sync", "time"] }
 
 [dev-dependencies]
 # `sync` for the OnceCell that shares one test server across the suite.
