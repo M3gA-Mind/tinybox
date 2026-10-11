@@ -928,3 +928,27 @@ fn subtree_inspection_does_not_follow_cycles_but_rejects_protected_symlink_names
     assert!(!builder.subtree_is_clear(root.path(), root.path(), 2, 1)?);
     Ok(())
 }
+
+#[test]
+#[cfg(unix)]
+fn subtree_pair_protection_cannot_be_bypassed_by_a_directory_symlink()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    fs::create_dir(root.path().join("neutral"))?;
+    fs::write(root.path().join("neutral/config.json"), "secret")?;
+    std::os::unix::fs::symlink(root.path().join("neutral"), root.path().join(".docker"))?;
+    let protected = ProtectedPaths {
+        component_pairs: vec![[".docker".into(), "config.json".into()]],
+        ..ProtectedPaths::default()
+    };
+    let config = LocalGrantConfig {
+        toolchain_homes: false,
+        extra_read_only: vec![root.path().to_str().ok_or("non-UTF8 fixture")?.into()],
+        ..LocalGrantConfig::default()
+    };
+    assert_eq!(
+        resolve_local_jail_grants(None, &config, &protected),
+        JailGrants::default()
+    );
+    Ok(())
+}
