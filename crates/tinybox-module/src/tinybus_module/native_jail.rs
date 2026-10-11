@@ -39,8 +39,18 @@ pub(super) fn prepare(
     jail.allow_subprocess = config.allow_subprocess;
     jail.read_only = grants(&config.read_only)?;
     jail.read_write = grants(&config.read_write)?;
-    if config.enforcement == JailEnforcement::Enforced {
-        backend.require(&jail).map_err(|_| unavailable())?;
+    match config.enforcement {
+        JailEnforcement::Enforced => backend.require(&jail).map_err(|_| unavailable())?,
+        JailEnforcement::Declared => {
+            if backend
+                .plan_check(&jail)
+                .constraints
+                .iter()
+                .any(|(_, support)| *support == tinybox_core::Enforcement::Unsupported)
+            {
+                return Err(unavailable());
+            }
+        }
     }
     Ok(jail)
 }
