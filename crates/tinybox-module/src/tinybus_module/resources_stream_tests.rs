@@ -1055,13 +1055,17 @@ async fn close_during_shell_preparation_fences_admission_without_waiting_for_fil
     let release = Arc::new(tokio::sync::Notify::new());
     let started = entered.clone();
     let resume = release.clone();
+    let prepared = Arc::new(std::sync::Mutex::new(None));
+    let observed = prepared.clone();
     let owner = resources.clone();
     let pending = tokio::spawn(async move {
         owner
             .start_with_preparation(request, None, Some(shell), None, |preparation| async move {
                 started.notify_one();
                 resume.notified().await;
-                preparation.finish().await
+                let collector = preparation.finish().await?;
+                *observed.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(collector.clone());
+                Ok(collector)
             })
             .await
     });
@@ -1078,6 +1082,12 @@ async fn close_during_shell_preparation_fences_admission_without_waiting_for_fil
         "Close waited for shell filesystem preparation"
     );
     closed??;
+    assert!(prepared.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some());
+    assert_eq!(
+        std::fs::read_dir(state.path().join("artifacts/sandbox-scratch"))?.count(),
+        0,
+        "rejected preparation must explicitly dispose scratch while the context is still retained"
+    );
     assert!(
         result.is_err(),
         "late preparation admitted execution after Close"
