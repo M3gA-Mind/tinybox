@@ -48,7 +48,7 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | SelectShell | SelectShellRequest | ShellInvocation |
 | StartShellExec | SpawnRequest, SelectShellRequest | ProcessRef |
 
-Capabilities advertises contract version 1.11; 1.0 denotes the original
+Capabilities advertises contract version 1.13; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -325,7 +325,7 @@ unset; unsupported ~user/ and %(prefix)/ expansion rejects complete discovery.
 
 ### Platform shell discovery
 
-Contract 1.10 adds `SelectShell`. The request carries command text and an optional
+Contract 1.12 adds `SelectShell`. The request carries command text and an optional
 pipeline-status preservation flag. Unix selects Bash at a standard path with
 `set -o pipefail` by default, or /bin/sh without that Bash-only flag when Bash is
 absent. Unix uses non-login `-c` to avoid loading login profiles before the
@@ -343,7 +343,7 @@ Unix builders remove BASH_ENV, ENV, SHELLOPTS and BASHOPTS; ShellInvocation
 returns those removal names. Bash uses -p to ignore exported functions.
 Discovery checks standard Bash paths on every call. Providers apply them after approved environment overrides.
 
-Contract 1.11 adds `StartShellExec(SpawnRequest, SelectShellRequest)`. Supply an
+Contract 1.13 adds `StartShellExec(SpawnRequest, SelectShellRequest)`. Supply an
 empty argv in SpawnRequest; its resource, cwd, environment and stdin retain
 their usual meaning. This operation supports local passthrough resources only,
 because selection describes the module machine's shell. It uses the native

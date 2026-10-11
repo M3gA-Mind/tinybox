@@ -5,7 +5,7 @@ This records the discovery and native execution slices and their verification or
 
 1. Add SelectShellRequest, ShellFlavor and ShellInvocation in
    crates/tinybox-bus/src/shell_selection.rs. Re-export from src/lib.rs,
-   append SelectShell to METHODS, advance the additive contract to 1.10,
+   append SelectShell to METHODS, advance the additive contract to 1.12,
    and cover defaults, serialization and method ordering in lib_tests.rs.
 2. Implement platform selection and the native quote-preserving builder in
    crates/tinybox-host/src/local/shell.rs; centralize exports in src/lib.rs.
@@ -30,7 +30,7 @@ Local verification:
 - cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 - cargo build --locked --workspace --all-targets --all-features
 
-6. Contract 1.11 appends StartShellExec(SpawnRequest, SelectShellRequest).
+6. Contract 1.13 appends StartShellExec(SpawnRequest, SelectShellRequest).
    Reuse the live supervisor with a native-shell collector, keep shell text in
    the idempotency identity, resolve resource cwd/environment, and reject
    non-local or non-passthrough resources. Empty argv distinguishes shell

@@ -12,7 +12,7 @@ uses the module-owned output and cleanup supervisor.
 
 ## Contract
 
-Contract 1.10 appends SelectShell(SelectShellRequest) -> ShellInvocation.
+Contract 1.12 appends SelectShell(SelectShellRequest) -> ShellInvocation.
 The request carries command text and preserve_pipeline_status, default false.
 The result carries flavor, program, ordinary arguments, optional Windows raw
 arguments, and bootstrap environment variable names.
@@ -43,7 +43,7 @@ approved environment, working directory, pipes and lifecycle.
   with a quoted argument.
 - The actual compiled dynamic module passes production manifest admission and
   executes SelectShell, including when the surrounding test build is static.
-- Hosts execute behavior through the compiled module. Contract 1.11 appends
+- Hosts execute behavior through the compiled module. Contract 1.13 appends
   StartShellExec(SpawnRequest, SelectShellRequest) -> ProcessRef. The spawn
   command supplies the resource, cwd, environment and stdin with empty argv.
 - StartShellExec supports local passthrough resources only and rejects other
