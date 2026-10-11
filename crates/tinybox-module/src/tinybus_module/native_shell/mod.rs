@@ -172,25 +172,31 @@ impl ShellContext {
         &self,
         remove: impl FnOnce(&Path) -> std::io::Result<()> + Send + 'static,
     ) -> tinybox_core::Result<()> {
-        let mut scratch = self
-            .scratch
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(directory) = scratch.as_ref() {
-            // Keep the TempDir and its path until deletion succeeds; close() consumes
-            // ownership even on failure and would make cleanup impossible to retry.
-            if let Err(error) = remove(directory.path())
-                && error.kind() != std::io::ErrorKind::NotFound
-            {
-                self.scratch_cleanup_failed
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-                return Err(tinybox_core::Error::io("remove shell scratch", &error));
+        let scratch = self.scratch.clone();
+        let failed = self.scratch_cleanup_failed.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut scratch = self
+                .scratch
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(directory) = scratch.as_ref() {
+                // Keep the TempDir and its path until deletion succeeds; close() consumes
+                // ownership even on failure and would make cleanup impossible to retry.
+                if let Err(error) = remove(directory.path())
+                    && error.kind() != std::io::ErrorKind::NotFound
+                {
+                    failed.store(true, std::sync::atomic::Ordering::SeqCst);
+                    return Err(tinybox_core::Error::io("remove shell scratch", &error));
+                }
+                scratch.take();
             }
-            scratch.take();
-        }
-        self.scratch_cleanup_failed
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-        Ok(())
+            failed.store(false, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
+        .await
+        .map_err(|error| {
+            tinybox_core::Error::io("join shell scratch cleanup", &std::io::Error::other(error))
+        })?
     }
 }
 fn invalid() -> tinybus::Error {
