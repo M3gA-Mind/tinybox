@@ -756,3 +756,34 @@ fn credential_floor_preserves_alias_locations_under_aliased_parent_directories()
     }
     Ok(())
 }
+
+#[test]
+fn writable_extras_cannot_replace_cargo_executables_or_launch_configuration()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir_all(home.path().join(".cargo/bin"))?;
+    for file in ["config.toml", "config", "env"] {
+        fs::write(home.path().join(".cargo").join(file), "fixture")?;
+    }
+    let config = LocalGrantConfig {
+        extra_read_write: ["bin", "config.toml", "config", "env"].into_iter().map(|entry| format!("~/.cargo/{entry}")).collect(),
+        ..LocalGrantConfig::default()
+    };
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default());
+    assert_eq!(grants.read_write, Vec::<PathBuf>::new());
+    Ok(())
+}
+
+#[test]
+fn automatic_toolchain_roots_cannot_be_promoted_through_writable_descendants()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    for root in [".rustup", ".nvm", ".npm"] { fs::create_dir_all(home.path().join(root).join("nested"))?; }
+    let config = LocalGrantConfig {
+        extra_read_write: [".rustup", ".nvm", ".npm"].into_iter().map(|root| format!("~/{root}/nested")).collect(),
+        ..LocalGrantConfig::default()
+    };
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default());
+    assert_eq!(grants.read_write, Vec::<PathBuf>::new());
+    Ok(())
+}
