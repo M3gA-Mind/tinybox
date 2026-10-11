@@ -20,6 +20,10 @@ const GITCONFIG_FILES: &[&str] = &[".gitconfig", ".config/git/config"];
 /// Deepest `include` chain followed when collecting git config files.
 const GITCONFIG_MAX_DEPTH: usize = 8;
 
+/// Bound admission work even for attacker-controlled directory trees.
+const SUBTREE_MAX_ENTRIES: usize = 1_000_000;
+const SUBTREE_MAX_DEPTH: usize = 128;
+
 /// Paths the jail is granted beyond the workspace root, all canonical and
 /// existing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -132,7 +136,82 @@ impl<'a> Builder<'a> {
             );
             return None;
         }
-        Some(canonical)
+        match self.subtree_is_clear(path, &canonical, SUBTREE_MAX_ENTRIES, SUBTREE_MAX_DEPTH) {
+            Ok(true) => Some(canonical),
+            Ok(false) => {
+                log::warn!(
+                    "refused {source} grant containing protected entries: {}",
+                    path.display()
+                );
+                None
+            }
+            Err(error) => {
+                log::warn!(
+                    "refused uninspectable {source} grant {}: {error}",
+                    path.display()
+                );
+                None
+            }
+        }
+    }
+
+    /// Inspect recursive grants at discovery time. Never follow nested
+    /// symlinks: recursive kernel rules cover this directory tree, not targets
+    /// outside it. Check symlink names themselves before inspecting their type.
+    /// Carry the requested spelling too, so an aliased `.cargo` still protects
+    /// its `credentials.toml` child. Errors and traversal limits fail closed.
+    fn subtree_is_clear(
+        &self,
+        requested: &Path,
+        canonical: &Path,
+        max_entries: usize,
+        max_depth: usize,
+    ) -> std::io::Result<bool> {
+        if self.protected.components.is_empty() && self.protected.component_pairs.is_empty() {
+            return Ok(true);
+        }
+        if !std::fs::metadata(canonical)?.is_dir() {
+            return Ok(true);
+        }
+        let mut stack = vec![(
+            std::fs::read_dir(canonical)?,
+            canonical.to_path_buf(),
+            requested.to_path_buf(),
+        )];
+        let mut visited = 0;
+        while let Some((entries, physical, logical)) = stack.last_mut() {
+            let Some(entry) = entries.next() else {
+                stack.pop();
+                continue;
+            };
+            let entry = entry?;
+            if visited == max_entries {
+                return Err(std::io::Error::other(
+                    "protected-path inspection entry limit exceeded",
+                ));
+            }
+            visited += 1;
+            let physical_child = physical.join(entry.file_name());
+            let logical_child = logical.join(entry.file_name());
+            if self.has_protected_components(&physical_child)
+                || self.has_protected_components(&logical_child)
+            {
+                return Ok(false);
+            }
+            if entry.file_type()?.is_dir() {
+                if stack.len() >= max_depth {
+                    return Err(std::io::Error::other(
+                        "protected-path inspection depth limit exceeded",
+                    ));
+                }
+                stack.push((
+                    std::fs::read_dir(&physical_child)?,
+                    physical_child,
+                    logical_child,
+                ));
+            }
+        }
+        Ok(true)
     }
 
     fn refuses_path(&self, path: &Path) -> bool {
@@ -154,7 +233,7 @@ impl<'a> Builder<'a> {
         })
     }
 
-    fn is_protected(&self, path: &Path) -> bool {
+    fn has_protected_components(&self, path: &Path) -> bool {
         let normalized = normalized_floor_path(&path.to_string_lossy());
         let components: Vec<_> = normalized
             .split('/')
@@ -170,11 +249,18 @@ impl<'a> Builder<'a> {
                 pair[0].eq_ignore_ascii_case(&blocked[0])
                     && pair[1].eq_ignore_ascii_case(&blocked[1])
             })
-        }) || self.protected.prefixes.iter().any(|prefix| {
-            root_spellings(Path::new(prefix)).any(|prefix| {
-                same_or_descendant(&normalized, &prefix) || same_or_descendant(&prefix, &normalized)
-            })
         })
+    }
+
+    fn is_protected(&self, path: &Path) -> bool {
+        let normalized = normalized_floor_path(&path.to_string_lossy());
+        self.has_protected_components(path)
+            || self.protected.prefixes.iter().any(|prefix| {
+                root_spellings(Path::new(prefix)).any(|prefix| {
+                    same_or_descendant(&normalized, &prefix)
+                        || same_or_descendant(&prefix, &normalized)
+                })
+            })
     }
 
     fn read_only(&mut self, path: &Path, source: &str) {
