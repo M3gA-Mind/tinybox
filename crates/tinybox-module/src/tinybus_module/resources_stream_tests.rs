@@ -303,6 +303,7 @@ struct RemoteObservedFixture {
     pending: std::sync::atomic::AtomicBool,
     reject_retry: std::sync::atomic::AtomicBool,
     collected_calls: std::sync::atomic::AtomicUsize,
+    wait_for_timeout: bool,
 }
 #[async_trait::async_trait]
 impl tinybox_core::Host for RemoteObservedFixture {
@@ -327,6 +328,9 @@ impl tinybox_core::Host for RemoteObservedFixture {
         observer.output(tinybox_core::OutputStream::Stdout, &[255, 0])?;
         self.pending
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        if self.wait_for_timeout {
+            std::future::pending::<()>().await;
+        }
         Err(tinybox_core::Error::ObservedCleanupPending {
             provider: "fixture".into(),
         })
@@ -352,6 +356,7 @@ async fn remote_cleanup_failure_keeps_binary_output_and_owner_until_retry_ack() 
         pending: std::sync::atomic::AtomicBool::new(false),
         reject_retry: std::sync::atomic::AtomicBool::new(true),
         collected_calls: std::sync::atomic::AtomicUsize::new(0),
+        wait_for_timeout: false,
     });
     let resource = ResourceId("fixture-resource".into());
     let command = tinybox_core::ExecRequest::new(["fixture"]);
@@ -477,6 +482,9 @@ impl tinybox_core::Host for DockerFaultHost {
         observer.output(tinybox_core::OutputStream::Stdout, b"owned")?;
         self.pending
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        if self.wait_for_timeout {
+            std::future::pending::<()>().await;
+        }
         Err(tinybox_core::Error::ObservedCleanupPending {
             provider: "fixture".into(),
         })
@@ -971,6 +979,59 @@ async fn shell_execution_rejects_remote_selection_without_consuming_admission() 
     completed(&resources, &process).await?;
     resources.cancel(&process).await?;
     resources.release_output(&process).await?;
+    resources.close(&resource).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn timeout_status_survives_failed_cleanup_until_retry_acknowledges_it()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    let mut shell = shell_request(&resources, &resource, state.path(), "unused").await?;
+    shell.timeout_ms = 1;
+    let host = Arc::new(RemoteObservedFixture {
+        pending: std::sync::atomic::AtomicBool::new(false),
+        reject_retry: std::sync::atomic::AtomicBool::new(true),
+        collected_calls: std::sync::atomic::AtomicUsize::new(0),
+        wait_for_timeout: true,
+    });
+    let stream = StreamExecution::start(
+        request(&resources, &resource, true_command()).await?,
+        tinybox_core::ExecRequest::new(["unused"]),
+        Collector::Host(host.clone(), None),
+        None,
+        Some(shell),
+        None,
+    );
+    {
+        let mut task = stream.task.lock().await;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            task.as_mut().ok_or("missing execution task")?,
+        )
+        .await??;
+        task.take();
+    }
+    assert!(stream.stop().await.is_err());
+    assert_eq!(
+        stream.journal.read(0)?.state,
+        ExecutionState::Failed {
+            code: ExecutionFailure::CleanupFailed,
+        }
+    );
+    assert!(!stream.cleanup_acknowledged());
+    host.reject_retry
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    stream.stop().await?;
+    assert_eq!(
+        stream.journal.read(0)?.state,
+        ExecutionState::Failed {
+            code: ExecutionFailure::TimedOut,
+        }
+    );
+    assert!(stream.cleanup_acknowledged());
     resources.close(&resource).await?;
     Ok(())
 }
