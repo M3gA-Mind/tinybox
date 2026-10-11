@@ -45,8 +45,9 @@ fn docker_run_vocabulary_is_typed_bounded_and_additive() -> Result<(), serde_jso
         label: Some("openhuman.sandbox=true".into()),
         timeout_ms: 120_000,
     };
-    assert_eq!(METHODS.last(), Some(&"RunDocker"));
-    assert_eq!(CONTRACT_VERSION, (1, 8));
+    assert!(METHODS.contains(&"RunDocker"));
+    assert_eq!(METHODS.last(), Some(&"CleanupDocker"));
+    assert_eq!(CONTRACT_VERSION, (1, 9));
     assert_eq!(MAX_DOCKER_RUN_TIMEOUT_MS, 86_400_000);
     let serialized = serde_json::to_value(&request)?;
     assert_eq!(serialized["read_only_rootfs"], false);
@@ -122,8 +123,9 @@ fn host_gateway_and_docker_facts_are_additive_and_default_safely() -> Result<(),
 #[test]
 fn version_and_capability_wire_snapshot_preserve_contract_compatibility()
 -> Result<(), serde_json::Error> {
-    assert_eq!(CONTRACT_VERSION, (1, 8));
+    assert_eq!(CONTRACT_VERSION, (1, 9));
     assert!(is_compatible(CONTRACT_VERSION));
+    assert!(!is_compatible((1, 8)));
     assert!(!is_compatible((1, 7)));
     assert!(!is_compatible((1, 6)));
     assert!(!is_compatible((1, 5)));
@@ -139,7 +141,7 @@ fn version_and_capability_wire_snapshot_preserve_contract_compatibility()
         exec_backends: Vec::new(),
         spawn_backends: Vec::new(),
     };
-    let snapshot = serde_json::json!({"contract_version":[1,8],"create_backends":["passthrough"],"exec_backends":[],"spawn_backends":[]});
+    let snapshot = serde_json::json!({"contract_version":[1,9],"create_backends":["passthrough"],"exec_backends":[],"spawn_backends":[]});
     assert_eq!(serde_json::to_value(&capabilities)?, snapshot);
     assert_eq!(
         serde_json::from_value::<ModuleCapabilities>(snapshot)?,

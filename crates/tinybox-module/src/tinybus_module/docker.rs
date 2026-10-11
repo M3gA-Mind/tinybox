@@ -3,13 +3,90 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use tinybox_bus::{DockerRunOutput, DockerRunRequest};
+use tinybox_bus::{
+    CleanupDockerOutput, CleanupDockerRequest, DockerRunOutput, DockerRunRequest, DockerStatus,
+    DockerStatusRequest,
+};
 use tinybox_docker::{DockerCli, OneShot};
 use tinybus::{Error, Result};
 
 /// Run a bounded Docker command using the local Docker CLI.
 pub(super) async fn run(request: DockerRunRequest) -> Result<DockerRunOutput> {
     run_with_cli(&DockerCli::new(), request).await
+}
+
+/// Probe the module host's Docker daemon within the caller's deadline.
+pub(super) async fn status(request: DockerStatusRequest) -> Result<DockerStatus> {
+    status_with_cli(&DockerCli::new(), request).await
+}
+
+async fn status_with_cli(cli: &DockerCli, request: DockerStatusRequest) -> Result<DockerStatus> {
+    validate_control_timeout(request.timeout_ms)?;
+    let available = tokio::time::timeout(
+        Duration::from_millis(request.timeout_ms),
+        cli.is_available(),
+    )
+    .await
+    .map_err(|_| control_failure("Docker status probe exceeded its deadline"))?;
+    Ok(DockerStatus { available })
+}
+
+/// Stop containers matching a validated Docker label within the caller's deadline.
+pub(super) async fn cleanup(request: CleanupDockerRequest) -> Result<CleanupDockerOutput> {
+    cleanup_with_cli(&DockerCli::new(), request).await
+}
+
+async fn cleanup_with_cli(
+    cli: &DockerCli,
+    request: CleanupDockerRequest,
+) -> Result<CleanupDockerOutput> {
+    validate_control_timeout(request.timeout_ms)?;
+    validate_label(&request.label)?;
+    let containers_stopped = tokio::time::timeout(
+        Duration::from_millis(request.timeout_ms),
+        cli.kill_labelled_checked(&request.label),
+    )
+    .await
+    .map_err(|_| control_failure("Docker cleanup exceeded its deadline"))?
+    .map_err(|_| control_failure("Docker cleanup could not be completed"))?;
+    Ok(CleanupDockerOutput { containers_stopped })
+}
+
+fn validate_control_timeout(timeout_ms: u64) -> Result<()> {
+    if timeout_ms == 0 || timeout_ms > tinybox_bus::MAX_DOCKER_CONTROL_TIMEOUT_MS {
+        return Err(invalid_control_request());
+    }
+    Ok(())
+}
+
+fn validate_label(label: &str) -> Result<()> {
+    let Some((key, value)) = label.split_once('=') else {
+        return Err(invalid_control_request());
+    };
+    if key.is_empty()
+        || value.is_empty()
+        || label.len() > 256
+        || label
+            .bytes()
+            .any(|byte| byte == 0 || byte == b'\n' || byte == b'\r')
+    {
+        return Err(invalid_control_request());
+    }
+    Ok(())
+}
+
+fn invalid_control_request() -> Error {
+    Error::MethodFailed {
+        name: tinybox_bus::INVALID_DOCKER_CONTROL.into(),
+        message: "Docker control request is invalid".into(),
+    }
+}
+
+fn control_failure(message: &str) -> Error {
+    Error::MethodFailed {
+        name: tinybox_bus::DOCKER_CONTROL_FAILED.into(),
+        message: message.into(),
+    }
 }
 
 async fn run_with_cli(cli: &DockerCli, request: DockerRunRequest) -> Result<DockerRunOutput> {

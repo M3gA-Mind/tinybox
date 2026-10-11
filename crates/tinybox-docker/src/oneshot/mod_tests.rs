@@ -268,3 +268,35 @@ async fn kill_labelled_lists_then_kills() {
     assert_eq!(cli.kill_labelled("l=1").await.unwrap(), 0);
     assert_eq!(recorded(&out), s(&["ps", "-q", "--filter", "label=l=1"]));
 }
+
+#[tokio::test]
+async fn checked_label_cleanup_rejects_unsuccessful_listing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (cli, out) = fake(
+        tmp.path(),
+        "if [ \"$1\" = ps ]; then echo ignored-id; exit 1; fi",
+    );
+    assert!(cli.kill_labelled_checked("l=1").await.is_err());
+    assert_eq!(recorded(&out), s(&["ps", "-q", "--filter", "label=l=1"]));
+}
+
+#[tokio::test]
+async fn checked_label_cleanup_requires_successful_kill() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (cli, out) = fake(
+        tmp.path(),
+        "if [ \"$1\" = ps ]; then echo container-id; exit 0; fi; exit 1",
+    );
+    assert!(cli.kill_labelled_checked("l=1").await.is_err());
+    assert_eq!(recorded(&out), s(&["kill", "container-id"]));
+}
+
+#[tokio::test]
+async fn legacy_label_cleanup_keeps_its_best_effort_result() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (cli, _) = fake(
+        tmp.path(),
+        "if [ \"$1\" = ps ]; then echo container-id; exit 0; fi; exit 1",
+    );
+    assert_eq!(cli.kill_labelled("l=1").await.unwrap(), 1);
+}

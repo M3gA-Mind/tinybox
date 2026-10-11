@@ -195,6 +195,23 @@ async fn compiled_module_runs_one_shot_docker_through_a_broker()
     let client = Connection::connect(bus.connect().await?).await?;
     wait_until_serving(&client, &modules).await?;
     let proxy = client.proxy(BUS_NAME, OBJECT_PATH, BUS_NAME)?;
+    let status: tinybox_bus::DockerStatus = proxy
+        .call(
+            "DockerStatus",
+            (tinybox_bus::DockerStatusRequest { timeout_ms: 5_000 },),
+        )
+        .await?;
+    assert!(status.available, "the local fixture answers Docker info");
+    let cleanup: tinybox_bus::CleanupDockerOutput = proxy
+        .call(
+            "CleanupDocker",
+            (tinybox_bus::CleanupDockerRequest {
+                label: "openhuman.sandbox=true".into(),
+                timeout_ms: 5_000,
+            },),
+        )
+        .await?;
+    assert_eq!(cleanup.containers_stopped, 1);
     let result: tinybox_bus::DockerRunOutput = proxy
         .call(
             "RunDocker",

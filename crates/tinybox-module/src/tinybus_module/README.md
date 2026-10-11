@@ -20,6 +20,8 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | Reserve | ReserveRequest | ResourceId |
 | Create | CreateRequest | ResourceInfo |
 | RunDocker | DockerRunRequest | DockerRunOutput |
+| DockerStatus | DockerStatusRequest | DockerStatus |
+| CleanupDocker | CleanupDockerRequest | CleanupDockerOutput |
 | Forward | ForwardRequest | ForwardInfo |
 | CloseForward | CloseForwardRequest | unit |
 | Exec | ExecRequest | ExecOutput |
@@ -42,7 +44,7 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | FinishFileWrite | FinishFileWriteRequest | FileWriteProgress |
 | AbortFileWrite | AbortFileWriteRequest | unit |
 
-Capabilities advertises contract version 1.8; 1.0 denotes the original
+Capabilities advertises contract version 1.9; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -78,6 +80,13 @@ mount, capability-drop, environment, label, and timeout settings. Runtime is
 capped at 24 hours. It does not create a long-lived resource or fall back to a
 host command. The caller remains responsible for validating requested network
 and mount policy before sending the request.
+
+Version 1.9 adds bounded `DockerStatus` and `CleanupDocker` operations. The
+status probe reports whether the module host's daemon responds before the
+requested deadline. Cleanup lists and stops containers matching the requested
+`key=value` label and reports the number of IDs submitted to Docker. Invalid
+labels and deadlines are refused; daemon or cleanup failures return a stable
+module error rather than claiming successful cleanup.
 
 Create requires an explicit backend and rejects one unavailable on the current
 platform before it creates a resource slot. `passthrough` is record-only on

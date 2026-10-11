@@ -3,7 +3,9 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use tinybox_bus::{DockerRunRequest, MAX_DOCKER_RUN_TIMEOUT_MS};
+use tinybox_bus::{
+    CleanupDockerRequest, DockerRunRequest, DockerStatusRequest, MAX_DOCKER_RUN_TIMEOUT_MS,
+};
 use tinybox_docker::DockerCli;
 
 use super::*;
@@ -15,6 +17,246 @@ fn canonical(path: &Path) -> std::io::Result<String> {
 fn has_pair(argv: &[String], flag: &str, value: &str) -> bool {
     argv.windows(2)
         .any(|pair| pair[0] == flag && pair[1] == value)
+}
+
+#[tokio::test]
+async fn docker_status_uses_the_module_owned_cli_probe()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let calls = temp.path().join("calls");
+    let script_path = temp.path().join("docker");
+    std::fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n[ \"$1\" = info ] && exit 0\nexit 1\n",
+            calls.display()
+        ),
+    )?;
+    let mut permissions = std::fs::metadata(&script_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script_path, permissions)?;
+
+    let status = status_with_cli(
+        &DockerCli::with_program(&script_path),
+        DockerStatusRequest { timeout_ms: 1_000 },
+    )
+    .await?;
+
+    assert!(status.available);
+    assert_eq!(
+        std::fs::read_to_string(calls)?,
+        "info --format {{.ServerVersion}}\n"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn docker_status_reports_an_unavailable_daemon_without_failing_the_probe()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let script_path = temp.path().join("docker");
+    std::fs::write(&script_path, "#!/bin/sh\nexit 1\n")?;
+    let mut permissions = std::fs::metadata(&script_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script_path, permissions)?;
+
+    let status = status_with_cli(
+        &DockerCli::with_program(&script_path),
+        DockerStatusRequest { timeout_ms: 1_000 },
+    )
+    .await?;
+
+    assert!(!status.available);
+    Ok(())
+}
+
+#[tokio::test]
+async fn docker_cleanup_only_kills_ids_returned_for_the_requested_label()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let calls = temp.path().join("calls");
+    let script_path = temp.path().join("docker");
+    std::fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nif [ \"$1\" = ps ]; then printf 'box-a\\nbox-b\\n'; exit 0; fi\n[ \"$1\" = kill ] && exit 0\nexit 1\n",
+            calls.display()
+        ),
+    )?;
+    let mut permissions = std::fs::metadata(&script_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script_path, permissions)?;
+
+    let result = cleanup_with_cli(
+        &DockerCli::with_program(&script_path),
+        CleanupDockerRequest {
+            label: "openhuman.sandbox=true".into(),
+            timeout_ms: 1_000,
+        },
+    )
+    .await?;
+
+    assert_eq!(result.containers_stopped, 2);
+    assert_eq!(
+        std::fs::read_to_string(calls)?,
+        "ps -q --filter label=openhuman.sandbox=true\nkill box-a box-b\n"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn docker_cleanup_reports_failed_kill_instead_of_claiming_stopped()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let script_path = temp.path().join("docker");
+    std::fs::write(
+        &script_path,
+        "#!/bin/sh\n[ \"$1\" = ps ] && { printf 'box-a\\n'; exit 0; }\n[ \"$1\" = kill ] && exit 1\nexit 2\n",
+    )?;
+    let mut permissions = std::fs::metadata(&script_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script_path, permissions)?;
+
+    let Err(error) = cleanup_with_cli(
+        &DockerCli::with_program(&script_path),
+        CleanupDockerRequest {
+            label: "openhuman.sandbox=true".into(),
+            timeout_ms: 1_000,
+        },
+    )
+    .await
+    else {
+        return Err(
+            std::io::Error::other("failed Docker kill was reported as successful cleanup").into(),
+        );
+    };
+
+    assert_eq!(error.wire_name(), tinybox_bus::DOCKER_CONTROL_FAILED);
+    Ok(())
+}
+
+#[tokio::test]
+async fn docker_cleanup_does_not_kill_ids_from_a_failed_listing()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let calls = temp.path().join("calls");
+    let script_path = temp.path().join("docker");
+    std::fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n[ \"$1\" = ps ] && {{ printf 'box-a\\n'; exit 1; }}\nexit 0\n",
+            calls.display()
+        ),
+    )?;
+    let mut permissions = std::fs::metadata(&script_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script_path, permissions)?;
+
+    let Err(error) = cleanup_with_cli(
+        &DockerCli::with_program(&script_path),
+        CleanupDockerRequest {
+            label: "openhuman.sandbox=true".into(),
+            timeout_ms: 1_000,
+        },
+    )
+    .await
+    else {
+        return Err(
+            std::io::Error::other("failed listing used partial stdout as container ids").into(),
+        );
+    };
+
+    assert_eq!(error.wire_name(), tinybox_bus::DOCKER_CONTROL_FAILED);
+    assert_eq!(
+        std::fs::read_to_string(calls)?,
+        "ps -q --filter label=openhuman.sandbox=true\n"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn docker_cleanup_with_no_matching_containers_does_not_kill()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let calls = temp.path().join("calls");
+    let script_path = temp.path().join("docker");
+    std::fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n[ \"$1\" = ps ] && exit 0\nexit 2\n",
+            calls.display()
+        ),
+    )?;
+    let mut permissions = std::fs::metadata(&script_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script_path, permissions)?;
+
+    let result = cleanup_with_cli(
+        &DockerCli::with_program(&script_path),
+        CleanupDockerRequest {
+            label: "openhuman.sandbox=true".into(),
+            timeout_ms: 1_000,
+        },
+    )
+    .await?;
+
+    assert_eq!(result.containers_stopped, 0);
+    assert_eq!(
+        std::fs::read_to_string(calls)?,
+        "ps -q --filter label=openhuman.sandbox=true\n"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn docker_control_rejects_invalid_deadline_and_label_before_cli_call()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let calls = temp.path().join("calls");
+    let script_path = temp.path().join("docker");
+    std::fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\nprintf called >> '{}'\nexit 0\n",
+            calls.display()
+        ),
+    )?;
+    let mut permissions = std::fs::metadata(&script_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script_path, permissions)?;
+    let cli = DockerCli::with_program(&script_path);
+
+    let Err(error) = status_with_cli(&cli, DockerStatusRequest { timeout_ms: 0 }).await else {
+        return Err(std::io::Error::other("zero deadline was accepted").into());
+    };
+    assert_eq!(error.wire_name(), tinybox_bus::INVALID_DOCKER_CONTROL);
+
+    let Err(error) = status_with_cli(
+        &cli,
+        DockerStatusRequest {
+            timeout_ms: tinybox_bus::MAX_DOCKER_CONTROL_TIMEOUT_MS + 1,
+        },
+    )
+    .await
+    else {
+        return Err(std::io::Error::other("deadline above the module limit was accepted").into());
+    };
+    assert_eq!(error.wire_name(), tinybox_bus::INVALID_DOCKER_CONTROL);
+
+    let Err(error) = cleanup_with_cli(
+        &cli,
+        CleanupDockerRequest {
+            label: "openhuman.sandbox=true\n--privileged".into(),
+            timeout_ms: 1_000,
+        },
+    )
+    .await
+    else {
+        return Err(std::io::Error::other("label control characters were accepted").into());
+    };
+    assert_eq!(error.wire_name(), tinybox_bus::INVALID_DOCKER_CONTROL);
+    assert!(!calls.exists());
+    Ok(())
 }
 
 #[tokio::test]
