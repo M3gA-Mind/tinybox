@@ -20,3 +20,5 @@ code snippets when they remove ambiguity, but do not paste entire future files
 into the plan.
 
 See [`example-retry-policy.md`](example-retry-policy.md) for a test-first sample.
+
+Shell discovery: [shell-selection.md](shell-selection.md).

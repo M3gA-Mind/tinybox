@@ -21,3 +21,5 @@ After the specification is accepted, create a linked implementation plan in
 the contract; production code still belongs under `src/`.
 
 See [`example-retry-policy.md`](example-retry-policy.md) for a complete sample.
+
+Shell discovery: [shell-selection.md](shell-selection.md).
