@@ -25,6 +25,16 @@ async fn backends_without_published_ports_report_an_empty_fact_list() -> Result<
     Ok(())
 }
 
+#[tokio::test]
+async fn sandboxes_without_observed_cleanup_report_no_pending_work() -> Result<()> {
+    let sandbox = FakeSandbox::new(SandboxCapabilities::PASSTHROUGH);
+
+    assert!(!sandbox.has_pending_observed_cleanup());
+    sandbox.retry_observed_cleanup().await?;
+
+    Ok(())
+}
+
 /// An in-memory sandbox whose capabilities are set per test.
 #[derive(Debug)]
 struct FakeSandbox {

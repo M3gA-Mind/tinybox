@@ -210,6 +210,16 @@ pub(super) fn exec(namespace: &str, id: &BoxId, request: &ExecRequest) -> Result
     }
 
     let mut argv = vec!["docker".to_owned(), "exec".to_owned()];
+    add_exec_context(&mut argv, request);
+    argv.push(container_name(namespace, id));
+    // `--` is not accepted here, so the container name is the last flag-like
+    // argument and everything after it belongs to the command.
+    argv.extend(request.argv.iter().cloned());
+    Ok(argv)
+}
+
+/// Add Docker exec working-directory and environment flags.
+pub(super) fn add_exec_context(argv: &mut Vec<String>, request: &ExecRequest) {
     if let Some(cwd) = &request.cwd {
         argv.push("--workdir".to_owned());
         argv.push(cwd.display().to_string());
@@ -218,11 +228,6 @@ pub(super) fn exec(namespace: &str, id: &BoxId, request: &ExecRequest) -> Result
         argv.push("--env".to_owned());
         argv.push(format!("{key}={value}"));
     }
-    argv.push(container_name(namespace, id));
-    // `--` is not accepted here, so the container name is the last flag-like
-    // argument and everything after it belongs to the command.
-    argv.extend(request.argv.iter().cloned());
-    Ok(argv)
 }
 
 /// The `docker inspect` command that reports one container's state.

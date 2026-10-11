@@ -272,6 +272,24 @@ pub trait Sandbox: std::fmt::Debug + Send + Sync + 'static {
         })
     }
 
+    /// Whether this sandbox retains a failed cleanup for an observed execution.
+    ///
+    /// A `true` result means the sandbox could not confirm that a cancelled
+    /// workload stopped, and it still owns enough information to retry cleanup.
+    /// Active executions are not reported here. Backends without observed
+    /// cleanup ownership return `false`.
+    fn has_pending_observed_cleanup(&self) -> bool {
+        false
+    }
+
+    /// Retry cleanup for observed executions whose earlier cleanup failed.
+    ///
+    /// This must not wait for unrelated active executions. Backends without
+    /// retained observed cleanup return success without doing work.
+    async fn retry_observed_cleanup(&self) -> Result<()> {
+        Ok(())
+    }
+
     /// Capture the current state of a box.
     ///
     /// What a snapshot contains depends on
