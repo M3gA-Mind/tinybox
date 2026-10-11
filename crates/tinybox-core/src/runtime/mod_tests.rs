@@ -26,6 +26,16 @@ async fn backends_without_published_ports_report_an_empty_fact_list() -> Result<
 }
 
 #[tokio::test]
+async fn sandboxes_without_observed_cleanup_report_no_pending_work() -> Result<()> {
+    let sandbox = FakeSandbox::new(SandboxCapabilities::PASSTHROUGH);
+
+    assert!(!sandbox.has_pending_observed_cleanup());
+    sandbox.retry_observed_cleanup().await?;
+    sandbox.acknowledge_observed_cleanup_for_destroyed_box(&BoxId::new("box-0")?);
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_sandbox_without_observed_execution_refuses_without_collected_fallback() -> Result<()> {
     #[derive(Debug)]
     struct Observer;
