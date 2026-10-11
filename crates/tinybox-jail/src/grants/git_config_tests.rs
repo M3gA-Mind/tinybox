@@ -61,3 +61,8 @@ fn absolute_xdg_config_home_is_used() -> Result<(), Box<dyn std::error::Error>> 
     assert_eq!(xdg_root(Some(root.path().as_os_str())), Some(root.path()));
     Ok(())
 }
+
+#[test]
+fn conditional_include_sections_accept_horizontal_tabs() {
+    assert_eq!(include_paths("[includeIf\t\"gitdir:~/work/\"]\npath = ~/conditional.conf\n"), ["~/conditional.conf"]);
+}
