@@ -231,23 +231,16 @@ async fn verify_shell_execution(proxy: &tinybus::Proxy) -> Result<(), Box<dyn st
 }
 
 fn compiled_artifact() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
-    let executable = std::env::current_exe()?;
-    let dependencies = executable
-        .parent()
-        .ok_or("integration test has no parent directory")?;
     let filename = format!(
         "{}tinybox{}",
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX
     );
-    // All-feature/static-link builds omit the dynamic ABI. Always build the
-    // dynamic variant separately: another validation command may replace the
-    // ordinary dependency artifact after Cargo releases its compilation lock.
-    let target = dependencies
-        .parent()
-        .and_then(std::path::Path::parent)
-        .ok_or("integration test has no target directory")?
-        .join("module-dynamic-proof");
+    // All-feature/static-link builds omit the dynamic ABI. Build a dynamic
+    // variant under this checkout: other PRs share ordinary Cargo artifacts
+    // and must not replace the module between its build and admission.
+    let target =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/module-dynamic-proof");
     let status = std::process::Command::new(env!("CARGO"))
         .args([
             "build",
