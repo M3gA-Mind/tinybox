@@ -111,9 +111,10 @@ fn selection_for(
 // Resolve before any payload environment overrides are applied. COMSPEC and
 // the child's PATH must not choose a different command processor.
 fn cmd_path() -> String {
-    let root = std::env::var_os("SystemRoot")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
+    let root = std::env::var_os("SystemRoot").map_or_else(
+        || std::path::PathBuf::from(r"C:\Windows"),
+        std::path::PathBuf::from,
+    );
     root.join("System32")
         .join("cmd.exe")
         .to_string_lossy()

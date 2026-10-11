@@ -22,9 +22,7 @@ impl Builder<'_> {
         home: &Path,
         xdg: Option<&std::ffi::OsStr>,
     ) -> tinybox_core::Result<()> {
-        let config_home = xdg_root(xdg)
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| home.join(".config"));
+        let config_home = xdg_root(xdg).map_or_else(|| home.join(".config"), Path::to_path_buf);
         let roots = [home.join(GITCONFIG_FILE), config_home.join("git/config")];
         self.fixed_read_only(&config_home.join("git/ignore"), "gitignore");
         let mut visited = HashSet::new();

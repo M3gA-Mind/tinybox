@@ -240,9 +240,10 @@ fn fallback_shell_survives_an_overridden_payload_path() -> Result<(), Box<dyn st
 #[test]
 fn cmd_selection_uses_the_parent_system_directory() {
     let selected = selection_for(&request(false), ShellFlavor::Cmd, None);
-    let root = std::env::var_os("SystemRoot")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
+    let root = std::env::var_os("SystemRoot").map_or_else(
+        || std::path::PathBuf::from(r"C:\Windows"),
+        std::path::PathBuf::from,
+    );
     assert_eq!(
         std::path::Path::new(&selected.program),
         root.join("System32").join("cmd.exe")
