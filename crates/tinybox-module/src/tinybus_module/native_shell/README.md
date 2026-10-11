@@ -17,3 +17,8 @@ and scratch path for a later cleanup retry.
 
 Preparation runs on Tokio’s blocking pool so filesystem and jail preflight I/O
 do not stall the module’s async worker.
+
+Stream admission snapshots shell inputs under the resource lock, releases it
+before preparation, and rechecks resource ownership after preparation. Close
+and Shutdown can finish while preparation is stalled; late completion cannot
+publish an execution for a closed resource.

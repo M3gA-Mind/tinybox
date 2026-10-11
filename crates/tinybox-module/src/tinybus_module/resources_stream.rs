@@ -39,19 +39,26 @@ enum Collector {
 enum CollectorPreparation {
     Ready(Collector),
     Shell(
-        tinybox_bus::ShellExecRequest,
-        std::path::PathBuf,
-        tinybox_core::ExecRequest,
+        Box<(
+            tinybox_bus::ShellExecRequest,
+            std::path::PathBuf,
+            tinybox_core::ExecRequest,
+        )>,
     ),
 }
 impl CollectorPreparation {
     async fn finish(self) -> Result<Collector> {
         match self {
             Self::Ready(collector) => Ok(collector),
-            Self::Shell(request, root, resolved) => Ok(Collector::Shell(
-                super::super::native_shell::ShellContext::prepare_owned(request, root, resolved)
+            Self::Shell(preparation) => {
+                let (request, root, resolved) = *preparation;
+                Ok(Collector::Shell(
+                    super::super::native_shell::ShellContext::prepare_owned(
+                        request, root, resolved,
+                    )
                     .await?,
-            )),
+                ))
+            }
         }
     }
 }
@@ -188,7 +195,7 @@ fn select_execution_collector(
                 "native shell requires directory resource",
             )
         })?;
-        CollectorPreparation::Shell(shell.clone(), root.clone(), resolved.clone())
+        CollectorPreparation::Shell(Box::new((shell.clone(), root.clone(), resolved.clone())))
     } else {
         CollectorPreparation::Ready(select_collector(entry, jail, resolved)?)
     })
@@ -250,14 +257,14 @@ impl StreamExecution {
     fn check_replay(
         &self,
         request: &SpawnRequest,
-        jail: &Option<tinybox_bus::NativeJailConfig>,
-        shell: &Option<tinybox_bus::ShellExecRequest>,
-        platform_shell: &Option<tinybox_bus::SelectShellRequest>,
+        jail: Option<&tinybox_bus::NativeJailConfig>,
+        shell: Option<&tinybox_bus::ShellExecRequest>,
+        platform_shell: Option<&tinybox_bus::SelectShellRequest>,
     ) -> Result<()> {
         if self.request == *request
-            && self.jail == *jail
-            && self.shell == *shell
-            && self.platform_shell == *platform_shell
+            && self.jail.as_ref() == jail
+            && self.shell.as_ref() == shell
+            && self.platform_shell.as_ref() == platform_shell
         {
             Ok(())
         } else {
@@ -460,7 +467,12 @@ impl Resources {
             process: request.process.clone(),
         };
         if let Some(existing) = self.stream(&process)? {
-            existing.check_replay(&request, &jail, &shell, &platform_shell)?;
+            existing.check_replay(
+                &request,
+                jail.as_ref(),
+                shell.as_ref(),
+                platform_shell.as_ref(),
+            )?;
             return Ok(process);
         }
         let slot = self.slot(&process.resource).await?;
@@ -493,7 +505,12 @@ impl Resources {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(existing) = streams.get(&process.process) {
-            existing.check_replay(&request, &jail, &shell, &platform_shell)?;
+            existing.check_replay(
+                &request,
+                jail.as_ref(),
+                shell.as_ref(),
+                platform_shell.as_ref(),
+            )?;
             return Ok(process);
         }
         if entry.processes.len()
