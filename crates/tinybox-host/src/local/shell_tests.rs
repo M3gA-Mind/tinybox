@@ -37,7 +37,7 @@ fn cmd_preserves_quoted_payload_and_lists_bootstrap_names_without_values() {
         None,
     );
     assert_eq!(selected.program, "cmd");
-    assert_eq!(selected.arguments, ["/D", "/S", "/C"]);
+    assert_eq!(selected.arguments, ["/D", "/E:ON", "/V:OFF", "/S", "/C"]);
     assert_eq!(selected.raw_arguments, Some(format!("\"{payload}\"")));
     assert_eq!(
         selected.bootstrap_environment,
@@ -106,5 +106,26 @@ fn actual_cmd_raw_payload_keeps_quoted_redirection_paths() -> Result<(), Box<dyn
     };
     assert!(build_shell_command(&requested).status()?.success());
     assert_eq!(std::fs::read_to_string(output)?.trim(), "fixture");
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn bash_startup_environment_cannot_replace_the_requested_payload()
+-> Result<(), Box<dyn std::error::Error>> {
+    const CHILD: &str = "TINYBOX_SHELL_ENV_REGRESSION_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let request = SelectShellRequest { command: "exit 0".into(), preserve_pipeline_status: false };
+        assert!(build_shell_command(&request).status()?.success());
+        return Ok(());
+    }
+    let fixture = tempfile::tempdir()?;
+    let startup = fixture.path().join("startup.sh");
+    std::fs::write(&startup, "exit 77\n")?;
+    let status = std::process::Command::new(std::env::current_exe()?)
+        .args(["--exact", "local::shell::tests::bash_startup_environment_cannot_replace_the_requested_payload", "--nocapture"])
+        .env(CHILD, "1").env("BASH_ENV", &startup)
+        .status()?;
+    assert!(status.success(), "startup environment changed the child payload result");
     Ok(())
 }
