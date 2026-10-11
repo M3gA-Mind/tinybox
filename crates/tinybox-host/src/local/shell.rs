@@ -103,6 +103,7 @@ fn selection_for(
                 "ENV".into(),
                 "SHELLOPTS".into(),
                 "BASHOPTS".into(),
+                "POSIXLY_CORRECT".into(),
             ],
         },
     }
@@ -129,7 +130,19 @@ fn bash_path_in<'a>(paths: &[&'a str]) -> Option<&'a str> {
     paths
         .iter()
         .copied()
-        .find(|path| std::path::Path::new(path).is_file())
+        .find(|path| {
+            if !std::path::Path::new(path).is_file() {
+                return false;
+            }
+            #[cfg(unix)]
+            {
+                nix::unistd::access(*path, nix::unistd::AccessFlags::X_OK).is_ok()
+            }
+            #[cfg(not(unix))]
+            {
+                true
+            }
+        })
 }
 
 #[cfg(test)]
