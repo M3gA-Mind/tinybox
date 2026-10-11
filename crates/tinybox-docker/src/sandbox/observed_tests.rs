@@ -462,3 +462,34 @@ async fn cancelling_a_workload_does_not_leak_the_supervisors_wait_diagnostic() -
     let _ = std::fs::remove_dir_all(dir);
     Ok(())
 }
+
+#[tokio::test]
+async fn bash_supervisor_reaps_its_watcher_without_changing_workload_stderr() -> Result<()> {
+    let token = format!("watcher-diagnostic-fixture-{}", uuid::Uuid::new_v4().simple());
+    let dir = reserve_fixture(&token).await?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::process::Command::new("bash")
+            .arg("-c")
+            .arg(SUPERVISOR)
+            .arg("tinybox-observed")
+            .arg(&dir)
+            .arg(&token)
+            .arg("sh")
+            .arg("-c")
+            .arg("printf 'problem' >&2; exit 7")
+            .output(),
+    )
+    .await
+    .map_err(|_| Error::Backend {
+        sandbox: NAME.to_owned(),
+        operation: "reap watcher diagnostic fixture",
+        message: "supervisor did not finish watcher cleanup".to_owned(),
+    })?
+    .map_err(|error| Error::io("run watcher diagnostic fixture", &error))?;
+    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(output.stderr, b"problem");
+    assert!(std::path::Path::new(&dir).join("done").exists());
+    let _ = std::fs::remove_dir_all(dir);
+    Ok(())
+}
