@@ -76,14 +76,23 @@ fn selection_for(
         ShellFlavor::Posix => ShellInvocation {
             flavor,
             program: bash.unwrap_or("sh").into(),
-            arguments: vec![
-                "-c".into(),
-                if bash.is_some() && !request.preserve_pipeline_status {
-                    format!("set -o pipefail\n{}", request.command)
-                } else {
-                    request.command.clone()
-                },
-            ],
+            arguments: {
+                let mut arguments = Vec::new();
+                if bash.is_some() {
+                    // Privileged startup ignores exported functions even when
+                    // environment overrides are applied after command construction.
+                    arguments.push("-p".into());
+                }
+                arguments.extend([
+                    "-c".into(),
+                    if bash.is_some() && !request.preserve_pipeline_status {
+                        format!("set -o pipefail\n{}", request.command)
+                    } else {
+                        request.command.clone()
+                    },
+                ]);
+                arguments
+            },
             raw_arguments: None,
             bootstrap_environment: Vec::new(),
             remove_environment: vec![
@@ -97,10 +106,14 @@ fn selection_for(
 }
 
 fn bash_path() -> Option<&'static str> {
+    bash_path_in(&["/usr/bin/bash", "/bin/bash"])
+}
+
+fn bash_path_in(paths: &[&'static str]) -> Option<&'static str> {
     static BASH: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
     *BASH.get_or_init(|| {
-        ["/usr/bin/bash", "/bin/bash"]
-            .into_iter()
+        paths
+            .iter().copied()
             .find(|path| std::path::Path::new(path).is_file())
     })
 }

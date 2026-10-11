@@ -11,9 +11,12 @@ fn request(preserve_pipeline_status: bool) -> SelectShellRequest {
 #[test]
 fn bash_surfaces_pipe_failures_and_preservation_keeps_the_original_payload() {
     let selected = selection_for(&request(false), ShellFlavor::Posix, Some("/bin/bash"));
-    assert_eq!(selected.arguments, ["-c", "set -o pipefail\nfalse | true"]);
+    assert_eq!(
+        selected.arguments,
+        ["-p", "-c", "set -o pipefail\nfalse | true"]
+    );
     let preserved = selection_for(&request(true), ShellFlavor::Posix, Some("/bin/bash"));
-    assert_eq!(preserved.arguments, ["-c", "false | true"]);
+    assert_eq!(preserved.arguments, ["-p", "-c", "false | true"]);
 }
 
 #[test]
@@ -175,8 +178,8 @@ fn inherited_bash_options_cannot_abort_the_requested_payload()
 
 #[test]
 #[cfg(unix)]
-fn exported_bash_functions_cannot_hide_pipeline_failures()
--> Result<(), Box<dyn std::error::Error>> {
+fn exported_bash_functions_cannot_hide_pipeline_failures() -> Result<(), Box<dyn std::error::Error>>
+{
     const CHILD: &str = "TINYBOX_SHELL_FUNCTION_REGRESSION_CHILD";
     if bash_path().is_none() {
         return Ok(());
@@ -194,6 +197,28 @@ fn exported_bash_functions_cannot_hide_pipeline_failures()
         .env(CHILD, "1")
         .env("BASH_FUNC_false%%", "() { return 0; }")
         .status()?;
-    assert!(status.success(), "exported function hid the failing pipeline stage");
+    assert!(
+        status.success(),
+        "exported function hid the failing pipeline stage"
+    );
+    Ok(())
+}
+
+
+#[test]
+fn bash_discovery_rechecks_availability() -> Result<(), Box<dyn std::error::Error>> {
+    // A changing candidate list represents installation/removal without altering
+    // global system paths or relying on the machine's installed shell.
+    let fixture = tempfile::NamedTempFile::new()?;
+    // The discovery API returns standard static paths in production; leak only
+    // this small test path so the same candidate can be checked repeatedly.
+    let candidate: &'static str = Box::leak(fixture.path().to_string_lossy().into_owned().into_boxed_str());
+    assert_eq!(bash_path_in(&[candidate]), Some(candidate));
+    fixture.close()?;
+    assert_eq!(bash_path_in(&[candidate]), None);
+    std::fs::write(candidate, "fixture")?;
+    let discovered = bash_path_in(&[candidate]);
+    std::fs::remove_file(candidate)?;
+    assert_eq!(discovered, Some(candidate));
     Ok(())
 }
