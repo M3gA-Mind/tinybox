@@ -1,3 +1,5 @@
+//! Container-side supervisor fixtures preserve workload streams and cleanup receipts.
+
 #![cfg(unix)]
 use super::*;
 use std::time::Duration;
@@ -465,12 +467,14 @@ async fn cancelling_a_workload_does_not_leak_the_supervisors_wait_diagnostic() -
 
 #[tokio::test]
 async fn bash_supervisor_reaps_its_watcher_without_changing_workload_stderr() -> Result<()> {
-    let token = format!("watcher-diagnostic-fixture-{}", uuid::Uuid::new_v4().simple());
+    let token = format!(
+        "watcher-diagnostic-fixture-{}",
+        uuid::Uuid::new_v4().simple()
+    );
     let dir = reserve_fixture(&token).await?;
     let output = tokio::time::timeout(
         Duration::from_secs(5),
         tokio::process::Command::new("bash")
-            .arg("-b")
             .arg("-c")
             .arg(SUPERVISOR)
             .arg("tinybox-observed")
