@@ -1047,7 +1047,7 @@ async fn close_during_shell_preparation_fences_admission_without_waiting_for_fil
             resource: resource.clone(),
             argv: vec!["shell".into()],
             cwd: None,
-            env: Default::default(),
+            env: std::collections::BTreeMap::default(),
             stdin: None,
         },
     };
