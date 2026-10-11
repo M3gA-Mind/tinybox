@@ -8,7 +8,7 @@ connection. `tinybox-module::bus` re-exports that vocabulary for compatibility.
 ## Public surface
 
 The interface is `ai.tinyhumans.tinybox.Box` at
-`/ai/tinyhumans/tinybox/Box`. Every argument below is one positional argument;
+`/ai/tinyhumans/tinybox/Box`. Arguments below are positional;
 `Describe` retains its original zero-argument shape and string result.
 
 | Method | Argument | Result |
@@ -127,8 +127,21 @@ and returns an error; retry Shutdown before unloading. Command errors can be
 returned after complete resource release; repeating Shutdown then succeeds. The terminal instance
 never restarts. Host ordering is stop submissions, await Shutdown, then unload
 the ABI/module runtime. The SDK shutdown timeout alone is not this barrier.
-Output streaming, workspace transfer, and microVM configuration remain
-subsequent slices.
+Live local execution uses `StartExec(SpawnRequest)` with a Process reservation,
+`ReadOutput(ProcessRef, sequence)` for replayable binary stdout/stderr batches,
+and `ReleaseOutput(ProcessRef)` after completion. Each execution owns its native
+collector, so cancellation joins its own cleanup without waiting for another
+running command. Combined output is capped at 1 MiB per execution, chunks at
+8 KiB, batches at 64 KiB, and retained live/output handles at 32 per module.
+Nonzero exits remain results. Cancellation is acknowledged only after kill/reap;
+failed cleanup retains native ownership for Cancel, Close or Shutdown retry.
+Release refuses running or unacknowledged cleanup. Resource Close retires its
+journals after stream cleanup is acknowledged. Streaming is currently available
+for local passthrough resources; other providers explicitly refuse it.
+
+Workspace file transfer uses the bounded Begin/Read/Write/Finish/Abort operations
+above. MicroVM configuration and streaming for other providers remain subsequent
+slices.
 
 Operations serialize within each resource; unrelated resources have independent
 locks. Spawn uses an owned local process group on Unix and a Job Object on
@@ -168,3 +181,19 @@ methods and the test compares that declaration with the dispatch table.
 analysis, creation, execution, inspection, and close. In-memory bus tests also
 exercise detached cancellation and cleanup. Modules are trusted native code;
 the module itself is not confined by the sandboxes it creates.
+
+## Native directory-jail execution
+
+`StartJailedExec` (wire 1.7) uses the local directory resource as its writable
+root. The module canonicalizes every approved extra grant, rejects missing
+paths and working directories outside the root, and performs the requested
+enforcement preflight before consuming process admission. `Enforced` refuses
+partial constraints; `Declared` requires an explicit host decision using
+`JailStatus`. Neither mode admits the no-op or unavailable backend. A caller
+requiring the process-isolation security floor sets `require_process_isolation`.
+The host retains credential-path exclusions and approval policy.
+
+The jail owns a separate native collector for each execution. Output replay,
+Cancel, ReleaseOutput, Close and Shutdown use the same retained cleanup barriers
+as StartExec. Windows rejects this operation until its native jail has a
+supervised child bridge; explicit ordinary local execution remains available.

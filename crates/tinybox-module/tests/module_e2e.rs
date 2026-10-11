@@ -51,6 +51,8 @@ async fn compiled_module_transfers_workspace_files_over_a_broker()
     let client = Connection::connect(bus.connect().await?).await?;
     wait_until_serving(&client, &modules).await?;
     let proxy = client.proxy(BUS_NAME, OBJECT_PATH, BUS_NAME)?;
+    let capabilities: tinybox_bus::ModuleCapabilities = proxy.call("Capabilities", ()).await?;
+    assert_eq!(capabilities.contract_version, tinybox_bus::CONTRACT_VERSION);
     let resource: ResourceId = proxy.call("Reserve", (ReserveRequest::Resource,)).await?;
     let created: ResourceInfo = proxy
         .call(
@@ -141,6 +143,10 @@ async fn compiled_module_transfers_workspace_files_over_a_broker()
         )
         .await?;
     assert_eq!(std::fs::read(&output)?, payload);
+    #[cfg(unix)]
+    verify_live_output(&proxy, &resource).await?;
+    #[cfg(unix)]
+    verify_native_jail(&proxy, &resource).await?;
     proxy.call::<()>("Close", (created.resource,)).await?;
     wait_until_idle(&modules).await?;
     broker_task.abort();
@@ -193,5 +199,281 @@ async fn wait_until_idle(modules: &ModuleHost) -> Result<(), Box<dyn std::error:
         }
     })
     .await??;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "single compiled-artifact lifecycle fixture verifies output, replay and acknowledged cancellation"
+)]
+async fn verify_live_output(
+    proxy: &tinybus::Proxy,
+    resource: &ResourceId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tinybox_bus::{
+        ExecRequest, ExecutionState, OutputBatch, OutputStream, ProcessRef, SpawnRequest,
+    };
+    let process: ResourceId = proxy
+        .call("Reserve", (ReserveRequest::Process(resource.clone()),))
+        .await?;
+    let request = SpawnRequest {
+        process,
+        command: ExecRequest {
+            resource: resource.clone(),
+            argv: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "printf '\\377\\000'; printf error >&2; exit 7".into(),
+            ],
+            cwd: None,
+            env: std::collections::BTreeMap::default(),
+            stdin: None,
+        },
+    };
+    let process: ProcessRef = proxy.call("StartExec", (request.clone(),)).await?;
+    assert_eq!(
+        process,
+        proxy.call::<ProcessRef>("StartExec", (request,)).await?
+    );
+    let batch: OutputBatch = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let batch: OutputBatch = proxy.call("ReadOutput", (process.clone(), 0_u64)).await?;
+            if batch.state != ExecutionState::Running {
+                return Ok::<_, tinybus::Error>(batch);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    assert_eq!(batch.state, ExecutionState::Exited { exit_code: 7 });
+    let stdout: Vec<u8> = batch
+        .chunks
+        .iter()
+        .filter(|chunk| chunk.stream == OutputStream::Stdout)
+        .flat_map(|chunk| chunk.bytes.iter().copied())
+        .collect();
+    let stderr: Vec<u8> = batch
+        .chunks
+        .iter()
+        .filter(|chunk| chunk.stream == OutputStream::Stderr)
+        .flat_map(|chunk| chunk.bytes.iter().copied())
+        .collect();
+    assert_eq!(stdout, [255, 0]);
+    assert_eq!(stderr, b"error");
+    assert_eq!(
+        batch,
+        proxy
+            .call::<OutputBatch>("ReadOutput", (process.clone(), 0_u64))
+            .await?
+    );
+    proxy
+        .call::<()>("ReleaseOutput", (process.clone(),))
+        .await?;
+    assert!(
+        proxy
+            .call::<OutputBatch>("ReadOutput", (process, 0_u64))
+            .await
+            .is_err()
+    );
+
+    let process: ResourceId = proxy
+        .call("Reserve", (ReserveRequest::Process(resource.clone()),))
+        .await?;
+    let process: ProcessRef = proxy
+        .call(
+            "StartExec",
+            (SpawnRequest {
+                process,
+                command: ExecRequest {
+                    resource: resource.clone(),
+                    argv: vec![
+                        "/bin/sh".into(),
+                        "-c".into(),
+                        "printf ready; exec sleep 600".into(),
+                    ],
+                    cwd: None,
+                    env: std::collections::BTreeMap::default(),
+                    stdin: None,
+                },
+            },),
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let batch: OutputBatch = proxy.call("ReadOutput", (process.clone(), 0_u64)).await?;
+            if !batch.chunks.is_empty() {
+                assert_eq!(batch.state, ExecutionState::Running);
+                return Ok::<_, tinybus::Error>(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    assert!(
+        proxy
+            .call::<()>("ReleaseOutput", (process.clone(),))
+            .await
+            .is_err()
+    );
+    proxy.call::<()>("Cancel", (process.clone(),)).await?;
+    let batch: OutputBatch = proxy.call("ReadOutput", (process.clone(), 0_u64)).await?;
+    assert_eq!(batch.state, ExecutionState::Cancelled);
+    assert_eq!(
+        batch
+            .chunks
+            .iter()
+            .flat_map(|chunk| chunk.bytes.iter().copied())
+            .collect::<Vec<_>>(),
+        b"ready"
+    );
+    assert!(!proxy.call::<bool>("IsRunning", (process.clone(),)).await?);
+    proxy.call::<()>("ReleaseOutput", (process,)).await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn verify_native_jail(
+    proxy: &tinybus::Proxy,
+    resource: &ResourceId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tinybox_bus::{
+        ExecRequest, ExecutionState, JailEnforcement, NativeJailConfig, OutputBatch, ProcessRef,
+        SpawnRequest,
+    };
+    let id: ResourceId = proxy
+        .call("Reserve", (ReserveRequest::Process(resource.clone()),))
+        .await?;
+    let outside = tempfile::tempdir()?;
+    let forbidden = outside.path().join("forbidden");
+    let request = SpawnRequest {
+        process: id,
+        command: ExecRequest {
+            resource: resource.clone(),
+            argv: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "if printf escaped > \"$1\" 2>/dev/null; then exit 9; fi; printf confined".into(),
+                "fixture".into(),
+                forbidden.to_string_lossy().into_owned(),
+            ],
+            cwd: None,
+            env: std::collections::BTreeMap::default(),
+            stdin: None,
+        },
+    };
+    let config = NativeJailConfig {
+        read_only: ["/usr", "/bin", "/lib", "/lib64", "/dev"]
+            .into_iter()
+            .filter(|path| std::path::Path::new(path).exists())
+            .map(str::to_owned)
+            .collect(),
+        read_write: vec![],
+        allow_net: true,
+        allow_subprocess: true,
+        enforcement: JailEnforcement::Enforced,
+        require_process_isolation: false,
+    };
+    let status: tinybox_bus::JailStatus = proxy.call("JailStatus", ()).await?;
+    eprintln!(
+        "native jail fixture: backend={} available={} filesystem={}",
+        status.backend, status.available, status.filesystem
+    );
+    let started = proxy
+        .call::<ProcessRef>("StartJailedExec", (request.clone(), config.clone()))
+        .await;
+    if status.available && status.filesystem == "enforced" {
+        let process = started?;
+        assert_eq!(
+            proxy
+                .call::<ProcessRef>("StartJailedExec", (request.clone(), config.clone()))
+                .await?,
+            process
+        );
+        let mut changed = config.clone();
+        changed.require_process_isolation = true;
+        assert!(
+            proxy
+                .call::<ProcessRef>("StartJailedExec", (request, changed))
+                .await
+                .is_err()
+        );
+        let batch: OutputBatch = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let batch: OutputBatch = proxy.call("ReadOutput", (process.clone(), 0_u64)).await?;
+                if batch.state != ExecutionState::Running {
+                    return Ok::<_, tinybus::Error>(batch);
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+        assert_eq!(batch.state, ExecutionState::Exited { exit_code: 0 });
+        assert_eq!(
+            batch
+                .chunks
+                .iter()
+                .filter(|chunk| chunk.stream == tinybox_bus::OutputStream::Stdout)
+                .flat_map(|chunk| chunk.bytes.iter().copied())
+                .collect::<Vec<_>>(),
+            b"confined"
+        );
+        proxy.call::<()>("ReleaseOutput", (process,)).await?;
+        verify_jailed_cancel(proxy, resource, config).await?;
+    } else {
+        assert!(started.is_err());
+    }
+    assert!(!forbidden.exists());
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn verify_jailed_cancel(
+    proxy: &tinybus::Proxy,
+    resource: &ResourceId,
+    config: tinybox_bus::NativeJailConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tinybox_bus::{ExecRequest, ExecutionState, OutputBatch, ProcessRef, SpawnRequest};
+    let process: ResourceId = proxy
+        .call("Reserve", (ReserveRequest::Process(resource.clone()),))
+        .await?;
+    let process: ProcessRef = proxy
+        .call(
+            "StartJailedExec",
+            (
+                SpawnRequest {
+                    process,
+                    command: ExecRequest {
+                        resource: resource.clone(),
+                        argv: vec![
+                            "/bin/sh".into(),
+                            "-c".into(),
+                            "printf ready; sleep 600".into(),
+                        ],
+                        cwd: None,
+                        env: std::collections::BTreeMap::default(),
+                        stdin: None,
+                    },
+                },
+                config,
+            ),
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let batch: OutputBatch = proxy.call("ReadOutput", (process.clone(), 0_u64)).await?;
+            if !batch.chunks.is_empty() {
+                break;
+            }
+            assert_eq!(batch.state, ExecutionState::Running);
+            tokio::task::yield_now().await;
+        }
+        proxy.call::<()>("Cancel", (process.clone(),)).await
+    })
+    .await??;
+    let batch: OutputBatch = proxy.call("ReadOutput", (process.clone(), 0_u64)).await?;
+    assert_eq!(batch.state, ExecutionState::Cancelled);
+    assert!(!proxy.call::<bool>("IsRunning", (process.clone(),)).await?);
+    proxy.call::<()>("ReleaseOutput", (process,)).await?;
     Ok(())
 }

@@ -15,6 +15,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod jail;
+pub use jail::{JailEnforcement, NativeJailConfig};
+
 mod shell;
 pub use shell::{CommandAnalysis, CommandClass, CommandSegment};
 mod files;
@@ -31,8 +34,9 @@ pub use files::{
 /// 1.2 adds host selection, container networking/ports, and owned forwards.
 /// 1.3 adds native jail discovery.
 /// 1.4 adds detailed shell facts for host execution policy. 1.5 adds bounded
-/// file transfer for mounted workspaces.
-pub const CONTRACT_VERSION: (u32, u32) = (1, 5);
+/// file transfer for mounted workspaces. 1.6 adds bounded live native output.
+/// 1.7 adds explicitly approved native directory-jail execution.
+pub const CONTRACT_VERSION: (u32, u32) = (1, 7);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.
@@ -43,6 +47,8 @@ pub fn is_compatible(module: (u32, u32)) -> bool {
 
 /// Maximum reservation identifier length in bytes.
 pub const MAX_ID_BYTES: usize = 128;
+/// Maximum additional read or write grants for one native jail.
+pub const MAX_NATIVE_JAIL_GRANTS: usize = 64;
 /// Maximum live resources in a module instance.
 pub const MAX_ACTIVE_RESOURCES: usize = 64;
 /// Maximum live processes or queued startups in one resource.
@@ -95,6 +101,10 @@ pub const METHODS: &[&str] = &[
     "WriteFileChunk",
     "FinishFileWrite",
     "AbortFileWrite",
+    "StartExec",
+    "ReadOutput",
+    "ReleaseOutput",
+    "StartJailedExec",
 ];
 
 /// Facts about the detected native directory-jail backend.
