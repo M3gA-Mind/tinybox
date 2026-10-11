@@ -44,7 +44,7 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | ResolveLocalGrants | ResolveLocalGrantsRequest | LocalGrants |
 | SelectShell | SelectShellRequest | ShellInvocation |
 
-Capabilities advertises contract version 1.10; 1.0 denotes the original
+Capabilities advertises contract version 1.11; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -316,3 +316,14 @@ shared quote-preserving TinyBox command builder.
 Windows explicitly enables extensions and disables delayed expansion.
 Unix builders remove BASH_ENV and ENV; ShellInvocation returns those removal
 names. Providers apply them after approved environment overrides.
+
+## Native shell execution
+
+Contract 1.11 adds `StartShellExec(ShellExecRequest) -> ProcessRef` for local
+passthrough resources. It composes platform shell selection with safe parent
+environment snapshots, approved overrides, private scratch, bounded pipes and
+owned timeout/cancellation cleanup. `ReadOutput` retains scratch until
+`ReleaseOutput` or resource close acknowledges cleanup. Explicit native jail
+requests refuse unavailable enforcement; remote/Docker providers refuse this
+operation. State directory authorization and Windows private parent ACLs belong
+to the caller. See [the native shell contract](../../../docs/specs/native-shell-execution.md).

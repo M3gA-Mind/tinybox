@@ -58,6 +58,14 @@ async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
         tinybox_bus::OBJECT_PATH,
         tinybox_bus::INTERFACE,
     )?;
+    verify_discovery(&proxy).await?;
+    verify_native_shell(&proxy).await?;
+    proxy.call::<()>("Shutdown", ()).await?;
+    broker_task.abort();
+    Ok(())
+}
+
+async fn verify_discovery(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::error::Error>> {
     let home = tempfile::tempdir()?;
     std::fs::create_dir(home.path().join("data"))?;
     let result: tinybox_bus::LocalGrants = proxy
@@ -128,6 +136,10 @@ async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
             "{include}: {result:?}"
         );
     }
+    Ok(())
+}
+
+async fn verify_native_shell(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::error::Error>> {
     let workspace = tempfile::tempdir()?;
     let state_dir = tempfile::tempdir()?;
     let resource: tinybox_bus::ResourceId = proxy
@@ -201,8 +213,6 @@ async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
     assert!(stdout.contains("compiled_manifest_admits_and_executes_grant_and_shell_discovery"));
     proxy.call::<()>("ReleaseOutput", (running,)).await?;
     proxy.call::<()>("Close", (resource,)).await?;
-    proxy.call::<()>("Shutdown", ()).await?;
-    broker_task.abort();
     Ok(())
 }
 
