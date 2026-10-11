@@ -92,7 +92,10 @@ async fn supervisor_preserves_binary_pipes_stdin_and_exit_status() -> Result<()>
 
     assert_eq!(output.status.code(), Some(7));
     let mut expected_stdout = vec![0, 255, 1, 255, 0];
-    expected_stdout.extend_from_slice(format!("|observed|{}", cwd.display()).as_bytes());
+    let resolved_cwd = cwd
+        .canonicalize()
+        .map_err(|error| Error::io("resolve fixture workspace", &error))?;
+    expected_stdout.extend_from_slice(format!("|observed|{}", resolved_cwd.display()).as_bytes());
     assert_eq!(output.stdout, expected_stdout);
     assert_eq!(output.stderr, b"problem");
     assert!(std::path::Path::new(&dir).join("done").exists());

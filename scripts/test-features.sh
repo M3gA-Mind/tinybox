@@ -8,6 +8,12 @@ case "${RUNNER_OS:-$(uname -s)}" in
     brew install util-linux
     export PATH="$(brew --prefix util-linux)/bin:$PATH"
     ;;
+  Windows|MINGW*|MSYS*|CYGWIN*)
+    # Native Rust commands resolve /bin/sh at the current drive root, while
+    # Git Bash resolves it inside its installation. Supply that same shell.
+    pwsh -NoProfile -File scripts/prepare-windows-fixtures.ps1 -PosixBin "$(cygpath -w /usr/bin)"
+    export PATH="/usr/bin:$PATH"
+    ;;
 esac
 python3 scripts/test-e2e-version.py
 cargo test --locked --workspace
