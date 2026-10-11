@@ -117,7 +117,7 @@ async fn docker_cleanup_reports_failed_kill_instead_of_claiming_stopped()
     permissions.set_mode(0o755);
     std::fs::set_permissions(&script_path, permissions)?;
 
-    let error = match cleanup_with_cli(
+    let Err(error) = cleanup_with_cli(
         &DockerCli::with_program(&script_path),
         CleanupDockerRequest {
             label: "openhuman.sandbox=true".into(),
@@ -125,14 +125,10 @@ async fn docker_cleanup_reports_failed_kill_instead_of_claiming_stopped()
         },
     )
     .await
-    {
-        Err(error) => error,
-        Ok(_) => {
-            return Err(std::io::Error::other(
-                "failed Docker kill was reported as successful cleanup",
-            )
-            .into());
-        }
+    else {
+        return Err(
+            std::io::Error::other("failed Docker kill was reported as successful cleanup").into(),
+        );
     };
 
     assert_eq!(error.wire_name(), tinybox_bus::DOCKER_CONTROL_FAILED);
@@ -156,7 +152,7 @@ async fn docker_cleanup_does_not_kill_ids_from_a_failed_listing()
     permissions.set_mode(0o755);
     std::fs::set_permissions(&script_path, permissions)?;
 
-    let error = match cleanup_with_cli(
+    let Err(error) = cleanup_with_cli(
         &DockerCli::with_program(&script_path),
         CleanupDockerRequest {
             label: "openhuman.sandbox=true".into(),
@@ -164,14 +160,10 @@ async fn docker_cleanup_does_not_kill_ids_from_a_failed_listing()
         },
     )
     .await
-    {
-        Err(error) => error,
-        Ok(_) => {
-            return Err(std::io::Error::other(
-                "failed listing used partial stdout as container ids",
-            )
-            .into());
-        }
+    else {
+        return Err(
+            std::io::Error::other("failed listing used partial stdout as container ids").into(),
+        );
     };
 
     assert_eq!(error.wire_name(), tinybox_bus::DOCKER_CONTROL_FAILED);
@@ -234,30 +226,24 @@ async fn docker_control_rejects_invalid_deadline_and_label_before_cli_call()
     std::fs::set_permissions(&script_path, permissions)?;
     let cli = DockerCli::with_program(&script_path);
 
-    let error = match status_with_cli(&cli, DockerStatusRequest { timeout_ms: 0 }).await {
-        Err(error) => error,
-        Ok(_) => return Err(std::io::Error::other("zero deadline was accepted").into()),
+    let Err(error) = status_with_cli(&cli, DockerStatusRequest { timeout_ms: 0 }).await else {
+        return Err(std::io::Error::other("zero deadline was accepted").into());
     };
     assert_eq!(error.wire_name(), tinybox_bus::INVALID_DOCKER_CONTROL);
 
-    let error = match status_with_cli(
+    let Err(error) = status_with_cli(
         &cli,
         DockerStatusRequest {
             timeout_ms: tinybox_bus::MAX_DOCKER_CONTROL_TIMEOUT_MS + 1,
         },
     )
     .await
-    {
-        Err(error) => error,
-        Ok(_) => {
-            return Err(
-                std::io::Error::other("deadline above the module limit was accepted").into(),
-            );
-        }
+    else {
+        return Err(std::io::Error::other("deadline above the module limit was accepted").into());
     };
     assert_eq!(error.wire_name(), tinybox_bus::INVALID_DOCKER_CONTROL);
 
-    let error = match cleanup_with_cli(
+    let Err(error) = cleanup_with_cli(
         &cli,
         CleanupDockerRequest {
             label: "openhuman.sandbox=true\n--privileged".into(),
@@ -265,11 +251,8 @@ async fn docker_control_rejects_invalid_deadline_and_label_before_cli_call()
         },
     )
     .await
-    {
-        Err(error) => error,
-        Ok(_) => {
-            return Err(std::io::Error::other("label control characters were accepted").into());
-        }
+    else {
+        return Err(std::io::Error::other("label control characters were accepted").into());
     };
     assert_eq!(error.wire_name(), tinybox_bus::INVALID_DOCKER_CONTROL);
     assert!(!calls.exists());
