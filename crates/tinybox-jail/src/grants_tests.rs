@@ -608,3 +608,43 @@ fn protected_prefixes_also_reject_recursive_ancestor_grants()
     assert_eq!(grants.read_write, Vec::<PathBuf>::new());
     Ok(())
 }
+
+#[test]
+#[cfg(unix)]
+fn protected_prefix_alias_also_blocks_its_canonical_spelling()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    let target = home.path().join("neutral");
+    fs::create_dir(&target)?;
+    std::os::unix::fs::symlink(&target, home.path().join("protected"))?;
+    let protected = ProtectedPaths { prefixes: vec![home.path().join("protected").to_str().ok_or("non-UTF8 fixture")?.into()], ..ProtectedPaths::default() };
+    let config = LocalGrantConfig { toolchain_homes: false, extra_read_only: vec![target.to_str().ok_or("non-UTF8 fixture")?.into()], ..LocalGrantConfig::default() };
+    let grants = resolve_local_jail_grants(None, &config, &protected);
+    assert_eq!(grants.read_only, Vec::<PathBuf>::new());
+    Ok(())
+}
+
+#[test]
+fn explicit_writable_grants_cannot_promote_shared_cargo_sources()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    for cache in ["git", "registry"] { fs::create_dir_all(home.path().join(".cargo").join(cache))?; }
+    let config = LocalGrantConfig { toolchain_homes: true, extra_read_write: vec!["~/.cargo/git".into(), "~/.cargo/registry".into()], ..LocalGrantConfig::default() };
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default());
+    assert_eq!(grants.read_write, Vec::<PathBuf>::new());
+    for cache in ["git", "registry"] { assert!(has(&grants.read_only, &home.path().join(".cargo").join(cache).canonicalize()?), "{grants:?}"); }
+    Ok(())
+}
+
+#[test]
+fn git_ignore_patterns_cannot_add_config_include_grants()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir_all(home.path().join(".config/git"))?;
+    fs::write(home.path().join(".config/git/ignore"), "[include]\npath = ~/neutral-secret\n")?;
+    fs::write(home.path().join("neutral-secret"), "fixture")?;
+    let grants = resolve_local_jail_grants(Some(home.path()), &LocalGrantConfig::default(), &ProtectedPaths::default());
+    assert!(has(&grants.read_only, &home.path().join(".config/git/ignore").canonicalize()?), "{grants:?}");
+    assert!(!has(&grants.read_only, &home.path().join("neutral-secret").canonicalize()?), "{grants:?}");
+    Ok(())
+}
