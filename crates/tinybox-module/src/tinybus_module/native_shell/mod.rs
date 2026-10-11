@@ -139,6 +139,8 @@ impl ShellContext {
             scratch: Arc::new(std::sync::Mutex::new(Some(scratch))),
             scratch_cleanup_failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             host,
+            #[cfg(test)]
+            scratch_deletion_blocked: std::sync::atomic::AtomicBool::new(false),
         }))
     }
     pub(super) async fn run(
@@ -182,6 +184,20 @@ impl ShellContext {
         Ok(())
     }
     pub(super) async fn dispose_scratch(&self) -> tinybox_core::Result<()> {
+        #[cfg(test)]
+        if self
+            .scratch_deletion_blocked
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return self
+                .dispose_scratch_with(|_| {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "injected scratch deletion failure",
+                    ))
+                })
+                .await;
+        }
         self.dispose_scratch_with(|path| std::fs::remove_dir_all(path))
             .await
     }
