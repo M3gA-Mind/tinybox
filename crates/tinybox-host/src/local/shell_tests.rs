@@ -1,0 +1,85 @@
+use super::*;
+
+fn request(preserve_pipeline_status: bool) -> SelectShellRequest {
+    SelectShellRequest {
+        command: "false | true".into(),
+        preserve_pipeline_status,
+    }
+}
+
+#[test]
+fn bash_surfaces_pipe_failures_and_preservation_keeps_the_original_payload() {
+    let selected = selection_for(&request(false), ShellFlavor::Posix, Some("/bin/bash"));
+    assert_eq!(selected.arguments, ["-lc", "set -o pipefail\nfalse | true"]);
+    let preserved = selection_for(&request(true), ShellFlavor::Posix, Some("/bin/bash"));
+    assert_eq!(preserved.arguments, ["-lc", "false | true"]);
+}
+
+#[test]
+fn sh_fallback_never_receives_bash_only_flags() {
+    let selected = selection_for(&request(false), ShellFlavor::Posix, None);
+    assert_eq!(selected.program, "sh");
+    assert_eq!(selected.arguments, ["-lc", "false | true"]);
+    assert_eq!(selected.raw_arguments, None);
+    assert_eq!(selected.bootstrap_environment, Vec::<String>::new());
+}
+
+#[test]
+fn cmd_preserves_quoted_payload_and_lists_bootstrap_names_without_values() {
+    let payload = r#"echo %USERPROFILE% > "C:\Program Files (x86)\out.txt""#;
+    let selected = selection_for(
+        &SelectShellRequest {
+            command: payload.into(),
+            preserve_pipeline_status: false,
+        },
+        ShellFlavor::Cmd,
+        None,
+    );
+    assert_eq!(selected.program, "cmd");
+    assert_eq!(selected.arguments, ["/C"]);
+    assert_eq!(selected.raw_arguments.as_deref(), Some(payload));
+    assert_eq!(
+        selected.bootstrap_environment,
+        WINDOWS_BOOTSTRAP_ENVIRONMENT
+    );
+}
+
+#[test]
+fn selected_shell_and_native_builder_agree() {
+    let requested = request(false);
+    let selected = select_shell(&requested);
+    let command = build_shell_command(&requested);
+    assert_eq!(
+        command.get_program(),
+        std::ffi::OsStr::new(&selected.program)
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn actual_bash_pipeline_failure_is_visible_unless_preservation_is_requested()
+-> Result<(), Box<dyn std::error::Error>> {
+    // The fallback is tested above; execution only asserts Bash semantics on
+    // hosts whose selected shell actually supports them.
+    if bash_path().is_none() {
+        return Ok(());
+    }
+    assert!(!build_shell_command(&request(false)).status()?.success());
+    assert!(build_shell_command(&request(true)).status()?.success());
+    Ok(())
+}
+
+#[test]
+#[cfg(windows)]
+fn actual_cmd_raw_payload_keeps_quoted_redirection_paths() -> Result<(), Box<dyn std::error::Error>>
+{
+    let root = tempfile::tempdir()?;
+    let output = root.path().join("output with spaces (fixture).txt");
+    let requested = SelectShellRequest {
+        command: format!("echo fixture > \"{}\"", output.display()),
+        preserve_pipeline_status: false,
+    };
+    assert!(build_shell_command(&requested).status()?.success());
+    assert_eq!(std::fs::read_to_string(output)?.trim(), "fixture");
+    Ok(())
+}

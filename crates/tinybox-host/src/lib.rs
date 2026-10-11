@@ -48,3 +48,6 @@ mod local;
 pub use limited::{JailLocalHost, LimitedLocalHost, ManagedProcess};
 
 pub use local::{LocalHost, NAME as LOCAL};
+
+/// Platform shell discovery and command construction owned by the local host.
+pub use local::shell::{build_shell_command, select_shell};

@@ -21,6 +21,9 @@ pub use grants::{LocalGrantConfig, LocalGrants, ProtectedPaths, ResolveLocalGran
 mod jail;
 pub use jail::{JailEnforcement, NativeJailConfig};
 
+mod shell_selection;
+pub use shell_selection::{SelectShellRequest, ShellFlavor, ShellInvocation};
+
 mod shell;
 pub use shell::{CommandAnalysis, CommandClass, CommandSegment};
 mod files;
@@ -40,7 +43,8 @@ pub use files::{
 /// file transfer for mounted workspaces. 1.6 adds bounded live native output.
 /// 1.7 adds explicitly approved native directory-jail execution. 1.8 adds a
 /// bounded, module-owned one-shot Docker operation. 1.9 adds local grant discovery.
-pub const CONTRACT_VERSION: (u32, u32) = (1, 9);
+/// 1.10 adds platform shell selection.
+pub const CONTRACT_VERSION: (u32, u32) = (1, 10);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.
@@ -111,6 +115,7 @@ pub const METHODS: &[&str] = &[
     "StartJailedExec",
     "RunDocker",
     "ResolveLocalGrants",
+    "SelectShell",
 ];
 
 /// Facts about the detected native directory-jail backend.
