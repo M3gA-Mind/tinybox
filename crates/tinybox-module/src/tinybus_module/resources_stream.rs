@@ -188,6 +188,14 @@ async fn prepare_execution(
     shell: Option<&tinybox_bus::ShellExecRequest>,
     platform_shell: Option<&tinybox_bus::SelectShellRequest>,
 ) -> Result<(tinybox_core::ExecRequest, Collector)> {
+    if !entry.execution_supported
+        || (entry.local_sandbox.is_none() && entry.docker_sandbox.is_none())
+    {
+        return Err(failure(
+            tinybox_bus::UNSUPPORTED_OPERATION,
+            "live output is unavailable for this provider",
+        ));
+    }
     require_owned_collector(entry)?;
     // Each execution owns its cleanup collector. Cancelling one stream must
     // not drain an unrelated running supervisor or inherit its failure.
@@ -418,14 +426,6 @@ impl Resources {
         let entry = slot
             .as_ref()
             .ok_or_else(|| failure(tinybox_bus::UNKNOWN_RESOURCE, "closed resource"))?;
-        if !entry.execution_supported
-            || (entry.local_sandbox.is_none() && entry.docker_sandbox.is_none())
-        {
-            return Err(failure(
-                tinybox_bus::UNSUPPORTED_OPERATION,
-                "live output is unavailable for this provider",
-            ));
-        }
         let (resolved, collector) = prepare_execution(
             entry,
             &request,
