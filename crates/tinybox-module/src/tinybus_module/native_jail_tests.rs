@@ -113,6 +113,9 @@ fn approved_grants_preserve_flags_and_preflight_refuses_weaker_facts()
     };
     assert!(prepare(root.path(), &config, &command, &weak).is_err());
     config.enforcement = JailEnforcement::Declared;
+    assert!(prepare(root.path(), &config, &command, &weak).is_err());
+    config.allow_net = true;
+    config.allow_subprocess = true;
     assert!(prepare(root.path(), &config, &command, &weak).is_ok());
     config.read_only = vec!["/".into(); tinybox_bus::MAX_NATIVE_JAIL_GRANTS + 1];
     assert!(prepare(root.path(), &config, &command, &backend).is_err());
@@ -125,5 +128,73 @@ fn approved_grants_preserve_flags_and_preflight_refuses_weaker_facts()
     assert!(prepare(&root.path().join("missing"), &config, &command, &backend).is_err());
     command.cwd = Some(root.path().join("missing"));
     assert!(prepare(root.path(), &config, &command, &backend).is_err());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn declared_enforcement_rejects_each_unsupported_requested_constraint()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use tinybox_core::{Constraint, ConstraintSupport, Enforcement};
+    struct DeclaredBackend(ConstraintSupport);
+    impl JailBackend for DeclaredBackend {
+        fn name(&self) -> &'static str {
+            "declared fixture"
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        fn isolation(&self) -> tinybox_core::IsolationLevel {
+            tinybox_core::IsolationLevel::None
+        }
+        fn constraint_support(&self) -> ConstraintSupport {
+            self.0
+        }
+        fn spawn(
+            &self,
+            _: &Jail,
+            _: std::process::Command,
+        ) -> std::io::Result<std::process::Child> {
+            Err(std::io::Error::other("preflight fixture never spawns"))
+        }
+    }
+    let root = tempfile::tempdir()?;
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.path().into());
+    let mut config = config();
+    config.enforcement = JailEnforcement::Declared;
+    let constraints = [
+        Constraint::Filesystem,
+        Constraint::Network,
+        Constraint::Subprocess,
+    ];
+    let supported = constraints
+        .iter()
+        .fold(ConstraintSupport::NONE, |support, &constraint| {
+            support.with(constraint, Enforcement::BestEffort)
+        });
+    assert!(prepare(root.path(), &config, &command, &DeclaredBackend(supported)).is_ok());
+    for constraint in constraints {
+        let unsupported = supported.with(constraint, Enforcement::Unsupported);
+        assert!(
+            prepare(
+                root.path(),
+                &config,
+                &command,
+                &DeclaredBackend(unsupported)
+            )
+            .is_err(),
+            "unsupported {constraint} must be rejected before execution"
+        );
+    }
+    assert!(
+        prepare(
+            root.path(),
+            &config,
+            &command,
+            &DeclaredBackend(ConstraintSupport::NONE)
+        )
+        .is_err()
+    );
     Ok(())
 }
