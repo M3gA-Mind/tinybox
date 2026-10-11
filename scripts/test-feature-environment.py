@@ -56,7 +56,7 @@ class WindowsFeatureEnvironmentTests(unittest.TestCase):
                 path.chmod(0o755)
             env = dict(os.environ, RUNNER_OS="Windows", FIXTURE_BIN="C:/Git/usr/bin",
                        FIXTURE_READY=str(ready), FIXTURE_CALLS=str(calls),
-                       PATH=str(tools) + os.pathsep + "/bin")
+                       PATH=str(tools) + os.pathsep + "/usr/bin:/bin")
             result = subprocess.run(["bash", str(ROOT / "scripts/test-features.sh")],
                                     env=env, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
