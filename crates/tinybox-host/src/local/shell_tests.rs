@@ -220,3 +220,14 @@ fn bash_discovery_rechecks_availability() -> Result<(), Box<dyn std::error::Erro
     assert_eq!(discovered, Some(candidate));
     Ok(())
 }
+
+#[test]
+#[cfg(unix)]
+fn fallback_shell_survives_an_overridden_payload_path() -> Result<(), Box<dyn std::error::Error>> {
+    let selected = selection_for(&SelectShellRequest {
+        command: "exit 0".into(), preserve_pipeline_status: false,
+    }, ShellFlavor::Posix, None);
+    let status = command_for(selected).env("PATH", "").status()?;
+    assert!(status.success());
+    Ok(())
+}

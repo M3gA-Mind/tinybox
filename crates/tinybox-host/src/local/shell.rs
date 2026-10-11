@@ -34,7 +34,10 @@ pub fn select_shell(request: &SelectShellRequest) -> ShellInvocation {
 /// provider remains responsible for environment, confinement, pipes and lifecycle.
 #[must_use]
 pub fn build_shell_command(request: &SelectShellRequest) -> std::process::Command {
-    let selection = select_shell(request);
+    command_for(select_shell(request))
+}
+
+fn command_for(selection: ShellInvocation) -> std::process::Command {
     let mut command = std::process::Command::new(selection.program);
     command.args(selection.arguments);
     for name in selection.remove_environment {
