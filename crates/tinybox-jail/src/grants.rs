@@ -198,7 +198,21 @@ impl<'a> Builder<'a> {
             {
                 return Ok(false);
             }
-            if entry.file_type()?.is_dir() {
+            let file_type = entry.file_type()?;
+            // A pair-prefix symlink could alias a directory elsewhere inside
+            // this same grant, exposing its protected child under the alias.
+            // Reject it conservatively rather than following links or cycles.
+            if file_type.is_symlink()
+                && self.protected.component_pairs.iter().any(|pair| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case(&pair[0])
+                })
+            {
+                return Ok(false);
+            }
+            if file_type.is_dir() {
                 if stack.len() >= max_depth {
                     return Err(std::io::Error::other(
                         "protected-path inspection depth limit exceeded",
