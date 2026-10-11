@@ -915,7 +915,7 @@ async fn local_grant_discovery_refuses_home_ancestors_of_credentials()
                 .ok_or("grant is not UTF-8")?
         ]
     );
-    assert!(result.read_write.is_empty());
+    assert_eq!(result.read_write, Vec::<String>::new());
     Ok(())
 }
 

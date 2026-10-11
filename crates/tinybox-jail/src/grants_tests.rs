@@ -261,7 +261,7 @@ fn gitconfig_include_cycles_terminate() {
 #[test]
 fn no_home_yields_only_system_toolchain_dirs() {
     let g = resolve(None, &LocalGrantConfig::default());
-    assert!(g.read_write.is_empty());
+    assert_eq!(g.read_write, Vec::<PathBuf>::new());
     assert!(
         g.read_only
             .iter()
@@ -331,13 +331,13 @@ fn custom_host_floor_excludes_direct_and_ancestor_grants() {
         ..ProtectedPaths::default()
     };
     let grants = resolve_local_jail_grants(Some(home.path()), &config, &protected);
-    assert!(grants.read_only.is_empty());
+    assert_eq!(grants.read_only, Vec::<PathBuf>::new());
 }
 
 #[test]
 fn host_floor_matches_component_pairs_and_case_insensitive_components() {
     let home = fake_home();
-    fs::create_dir(home.path().join(".SSH")).unwrap();
+    fs::create_dir_all(home.path().join(".SSH")).unwrap();
     fs::write(home.path().join(".cargo/credentials.toml"), "secret").unwrap();
     let config = LocalGrantConfig {
         toolchain_homes: false,
@@ -345,7 +345,7 @@ fn host_floor_matches_component_pairs_and_case_insensitive_components() {
         ..LocalGrantConfig::default()
     };
     let grants = resolve(Some(home.path()), &config);
-    assert!(grants.read_only.is_empty());
+    assert_eq!(grants.read_only, Vec::<PathBuf>::new());
 }
 
 #[test]
@@ -356,7 +356,7 @@ fn extras_without_home_and_empty_values_are_skipped() {
         ..LocalGrantConfig::default()
     };
     let grants = resolve(None, &config);
-    assert!(grants.read_only.is_empty());
+    assert_eq!(grants.read_only, Vec::<PathBuf>::new());
 }
 
 #[test]
