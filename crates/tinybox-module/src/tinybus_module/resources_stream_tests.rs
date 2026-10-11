@@ -206,6 +206,7 @@ async fn a_panicked_job_is_joined_and_cleanup_failure_stays_owned_until_retry() 
             },
         },
         jail: None,
+        shell: None,
         journal,
         task: Mutex::new(Some(task)),
         collector: Collector::Host(Arc::new(tinybox_host::LimitedLocalHost::new(64)), None),
@@ -366,6 +367,7 @@ async fn remote_cleanup_failure_keeps_binary_output_and_owner_until_retry_ack() 
         },
         command,
         Collector::Host(host.clone(), None),
+        None,
         None,
     );
     assert!(stream.stop().await.is_err());
@@ -556,6 +558,7 @@ async fn confirmed_container_destroy_keeps_native_cleanup_retryable_without_dest
             tinybox_core::ExecRequest::new(["fixture"]),
             Collector::Sandbox(Arc::new(sandbox), entry.id.clone(), None),
             None,
+            None,
         ));
         resources
             .streams
@@ -615,5 +618,95 @@ async fn collector_drain_joins_its_owned_active_native_supervisor() -> Result<()
         matches!(completion, Poll::Pending),
         "collector drain must join its owned native supervisor"
     );
+    Ok(())
+}
+
+async fn shell_request(
+    resources: &Resources,
+    resource: &ResourceId,
+    state: &std::path::Path,
+    payload: &str,
+) -> Result<tinybox_bus::ShellExecRequest> {
+    Ok(tinybox_bus::ShellExecRequest {
+        process: resources
+            .reserve(ReserveRequest::Process(resource.clone()))
+            .await?,
+        resource: resource.clone(),
+        shell: tinybox_bus::SelectShellRequest {
+            command: payload.into(),
+            preserve_pipeline_status: false,
+        },
+        cwd: None,
+        extra_env: Default::default(),
+        state_dir: state.to_string_lossy().into_owned(),
+        timeout_ms: 5000,
+        stdin: None,
+        jail: None,
+    })
+}
+#[tokio::test]
+async fn native_shell_replay_uses_original_request_and_retains_scratch_until_release()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    let request = shell_request(&resources, &resource, state.path(), "echo owned").await?;
+    let process = resources.start_shell_exec(request.clone()).await?;
+    assert_eq!(resources.start_shell_exec(request.clone()).await?, process);
+    let mut changed = request;
+    changed.timeout_ms += 1;
+    assert!(resources.start_shell_exec(changed).await.is_err());
+    completed(&resources, &process).await?;
+    assert_eq!(
+        resources.read_output(&process, 0).await?.state,
+        ExecutionState::Exited(0)
+    );
+    let scratch = state.path().join("artifacts/sandbox-scratch");
+    assert_eq!(std::fs::read_dir(&scratch)?.count(), 1);
+    resources.release_output(&process).await?;
+    assert_eq!(std::fs::read_dir(&scratch)?.count(), 0);
+    resources.close(&resource).await?;
+    Ok(())
+}
+#[tokio::test]
+async fn native_shell_invalid_budget_does_not_consume_its_reservation()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    let mut request = shell_request(&resources, &resource, state.path(), "echo accepted").await?;
+    request.timeout_ms = 0;
+    assert!(resources.start_shell_exec(request.clone()).await.is_err());
+    request.timeout_ms = 5000;
+    let process = resources.start_shell_exec(request).await?;
+    completed(&resources, &process).await?;
+    resources.release_output(&process).await?;
+    resources.close(&resource).await?;
+    Ok(())
+}
+#[tokio::test]
+#[cfg(unix)]
+async fn native_shell_timeout_acknowledges_child_cleanup_before_output_release()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    let mut request = shell_request(
+        &resources,
+        &resource,
+        state.path(),
+        "echo partial; sleep 60",
+    )
+    .await?;
+    request.timeout_ms = 100;
+    let process = resources.start_shell_exec(request).await?;
+    completed(&resources, &process).await?;
+    let output = resources.read_output(&process, 0).await?;
+    assert_eq!(
+        output.state,
+        ExecutionState::Failed(ExecutionFailure::TimedOut)
+    );
+    resources.release_output(&process).await?;
+    resources.close(&resource).await?;
     Ok(())
 }
