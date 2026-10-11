@@ -225,7 +225,7 @@ impl StreamExecution {
         !self.journal.cleanup_acknowledged()
     }
     pub(super) fn cleanup_acknowledged(&self) -> bool {
-        self.journal.cleanup_acknowledged()
+        self.journal.cleanup_acknowledged() && !self.collector.pending()
     }
     pub(super) async fn stop(&self) -> Result<()> {
         self.journal.cancel();

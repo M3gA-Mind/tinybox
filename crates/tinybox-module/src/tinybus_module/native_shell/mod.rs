@@ -119,7 +119,8 @@ impl ShellContext {
         Ok(Arc::new(Self {
             request,
             environment,
-            _scratch: scratch,
+            scratch: std::sync::Mutex::new(Some(scratch)),
+            scratch_cleanup_failed: std::sync::atomic::AtomicBool::new(false),
             host,
         }))
     }
@@ -145,6 +146,12 @@ impl ShellContext {
         }
     }
     pub(super) fn pending(&self) -> bool {
+        if self
+            .scratch_cleanup_failed
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return true;
+        }
         match &self.host {
             ShellHost::Local(host) => host.has_pending_cleanup(),
             ShellHost::Jailed(host) => host.has_pending_cleanup(),
@@ -152,9 +159,28 @@ impl ShellContext {
     }
     pub(super) async fn drain(&self) -> tinybox_core::Result<()> {
         match &self.host {
-            ShellHost::Local(host) => host.drain_checked().await,
-            ShellHost::Jailed(host) => host.drain_checked().await,
+            ShellHost::Local(host) => host.drain_checked().await?,
+            ShellHost::Jailed(host) => host.drain_checked().await?,
         }
+        let mut scratch = self
+            .scratch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(directory) = scratch.as_ref() {
+            // Keep the TempDir and its path until deletion succeeds; close() consumes
+            // ownership even on failure and would make cleanup impossible to retry.
+            if let Err(error) = std::fs::remove_dir_all(directory.path())
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                self.scratch_cleanup_failed
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                return Err(tinybox_core::Error::io("remove shell scratch", &error));
+            }
+            scratch.take();
+        }
+        self.scratch_cleanup_failed
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
     }
 }
 fn invalid() -> tinybus::Error {

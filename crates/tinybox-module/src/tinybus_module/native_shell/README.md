@@ -9,3 +9,7 @@ unavailable enforcement.
 
 See [the contract](../../../../../docs/specs/native-shell-execution.md) and
 [its sequence](../../../../../docs/plans/native-shell-execution.md).
+
+Stream cleanup explicitly removes private scratch after draining the native
+collector. A deletion failure is returned to the caller and retains the context
+and scratch path for a later cleanup retry.

@@ -790,7 +790,9 @@ async fn failed_scratch_deletion_keeps_output_and_close_retryable()
     let process = resources.start_shell_exec(request).await?;
     completed(&resources, &process).await?;
     let scratch = std::fs::read_dir(state.path().join("artifacts/sandbox-scratch"))?
-        .next().ok_or("missing scratch")??.path();
+        .next()
+        .ok_or("missing scratch")??
+        .path();
     let retained = scratch.with_extension("retained");
     std::fs::rename(&scratch, &retained)?;
     std::fs::write(&scratch, "blocks directory removal")?;

@@ -1054,30 +1054,42 @@ async fn native_shell_selection_and_execution_roundtrip_through_the_bus_codec()
     let selection: tinybox_bus::ShellInvocation =
         proxy.call("SelectShell", (shell.clone(),)).await?;
     assert_eq!(selection, tinybox_host::select_shell(&shell));
-    let resource: tinybox_bus::ResourceId =
-        proxy.call("Reserve", (tinybox_bus::ReserveRequest::Resource,)).await?;
-    proxy.call::<tinybox_bus::ResourceInfo>("Create", (tinybox_bus::CreateRequest {
-        resource: resource.clone(),
-        backend: "passthrough".into(),
-        workspace: tinybox_bus::Workspace::Directory(".".into()),
-        ..Default::default()
-    },)).await?;
-    let process = proxy.call("Reserve", (
-        tinybox_bus::ReserveRequest::Process(resource.clone()),
-    )).await?;
-    let process: tinybox_bus::ProcessRef = proxy.call("StartShellExec", (
-        tinybox_bus::ShellExecRequest {
-            process,
-            resource: resource.clone(),
-            shell,
-            cwd: None,
-            extra_env: std::collections::BTreeMap::new(),
-            state_dir: state.path().to_str().ok_or("non-UTF8 state")?.into(),
-            timeout_ms: 5000,
-            stdin: None,
-            jail: None,
-        },
-    )).await?;
+    let resource: tinybox_bus::ResourceId = proxy
+        .call("Reserve", (tinybox_bus::ReserveRequest::Resource,))
+        .await?;
+    proxy
+        .call::<tinybox_bus::ResourceInfo>(
+            "Create",
+            (tinybox_bus::CreateRequest {
+                resource: resource.clone(),
+                backend: "passthrough".into(),
+                workspace: tinybox_bus::Workspace::Directory(".".into()),
+                ..Default::default()
+            },),
+        )
+        .await?;
+    let process = proxy
+        .call(
+            "Reserve",
+            (tinybox_bus::ReserveRequest::Process(resource.clone()),),
+        )
+        .await?;
+    let process: tinybox_bus::ProcessRef = proxy
+        .call(
+            "StartShellExec",
+            (tinybox_bus::ShellExecRequest {
+                process,
+                resource: resource.clone(),
+                shell,
+                cwd: None,
+                extra_env: std::collections::BTreeMap::new(),
+                state_dir: state.path().to_str().ok_or("non-UTF8 state")?.into(),
+                timeout_ms: 5000,
+                stdin: None,
+                jail: None,
+            },),
+        )
+        .await?;
     let output = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let batch: tinybox_bus::OutputBatch =
@@ -1087,12 +1099,23 @@ async fn native_shell_selection_and_execution_roundtrip_through_the_bus_codec()
             }
             tokio::task::yield_now().await;
         }
-    }).await??;
-    assert_eq!(output.state, tinybox_bus::ExecutionState::Exited { exit_code: 0 });
-    let bytes: Vec<u8> = output.chunks.iter().flat_map(|chunk| chunk.bytes.clone()).collect();
+    })
+    .await??;
+    assert_eq!(
+        output.state,
+        tinybox_bus::ExecutionState::Exited { exit_code: 0 }
+    );
+    let bytes: Vec<u8> = output
+        .chunks
+        .iter()
+        .flat_map(|chunk| chunk.bytes.clone())
+        .collect();
     assert_eq!(String::from_utf8_lossy(&bytes).trim(), "native");
     proxy.call::<()>("ReleaseOutput", (process,)).await?;
-    assert_eq!(std::fs::read_dir(state.path().join("artifacts/sandbox-scratch"))?.count(), 0);
+    assert_eq!(
+        std::fs::read_dir(state.path().join("artifacts/sandbox-scratch"))?.count(),
+        0
+    );
     proxy.call::<()>("Close", (resource,)).await?;
     Ok(())
 }
