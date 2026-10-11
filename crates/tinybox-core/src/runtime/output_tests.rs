@@ -32,6 +32,8 @@ async fn an_unimplemented_stream_does_not_execute_a_collected_fallback() {
         .await;
     assert!(matches!(result, Err(Error::UnsupportedStreaming { .. })));
     assert_eq!(host.0.load(Ordering::SeqCst), 0);
+    assert!(!host.has_pending_observed_cleanup());
+    assert_eq!(host.retry_observed_cleanup().await, Ok(()));
 }
 
 #[test]
