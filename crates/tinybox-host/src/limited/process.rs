@@ -444,3 +444,19 @@ pub(super) fn group_alive(_: i32) -> Result<bool> {
 #[cfg(test)]
 #[path = "process_tests.rs"]
 mod tests;
+
+#[cfg(unix)]
+fn kill_group_checked(
+    group: i32,
+    kill: impl FnOnce(i32) -> std::result::Result<(), nix::errno::Errno>,
+    _alive: impl FnOnce(i32) -> Result<bool>,
+) -> Result<()> {
+    kill_group_with(group, kill)
+}
+
+#[cfg(all(unix, any(test, not(target_os = "linux"))))]
+fn ps_has_live_group(table: &str, group: i32) -> bool {
+    table.lines().any(|line| {
+        line.split_whitespace().next().and_then(|value| value.parse::<i32>().ok()) == Some(group)
+    })
+}
