@@ -48,7 +48,13 @@ async fn supervisor_preserves_binary_pipes_stdin_and_exit_status() -> Result<()>
     let temporary = tempfile::tempdir().map_err(|error| Error::io("create fixture", &error))?;
     let token = format!("binary-fixture-{}", uuid::Uuid::new_v4().simple());
     let dir = reserve_fixture(&token).await?;
-    let cwd = temporary.path();
+    let real_workspace = temporary.path().join("real");
+    std::fs::create_dir(&real_workspace)
+        .map_err(|error| Error::io("create fixture workspace", &error))?;
+    let workspace = temporary.path().join("workspace");
+    std::os::unix::fs::symlink(&real_workspace, &workspace)
+        .map_err(|error| Error::io("link fixture workspace", &error))?;
+    let cwd = workspace.as_path();
     let mut child = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(SUPERVISOR)
