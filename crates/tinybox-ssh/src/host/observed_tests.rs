@@ -41,6 +41,10 @@ struct MockHost {
     inner_cleanup_pending: AtomicBool,
     fail_inner_retry: AtomicBool,
     inner_retry_calls: AtomicUsize,
+    fail_support_transport: AtomicBool,
+    fail_support_with_255: AtomicBool,
+    fail_prepare_transport: AtomicBool,
+    fail_cleanup_transport: AtomicBool,
 }
 
 impl MockHost {
@@ -69,19 +73,32 @@ impl Host for MockHost {
         self.record(request);
         let remote = request.argv.last().map(String::as_str).unwrap_or_default();
         if remote == "command -v setsid >/dev/null 2>&1" {
+            if self.fail_support_transport.load(Ordering::SeqCst) {
+                return Err(fixture_error("probe SSH transport"));
+            }
             return Ok(ExecOutput::new(
-                i32::from(self.no_process_groups.load(Ordering::SeqCst)),
+                if self.fail_support_with_255.load(Ordering::SeqCst) {
+                    255
+                } else {
+                    i32::from(self.no_process_groups.load(Ordering::SeqCst))
+                },
                 Vec::new(),
                 Vec::new(),
             ));
         }
         if remote.starts_with("umask 077") {
+            if self.fail_prepare_transport.load(Ordering::SeqCst) {
+                return Err(fixture_error("prepare remote cleanup reservation"));
+            }
             if self.fail_prepare.load(Ordering::SeqCst) {
                 return Ok(ExecOutput::new(1, b"not-ready\n".to_vec(), Vec::new()));
             }
             return Ok(ExecOutput::new(0, b"ready\n".to_vec(), Vec::new()));
         }
         if remote.starts_with("dir=") {
+            if self.fail_cleanup_transport.load(Ordering::SeqCst) {
+                return Err(fixture_error("acknowledge remote cleanup"));
+            }
             let remaining = self.fail_cleanup.load(Ordering::SeqCst);
             if remaining > 0
                 && self
@@ -560,6 +577,95 @@ async fn empty_command_is_rejected_before_remote_probes() -> Result<()> {
         Err(Error::EmptyCommand { .. })
     ));
     assert!(inner.requests().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn support_probe_transport_failures_are_reported_before_reservation() -> Result<()> {
+    for inner in [
+        Arc::new(MockHost {
+            fail_support_transport: AtomicBool::new(true),
+            ..MockHost::default()
+        }),
+        Arc::new(MockHost {
+            fail_support_with_255: AtomicBool::new(true),
+            ..MockHost::default()
+        }),
+    ] {
+        let host = SshHost::new(inner.clone(), SshTarget::new("builder")?);
+        assert!(matches!(
+            host.run_observed(
+                &ExecRequest::new(["echo", "safe"]),
+                Arc::new(CollectingObserver::default())
+            )
+            .await,
+            Err(Error::Backend { .. })
+        ));
+        assert_eq!(inner.requests().len(), 1);
+        assert!(!host.has_pending_observed_cleanup());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn prepare_transport_error_is_returned_after_successful_reservation_cleanup() -> Result<()> {
+    let inner = Arc::new(MockHost {
+        fail_prepare_transport: AtomicBool::new(true),
+        ..MockHost::default()
+    });
+    let host = SshHost::new(inner.clone(), SshTarget::new("builder")?);
+
+    assert!(matches!(
+        host.run_observed(
+            &ExecRequest::new(["echo", "safe"]),
+            Arc::new(CollectingObserver::default())
+        )
+        .await,
+        Err(Error::Backend { .. })
+    ));
+    assert!(inner.requests().iter().any(is_cleanup_request));
+    assert!(!host.has_pending_observed_cleanup());
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_reservation_response_is_cleaned_before_returning() -> Result<()> {
+    let inner = Arc::new(MockHost {
+        fail_prepare: AtomicBool::new(true),
+        ..MockHost::default()
+    });
+    let host = SshHost::new(inner.clone(), SshTarget::new("builder")?);
+
+    assert!(matches!(
+        host.run_observed(
+            &ExecRequest::new(["echo", "safe"]),
+            Arc::new(CollectingObserver::default())
+        )
+        .await,
+        Err(Error::Backend {
+            operation: "reserve remote execution cleanup",
+            ..
+        })
+    ));
+    assert!(inner.requests().iter().any(is_cleanup_request));
+    assert!(!host.has_pending_observed_cleanup());
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_remote_command_request_releases_its_reservation() -> Result<()> {
+    let inner = Arc::new(MockHost::default());
+    let host = SshHost::new(inner.clone(), SshTarget::new("builder")?);
+
+    assert!(matches!(
+        host.run_observed_owned(
+            &ExecRequest::new(std::iter::empty::<&str>()),
+            Arc::new(CollectingObserver::default())
+        )
+        .await,
+        Err(Error::EmptyCommand { .. })
+    ));
+    assert!(!host.has_pending_observed_cleanup());
     Ok(())
 }
 
