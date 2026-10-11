@@ -460,7 +460,7 @@ async fn permission_error_after_group_exit_is_successful_cleanup() -> Result<()>
 #[tokio::test]
 async fn stalled_process_table_probe_is_killed_and_reaped_at_its_deadline() -> Result<()> {
     let mut child = Command::new("sleep")
-        .arg("0.05")
+        .arg("600")
         .kill_on_drop(true)
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -477,5 +477,35 @@ async fn stalled_process_table_probe_is_killed_and_reaped_at_its_deadline() -> R
         child.id().is_none(),
         "expired probe must be killed and reaped"
     );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn process_table_probe_collects_output_and_rejects_missing_pipe() -> Result<()> {
+    let mut child = Command::new("sh")
+        .args(["-c", "printf '42 S\\n'"])
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| Error::io("spawn probe fixture", &error))?;
+    let output = process_table_output(&mut child, std::time::Duration::from_secs(5)).await?;
+    assert!(output.status.success());
+    assert!(ps_has_live_group(
+        &String::from_utf8_lossy(&output.stdout),
+        42
+    ));
+    let mut child = Command::new("true")
+        .spawn()
+        .map_err(|error| Error::io("spawn probe fixture", &error))?;
+    assert!(
+        process_table_output(&mut child, std::time::Duration::from_secs(5))
+            .await
+            .is_err()
+    );
+    child
+        .wait()
+        .await
+        .map_err(|error| Error::io("reap probe fixture", &error))?;
     Ok(())
 }

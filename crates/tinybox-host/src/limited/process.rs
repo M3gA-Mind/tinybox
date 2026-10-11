@@ -401,6 +401,7 @@ where
 
 #[cfg(target_os = "linux")]
 pub(super) async fn group_alive(group: i32) -> Result<bool> {
+    tokio::task::yield_now().await;
     for entry in
         std::fs::read_dir("/proc").map_err(|error| Error::io("read process table", &error))?
     {
@@ -497,7 +498,7 @@ fn ps_has_live_group(table: &str, group: i32) -> bool {
 #[cfg(all(unix, any(test, not(target_os = "linux"))))]
 async fn process_table_output(
     child: &mut Child,
-    _deadline: std::time::Duration,
+    deadline: std::time::Duration,
 ) -> Result<std::process::Output> {
     use tokio::io::AsyncReadExt;
     let mut stdout = child.stdout.take().ok_or_else(|| Error::Backend {
@@ -506,8 +507,21 @@ async fn process_table_output(
         message: "missing process table output".into(),
     })?;
     let mut bytes = Vec::new();
-    let (status, _) = tokio::try_join!(child.wait(), stdout.read_to_end(&mut bytes))
-        .map_err(|error| Error::io("read process table", &error))?;
+    let work = async { tokio::try_join!(child.wait(), stdout.read_to_end(&mut bytes)) };
+    let (status, _) = match tokio::time::timeout(deadline, work).await {
+        Ok(result) => result.map_err(|error| Error::io("read process table", &error))?,
+        Err(_) => {
+            child
+                .kill()
+                .await
+                .map_err(|error| Error::io("kill process table probe", &error))?;
+            return Err(Error::Backend {
+                sandbox: crate::LOCAL.into(),
+                operation: "read process table",
+                message: "cleanup deadline exceeded".into(),
+            });
+        }
+    };
     Ok(std::process::Output {
         status,
         stdout: bytes,
