@@ -10,6 +10,39 @@ use tinybox_docker::DockerCli;
 
 use super::*;
 
+/// Publish a fake CLI and wait out write handles inherited by concurrent forks.
+fn write_cli_fixture(path: &Path, script: impl AsRef<str>) -> std::io::Result<()> {
+    let script = script.as_ref().replacen(
+        "#!/bin/sh\n",
+        "#!/bin/sh\n[ \"$1\" = --tinybox-probe ] && exit 0\n",
+        1,
+    );
+    std::fs::write(path, script)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+    // Another test can fork while the writer is open. Its inherited handle
+    // keeps this script text busy until that child execs. The probe records
+    // nothing and retries only that OS error, preserving real spawn failures.
+    for attempt in 0..200 {
+        match std::process::Command::new(path)
+            .arg("--tinybox-probe")
+            .status()
+        {
+            Err(error) if error.raw_os_error() == Some(26) && attempt < 199 => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            result => {
+                let status = result?;
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::other("fake Docker CLI probe failed"))
+                };
+            }
+        }
+    }
+    Err(std::io::Error::other("fake Docker CLI remained busy"))
+}
+
 fn canonical(path: &Path) -> std::io::Result<String> {
     path.canonicalize().map(|path| path.display().to_string())
 }
@@ -25,16 +58,13 @@ async fn docker_status_uses_the_module_owned_cli_probe()
     let temp = tempfile::tempdir()?;
     let calls = temp.path().join("calls");
     let script_path = temp.path().join("docker");
-    std::fs::write(
+    write_cli_fixture(
         &script_path,
         format!(
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n[ \"$1\" = info ] && exit 0\nexit 1\n",
             calls.display()
         ),
     )?;
-    let mut permissions = std::fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&script_path, permissions)?;
 
     let status = status_with_cli(
         &DockerCli::with_program(&script_path),
@@ -55,10 +85,7 @@ async fn docker_status_reports_an_unavailable_daemon_without_failing_the_probe()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
     let script_path = temp.path().join("docker");
-    std::fs::write(&script_path, "#!/bin/sh\nexit 1\n")?;
-    let mut permissions = std::fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&script_path, permissions)?;
+    write_cli_fixture(&script_path, "#!/bin/sh\nexit 1\n")?;
 
     let status = status_with_cli(
         &DockerCli::with_program(&script_path),
@@ -76,16 +103,13 @@ async fn docker_cleanup_only_kills_ids_returned_for_the_requested_label()
     let temp = tempfile::tempdir()?;
     let calls = temp.path().join("calls");
     let script_path = temp.path().join("docker");
-    std::fs::write(
+    write_cli_fixture(
         &script_path,
         format!(
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nif [ \"$1\" = ps ]; then printf 'box-a\\nbox-b\\n'; exit 0; fi\n[ \"$1\" = kill ] && exit 0\nexit 1\n",
             calls.display()
         ),
     )?;
-    let mut permissions = std::fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&script_path, permissions)?;
 
     let result = cleanup_with_cli(
         &DockerCli::with_program(&script_path),
@@ -109,13 +133,10 @@ async fn docker_cleanup_reports_failed_kill_instead_of_claiming_stopped()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
     let script_path = temp.path().join("docker");
-    std::fs::write(
+    write_cli_fixture(
         &script_path,
         "#!/bin/sh\n[ \"$1\" = ps ] && { printf 'box-a\\n'; exit 0; }\n[ \"$1\" = kill ] && exit 1\nexit 2\n",
     )?;
-    let mut permissions = std::fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&script_path, permissions)?;
 
     let Err(error) = cleanup_with_cli(
         &DockerCli::with_program(&script_path),
@@ -141,16 +162,13 @@ async fn docker_cleanup_does_not_kill_ids_from_a_failed_listing()
     let temp = tempfile::tempdir()?;
     let calls = temp.path().join("calls");
     let script_path = temp.path().join("docker");
-    std::fs::write(
+    write_cli_fixture(
         &script_path,
         format!(
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n[ \"$1\" = ps ] && {{ printf 'box-a\\n'; exit 1; }}\nexit 0\n",
             calls.display()
         ),
     )?;
-    let mut permissions = std::fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&script_path, permissions)?;
 
     let Err(error) = cleanup_with_cli(
         &DockerCli::with_program(&script_path),
@@ -180,16 +198,13 @@ async fn docker_cleanup_with_no_matching_containers_does_not_kill()
     let temp = tempfile::tempdir()?;
     let calls = temp.path().join("calls");
     let script_path = temp.path().join("docker");
-    std::fs::write(
+    write_cli_fixture(
         &script_path,
         format!(
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n[ \"$1\" = ps ] && exit 0\nexit 2\n",
             calls.display()
         ),
     )?;
-    let mut permissions = std::fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&script_path, permissions)?;
 
     let result = cleanup_with_cli(
         &DockerCli::with_program(&script_path),
@@ -214,16 +229,13 @@ async fn docker_control_rejects_invalid_deadline_and_label_before_cli_call()
     let temp = tempfile::tempdir()?;
     let calls = temp.path().join("calls");
     let script_path = temp.path().join("docker");
-    std::fs::write(
+    write_cli_fixture(
         &script_path,
         format!(
             "#!/bin/sh\nprintf called >> '{}'\nexit 0\n",
             calls.display()
         ),
     )?;
-    let mut permissions = std::fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&script_path, permissions)?;
     let cli = DockerCli::with_program(&script_path);
 
     let Err(error) = status_with_cli(&cli, DockerStatusRequest { timeout_ms: 0 }).await else {
@@ -269,7 +281,7 @@ async fn run_docker_preserves_one_shot_settings_output_and_timeout()
     std::fs::create_dir_all(&readonly)?;
     let argv_file = temp.path().join("argv.bin");
     let script_path = temp.path().join("docker");
-    std::fs::write(
+    write_cli_fixture(
         &script_path,
         format!(
             "#!/bin/sh\n: > '{}'\nfor a in \"$@\"; do printf '%s\\0' \"$a\" >> '{}'; done\nprintf out\nprintf err >&2\nexit 3\n",
@@ -277,9 +289,6 @@ async fn run_docker_preserves_one_shot_settings_output_and_timeout()
             argv_file.display(),
         ),
     )?;
-    let mut permissions = std::fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&script_path, permissions)?;
 
     let request = DockerRunRequest {
         workspace: workspace.display().to_string(),
@@ -335,7 +344,7 @@ async fn run_without_workspace_preserves_docker_settings_without_host_mounts()
     let temp = tempfile::tempdir()?;
     let argv_file = temp.path().join("argv.bin");
     let script_path = temp.path().join("docker");
-    std::fs::write(
+    write_cli_fixture(
         &script_path,
         format!(
             "#!/bin/sh\n: > '{}'\nfor a in \"$@\"; do printf '%s\\0' \"$a\" >> '{}'; done\nprintf out\nprintf err >&2\nexit 0\n",
@@ -343,9 +352,6 @@ async fn run_without_workspace_preserves_docker_settings_without_host_mounts()
             argv_file.display(),
         ),
     )?;
-    let mut permissions = std::fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&script_path, permissions)?;
 
     let request = DockerRunRequest {
         workspace: String::new(),
