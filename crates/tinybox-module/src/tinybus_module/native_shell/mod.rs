@@ -175,8 +175,7 @@ impl ShellContext {
         let scratch = self.scratch.clone();
         let failed = self.scratch_cleanup_failed.clone();
         tokio::task::spawn_blocking(move || {
-            let mut scratch = self
-                .scratch
+            let mut scratch = scratch
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(directory) = scratch.as_ref() {
