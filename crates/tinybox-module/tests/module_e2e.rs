@@ -279,6 +279,7 @@ async fn compiled_module_streams_docker_output_and_acknowledges_container_cancel
     verify_docker_rejects_local_jail(&proxy, &resource).await?;
     verify_live_output(&proxy, &resource).await?;
     verify_binary_stdin(&proxy, &resource).await?;
+    verify_cancellation_is_scoped(&proxy, &resource).await?;
     proxy.call::<()>("Close", (resource,)).await?;
     wait_until_idle(&modules).await?;
     broker_task.abort();
@@ -703,5 +704,67 @@ async fn verify_docker_rejects_local_jail(
     let process: ProcessRef = proxy.call("StartExec", (request,)).await?;
     proxy.call::<()>("Cancel", (process.clone(),)).await?;
     proxy.call::<()>("ReleaseOutput", (process,)).await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn verify_cancellation_is_scoped(
+    proxy: &tinybus::Proxy,
+    resource: &ResourceId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tinybox_bus::{ExecRequest, ExecutionState, OutputBatch, ProcessRef, SpawnRequest};
+    let mut processes = Vec::new();
+    for _ in 0..2 {
+        let process: ResourceId = proxy
+            .call("Reserve", (ReserveRequest::Process(resource.clone()),))
+            .await?;
+        let process: ProcessRef = proxy
+            .call(
+                "StartExec",
+                (SpawnRequest {
+                    process,
+                    command: ExecRequest {
+                        resource: resource.clone(),
+                        argv: vec![
+                            "/bin/sh".into(),
+                            "-c".into(),
+                            "printf ready; exec sleep 600".into(),
+                        ],
+                        cwd: None,
+                        env: std::collections::BTreeMap::default(),
+                        stdin: None,
+                    },
+                },),
+            )
+            .await?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let batch: OutputBatch = proxy.call("ReadOutput", (process.clone(), 0_u64)).await?;
+                if !batch.chunks.is_empty() {
+                    assert_eq!(batch.state, ExecutionState::Running);
+                    return Ok::<_, tinybus::Error>(());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+        processes.push(process);
+    }
+    proxy.call::<()>("Cancel", (processes[0].clone(),)).await?;
+    let other: OutputBatch = proxy
+        .call("ReadOutput", (processes[1].clone(), 0_u64))
+        .await?;
+    assert_eq!(other.state, ExecutionState::Running);
+    assert!(
+        proxy
+            .call::<bool>("IsRunning", (processes[1].clone(),))
+            .await?
+    );
+    for process in processes {
+        proxy.call::<()>("Cancel", (process.clone(),)).await?;
+        let batch: OutputBatch = proxy.call("ReadOutput", (process.clone(), 0_u64)).await?;
+        assert_eq!(batch.state, ExecutionState::Cancelled);
+        proxy.call::<()>("ReleaseOutput", (process,)).await?;
+    }
     Ok(())
 }
