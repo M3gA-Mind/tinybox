@@ -102,7 +102,7 @@ fn prepare_command(jail: &Jail, cmd: &Command, launcher: &std::ffi::OsStr) -> Co
         .get_envs()
         .map(|(k, v)| (k.to_os_string(), v.map(std::ffi::OsStr::to_os_string)))
         .collect();
-    let cwd = cmd.get_current_dir().map(std::path::Path::to_path_buf);
+    let working_directory = cmd.get_current_dir().map(std::path::Path::to_path_buf);
 
     let mut wrapper = Command::new(launcher);
     // Fail closed for environment authority: never restore values that an
@@ -119,7 +119,7 @@ fn prepare_command(jail: &Jail, cmd: &Command, launcher: &std::ffi::OsStr) -> Co
             }
         }
     }
-    if let Some(d) = cwd {
+    if let Some(d) = working_directory {
         wrapper.current_dir(d);
     }
     // Inherit stdio from the original command intent. `std::process`

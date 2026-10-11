@@ -25,6 +25,43 @@ async fn backends_without_published_ports_report_an_empty_fact_list() -> Result<
     Ok(())
 }
 
+#[tokio::test]
+async fn sandboxes_without_observed_cleanup_report_no_pending_work() -> Result<()> {
+    let sandbox = FakeSandbox::new(SandboxCapabilities::PASSTHROUGH);
+
+    assert!(!sandbox.has_pending_observed_cleanup());
+    sandbox.retry_observed_cleanup().await?;
+    sandbox.acknowledge_observed_cleanup_for_destroyed_box(&BoxId::new("box-0")?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_sandbox_without_observed_execution_refuses_without_collected_fallback() -> Result<()> {
+    #[derive(Debug)]
+    struct Observer;
+    #[async_trait]
+    impl super::ExecutionObserver for Observer {
+        fn output(&self, _stream: super::OutputStream, _bytes: &[u8]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    let sandbox = FakeSandbox::new(CONTAINER);
+    let info = sandbox.create(&spec()?).await?;
+    let result = sandbox
+        .exec_observed(
+            &info.id,
+            &ExecRequest::new(["true"]),
+            std::sync::Arc::new(Observer),
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(Error::UnsupportedStreaming { provider }) if provider == "fake"
+    ));
+    Ok(())
+}
+
 /// An in-memory sandbox whose capabilities are set per test.
 #[derive(Debug)]
 struct FakeSandbox {

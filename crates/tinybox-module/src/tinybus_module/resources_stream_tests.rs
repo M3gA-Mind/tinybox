@@ -205,9 +205,10 @@ async fn a_panicked_job_is_joined_and_cleanup_failure_stays_owned_until_retry() 
                 stdin: None,
             },
         },
+        jail: None,
         journal,
         task: Mutex::new(Some(task)),
-        collector: Arc::new(tinybox_host::LimitedLocalHost::new(64)),
+        collector: Collector::Host(Arc::new(tinybox_host::LimitedLocalHost::new(64)), None),
     };
     assert!(stream.running());
     stream.stop().await?;
@@ -268,5 +269,168 @@ async fn concurrent_lost_reply_retries_reuse_the_same_execution_instead_of_consu
     completed(&resources, &first).await?;
     resources.release_output(&first).await?;
     resources.close(&resource).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn jailed_start_rejects_missing_grants_without_consuming_reservation() -> Result<()> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let pending = request(&resources, &resource, true_command()).await?;
+    let config = tinybox_bus::NativeJailConfig {
+        read_only: vec!["/tinybox-nonexistent-grant-fixture".into()],
+        read_write: vec![],
+        allow_net: true,
+        allow_subprocess: true,
+        enforcement: tinybox_bus::JailEnforcement::Declared,
+        require_process_isolation: false,
+    };
+    assert!(
+        resources
+            .start_jailed_exec(pending.clone(), config)
+            .await
+            .is_err()
+    );
+    let process = resources.start_exec(pending).await?;
+    completed(&resources, &process).await?;
+    resources.close(&resource).await
+}
+
+#[derive(Debug)]
+struct RemoteObservedFixture {
+    pending: std::sync::atomic::AtomicBool,
+    reject_retry: std::sync::atomic::AtomicBool,
+    collected_calls: std::sync::atomic::AtomicUsize,
+}
+#[async_trait::async_trait]
+impl tinybox_core::Host for RemoteObservedFixture {
+    fn name(&self) -> &'static str {
+        "ssh"
+    }
+    async fn run(
+        &self,
+        _: &tinybox_core::ExecRequest,
+    ) -> tinybox_core::Result<tinybox_core::ExecOutput> {
+        self.collected_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(tinybox_core::Error::UnsupportedStreaming {
+            provider: "fixture".into(),
+        })
+    }
+    async fn run_observed(
+        &self,
+        _: &tinybox_core::ExecRequest,
+        observer: Arc<dyn tinybox_core::ExecutionObserver>,
+    ) -> tinybox_core::Result<tinybox_core::ExecOutput> {
+        observer.output(tinybox_core::OutputStream::Stdout, &[255, 0])?;
+        self.pending
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Err(tinybox_core::Error::ObservedCleanupPending {
+            provider: "fixture".into(),
+        })
+    }
+    fn has_pending_observed_cleanup(&self) -> bool {
+        self.pending.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    async fn retry_observed_cleanup(&self) -> tinybox_core::Result<()> {
+        if self.reject_retry.load(std::sync::atomic::Ordering::SeqCst) {
+            Err(tinybox_core::Error::ObservedCleanupPending {
+                provider: "fixture".into(),
+            })
+        } else {
+            self.pending
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+}
+#[tokio::test]
+async fn remote_cleanup_failure_keeps_binary_output_and_owner_until_retry_ack() -> Result<()> {
+    let host = Arc::new(RemoteObservedFixture {
+        pending: std::sync::atomic::AtomicBool::new(false),
+        reject_retry: std::sync::atomic::AtomicBool::new(true),
+        collected_calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let resource = ResourceId("fixture-resource".into());
+    let command = tinybox_core::ExecRequest::new(["fixture"]);
+    let stream = StreamExecution::start(
+        SpawnRequest {
+            process: ResourceId("fixture-process".into()),
+            command: ExecRequest {
+                resource,
+                argv: vec!["fixture".into()],
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+                stdin: None,
+            },
+        },
+        command,
+        Collector::Host(host.clone(), None),
+        None,
+    );
+    assert!(stream.stop().await.is_err());
+    assert!(stream.running());
+    let batch = stream
+        .journal
+        .read(0)
+        .map_err(|_| tinybus::Error::failed("fixture read failed"))?;
+    assert_eq!(
+        batch.state,
+        ExecutionState::Failed {
+            code: ExecutionFailure::CleanupFailed
+        }
+    );
+    assert_eq!(batch.chunks[0].bytes, [255, 0]);
+    host.reject_retry
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    stream.stop().await?;
+    assert!(!stream.running());
+    assert!(stream.cleanup_acknowledged());
+    assert_eq!(
+        host.collected_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn collector_drain_joins_its_owned_active_native_supervisor() -> Result<()> {
+    use std::future::Future;
+    use std::task::Poll;
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let request = request(
+        &resources,
+        &resource,
+        vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf ready; exec /bin/sleep 600".into(),
+        ],
+    )
+    .await?;
+    let process = resources.start_exec(request).await?;
+    loop {
+        if !resources.read_output(&process, 0).await?.chunks.is_empty() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    let stream = resources
+        .stream(&process)?
+        .ok_or_else(|| Error::failed("missing fixture stream"))?;
+    let mut drain = Box::pin(stream.collector.drain());
+    let completion =
+        std::future::poll_fn(|context| Poll::Ready(drain.as_mut().poll(context))).await;
+    drop(drain);
+    resources.cancel(&process).await?;
+    resources.release_output(&process).await?;
+    resources.close(&resource).await?;
+    assert!(
+        matches!(completion, Poll::Pending),
+        "collector drain must join its owned native supervisor"
+    );
     Ok(())
 }

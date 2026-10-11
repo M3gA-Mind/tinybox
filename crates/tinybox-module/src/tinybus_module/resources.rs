@@ -25,6 +25,7 @@ mod stream;
 
 struct Resource {
     host: Arc<dyn Host>,
+    host_config: HostConfig,
     native_host: bool,
     sandbox: Arc<dyn Sandbox>,
     id: BoxId,
@@ -298,6 +299,7 @@ impl Resources {
                     {
                         *slot_guard = Some(Resource {
                             host: resource_host,
+                            host_config: request.host.clone(),
                             native_host,
                             sandbox,
                             id: info.id,
@@ -319,6 +321,7 @@ impl Resources {
             let execution_supported = supports_execution(platform, &request.backend);
             *slot_guard = Some(Resource {
                 host: resource_host,
+                host_config: request.host.clone(),
                 native_host,
                 sandbox: sandbox.clone(),
                 id: info.id.clone(),
@@ -1590,7 +1593,7 @@ fn configured_host(config: &HostConfig, local: Arc<dyn Host>) -> Result<Arc<dyn 
     }
 }
 
-fn failure(name: &str, message: &str) -> Error {
+pub(super) fn failure(name: &str, message: &str) -> Error {
     Error::MethodFailed {
         name: name.into(),
         message: message.into(),

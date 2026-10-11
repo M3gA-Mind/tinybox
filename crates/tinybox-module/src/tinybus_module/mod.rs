@@ -16,6 +16,7 @@ use tinybox_bus::{
     ShellAnalysis, SpawnRequest, WriteFileChunkRequest,
 };
 
+mod native_jail;
 mod output;
 mod resources;
 
@@ -50,27 +51,17 @@ struct BoxService {
 #[tinybus::interface(name = "ai.tinyhumans.tinybox.Box")]
 impl BoxService {
     /// Return detailed generic shell facts for caller-owned execution policy.
-    #[expect(clippy::unused_async, reason = "TinyBus methods are asynchronous")]
-    #[expect(
-        clippy::unused_async_trait_impl,
-        reason = "TinyBus methods are asynchronous"
-    )]
     async fn analyze_command(
         &self,
         command: String,
     ) -> TinyBusResult<tinybox_bus::CommandAnalysis> {
-        Ok(tinybox_core::shell::analysis::analyze_command(&command))
+        std::future::ready(Ok(tinybox_core::shell::analysis::analyze_command(&command))).await
     }
     /// Report native jail enforcement facts without starting a workload.
-    #[expect(clippy::unused_async, reason = "TinyBus methods are asynchronous")]
-    #[expect(
-        clippy::unused_async_trait_impl,
-        reason = "TinyBus methods are asynchronous"
-    )]
     async fn jail_status(&self) -> TinyBusResult<tinybox_bus::JailStatus> {
         let backend = tinybox_jail::default_backend();
         let support = backend.constraint_support();
-        Ok(tinybox_bus::JailStatus {
+        std::future::ready(Ok(tinybox_bus::JailStatus {
             backend: backend.name().into(),
             available: backend.is_available(),
             isolation: backend.isolation().to_string(),
@@ -84,7 +75,8 @@ impl BoxService {
             subprocess: support
                 .enforcement(tinybox_core::Constraint::Subprocess)
                 .to_string(),
-        })
+        }))
+        .await
     }
     /// Terminal barrier: freeze startup and join native resource cleanup before ABI unload.
     async fn shutdown(&self) -> TinyBusResult<()> {
@@ -154,16 +146,8 @@ impl BoxService {
         self.resources.abort_file_write(request).await
     }
     /// Report which operations own native cleanup on this platform.
-    #[expect(
-        clippy::unused_async,
-        reason = "TinyBus exposes every interface method as an async operation"
-    )]
-    #[expect(
-        clippy::unused_async_trait_impl,
-        reason = "TinyBus exposes every interface method as an async operation"
-    )]
     async fn capabilities(&self) -> TinyBusResult<tinybox_bus::ModuleCapabilities> {
-        Ok(capabilities_for(Platform::current()))
+        std::future::ready(Ok(capabilities_for(Platform::current()))).await
     }
     /// Mint a single-use startup reservation, without starting native work.
     async fn reserve(&self, request: tinybox_bus::ReserveRequest) -> TinyBusResult<ResourceId> {
@@ -210,6 +194,18 @@ impl BoxService {
         ))
         .await
     }
+    /// Start an execution in the resource's native directory jail.
+    async fn start_jailed_exec(
+        &self,
+        request: SpawnRequest,
+        config: tinybox_bus::NativeJailConfig,
+    ) -> TinyBusResult<ProcessRef> {
+        let resources = self.resources.clone();
+        finish_operation(tokio::spawn(async move {
+            resources.start_jailed_exec(request, config).await
+        }))
+        .await
+    }
     /// Read a replayable output batch beginning at the supplied sequence.
     async fn read_output(
         &self,
@@ -238,23 +234,16 @@ impl BoxService {
     }
 
     /// Return shell structure facts without applying host security policy.
-    #[expect(
-        clippy::unused_async,
-        reason = "TinyBus exposes every interface method as an async operation"
-    )]
-    #[expect(
-        clippy::unused_async_trait_impl,
-        reason = "TinyBus exposes every interface method as an async operation"
-    )]
     async fn analyze_shell(&self, command: String) -> TinyBusResult<ShellAnalysis> {
         use tinybox_core::shell::{classify, scan};
         let stripped = scan::strip_quoted_heredoc_bodies(&command);
         let structural = scan::strip_heredoc_bodies(&command);
-        Ok(ShellAnalysis {
+        std::future::ready(Ok(ShellAnalysis {
             segments: scan::split_unquoted_segments(&stripped),
             hidden_execution: classify::has_hidden_execution(&command),
             redirection: scan::contains_unquoted_char(&structural, '>'),
-        })
+        }))
+        .await
     }
 
     /// Report what this build of tinybox can do.
@@ -262,16 +251,8 @@ impl BoxService {
     /// Returns the crate version followed by the sandboxes registered in this
     /// build, so a caller can tell whether the backend it needs is present
     /// before it tries to create a box.
-    #[expect(
-        clippy::unused_async,
-        reason = "TinyBus exposes every interface method as an async operation"
-    )]
-    #[expect(
-        clippy::unused_async_trait_impl,
-        reason = "TinyBus exposes every interface method as an async operation"
-    )]
     async fn describe(&self) -> TinyBusResult<String> {
-        Ok(describe(&registered_sandboxes()))
+        std::future::ready(Ok(describe(&registered_sandboxes()))).await
     }
 }
 
@@ -407,7 +388,7 @@ tinybus_module::module_export_optional_static! {
     setup = setup,
     worker_threads = 1,
     provides = ["ai.tinyhumans.tinybox.Box"],
-    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput"],
+    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput", "StartJailedExec"],
     signals = [],
     requires = [],
     optional = [],

@@ -224,7 +224,9 @@ async fn retained_jail_cleanup_retries_and_releases_native_child()
     );
     assert!(retained.is_err());
     assert!(host.has_pending_cleanup());
-    host.drain_checked().await?;
+    assert!(host.has_pending_observed_cleanup());
+    host.retry_observed_cleanup().await?;
+    assert!(!host.has_pending_observed_cleanup());
     assert!(!host.has_pending_cleanup());
     #[cfg(target_os = "linux")]
     assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
@@ -492,5 +494,25 @@ async fn observed_jail_cancellation_joins_native_supervisor()
     assert!(outcome.is_err());
     assert_eq!(host.state.active.load(Ordering::SeqCst), 0);
     assert!(!host.has_pending_cleanup());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cleanup_retry_does_not_wait_for_or_cancel_an_active_jailed_execution()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let host = JailLocalHost::with_backend(
+        tinybox_jail::Jail::new(root.path(), "active retry fixture"),
+        Arc::new(FixtureBackend),
+        64,
+    )?;
+    let (completed, still_running) =
+        super::super::observed_tests::retry_during_active_execution(Arc::new(host.clone())).await?;
+    host.drain_checked().await?;
+    assert!(completed, "cleanup retry must not join active executions");
+    assert!(
+        still_running,
+        "cleanup retry must leave the active execution alone"
+    );
     Ok(())
 }
