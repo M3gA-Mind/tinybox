@@ -22,3 +22,7 @@ Stream admission snapshots shell inputs under the resource lock, releases it
 before preparation, and rechecks resource ownership after preparation. Close
 and Shutdown can finish while preparation is stalled; late completion cannot
 publish an execution for a closed resource.
+
+A prepared shell that loses admission is explicitly disposed on the blocking
+pool. Failed deletion retains its context in the resource registry; a later
+Close (including for an already closed resource) or Shutdown retries cleanup.

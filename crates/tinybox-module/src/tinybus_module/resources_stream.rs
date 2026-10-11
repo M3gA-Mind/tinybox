@@ -493,64 +493,110 @@ impl Resources {
         // Preparation owns its snapshot; Close must not wait for filesystem I/O.
         drop(guard);
         let collector = prepare(collector).await?;
-        let guard = slot.lock().await;
-        let entry = guard
-            .as_ref()
-            .ok_or_else(|| failure(tinybox_bus::UNKNOWN_RESOURCE, "closed resource"))?;
-        let mut state = self.state.lock().await;
-        let executions = self
-            .executions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        check_resource_open(&state, &executions, &process.resource)?;
-        let mut streams = self
-            .streams
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(existing) = streams.get(&process.process) {
-            existing.check_replay(
-                &request,
-                jail.as_ref(),
-                shell.as_ref(),
-                platform_shell.as_ref(),
+        let admitted = async {
+            let guard = slot.lock().await;
+            let entry = guard
+                .as_ref()
+                .ok_or_else(|| failure(tinybox_bus::UNKNOWN_RESOURCE, "closed resource"))?;
+            let mut state = self.state.lock().await;
+            let executions = self
+                .executions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            check_resource_open(&state, &executions, &process.resource)?;
+            let mut streams = self
+                .streams
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(existing) = streams.get(&process.process) {
+                existing.check_replay(
+                    &request,
+                    jail.as_ref(),
+                    shell.as_ref(),
+                    platform_shell.as_ref(),
+                )?;
+                return Ok(false);
+            }
+            if entry.processes.len()
+                + streams
+                    .values()
+                    .filter(|stream| stream.request.command.resource == process.resource)
+                    .count()
+                >= tinybox_bus::MAX_PROCESSES_PER_RESOURCE
+            {
+                return Err(failure(
+                    tinybox_bus::RESOURCE_LIMIT,
+                    "resource process limit reached",
+                ));
+            }
+            if streams.len() >= MAX_STREAM_EXECUTIONS {
+                return Err(failure(
+                    tinybox_bus::RESOURCE_LIMIT,
+                    "live execution admission limit reached",
+                ));
+            }
+            self.consume(
+                &mut state,
+                &request.process,
+                &ReserveRequest::Process(process.resource.clone()),
             )?;
-            return Ok(process);
+            streams.insert(
+                process.process.clone(),
+                Arc::new(StreamExecution::start(
+                    request,
+                    resolved,
+                    collector.clone(),
+                    jail,
+                    shell,
+                    platform_shell,
+                )),
+            );
+            Ok(true)
         }
-        if entry.processes.len()
-            + streams
-                .values()
-                .filter(|stream| stream.request.command.resource == process.resource)
-                .count()
-            >= tinybox_bus::MAX_PROCESSES_PER_RESOURCE
+        .await;
+        if !matches!(admitted, Ok(true))
+            && let Collector::Shell(shell) = collector
         {
-            return Err(failure(
-                tinybox_bus::RESOURCE_LIMIT,
-                "resource process limit reached",
-            ));
+            // Retain ownership before awaiting cleanup, including if the caller cancels.
+            self.rejected_shells
+                .lock()
+                .await
+                .push((process.resource.clone(), shell));
+            self.dispose_rejected_shells(Some(&process.resource))
+                .await?;
         }
-        if streams.len() >= MAX_STREAM_EXECUTIONS {
-            return Err(failure(
-                tinybox_bus::RESOURCE_LIMIT,
-                "live execution admission limit reached",
-            ));
-        }
-        self.consume(
-            &mut state,
-            &request.process,
-            &ReserveRequest::Process(process.resource.clone()),
-        )?;
-        streams.insert(
-            process.process.clone(),
-            Arc::new(StreamExecution::start(
-                request,
-                resolved,
-                collector,
-                jail,
-                shell,
-                platform_shell,
-            )),
-        );
+        admitted?;
         Ok(process)
+    }
+
+    pub(super) async fn dispose_rejected_shells(
+        &self,
+        resource: Option<&ResourceId>,
+    ) -> Result<()> {
+        let mut shells = self.rejected_shells.lock().await;
+        let mut index = 0;
+        let mut error = None;
+        while index < shells.len() {
+            if resource.is_some_and(|resource| *resource != shells[index].0) {
+                index += 1;
+                continue;
+            }
+            match shells[index].1.dispose_scratch().await {
+                Ok(()) => {
+                    shells.remove(index);
+                }
+                Err(_) => {
+                    error.get_or_insert_with(|| {
+                        failure(
+                            tinybox_bus::BACKEND_ERROR,
+                            "rejected shell scratch cleanup remains pending",
+                        )
+                    });
+                    index += 1;
+                }
+            }
+        }
+        error.map_or(Ok(()), Err)
     }
 
     pub(super) fn stream(&self, process: &ProcessRef) -> Result<Option<Arc<StreamExecution>>> {

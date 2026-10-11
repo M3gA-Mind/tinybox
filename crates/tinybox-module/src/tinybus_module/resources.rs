@@ -129,6 +129,7 @@ pub(super) struct Resources {
     state: Mutex<State>,
     executions: std::sync::Mutex<Executions>,
     streams: std::sync::Mutex<BTreeMap<ResourceId, Arc<stream::StreamExecution>>>,
+    rejected_shells: Mutex<Vec<(ResourceId, Arc<super::native_shell::ShellContext>)>>,
 }
 
 #[derive(Default)]
@@ -155,6 +156,7 @@ impl Default for Resources {
             state: Mutex::default(),
             executions: std::sync::Mutex::default(),
             streams: std::sync::Mutex::default(),
+            rejected_shells: Mutex::default(),
         }
     }
 }
@@ -1191,6 +1193,7 @@ impl Resources {
 
     pub(super) async fn close(&self, resource: &ResourceId) -> Result<()> {
         validate_id(resource)?;
+        self.dispose_rejected_shells(Some(resource)).await?;
         let Some(slot) = self.begin_close(resource).await? else {
             return Ok(());
         };
@@ -1366,6 +1369,9 @@ impl Resources {
                 break;
             }
             finished.await;
+        }
+        if let Err(error) = self.dispose_rejected_shells(None).await {
+            failure.get_or_insert(error);
         }
         failure.map_or(Ok(()), Err)
     }

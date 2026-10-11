@@ -1064,7 +1064,9 @@ async fn close_during_shell_preparation_fences_admission_without_waiting_for_fil
                 started.notify_one();
                 resume.notified().await;
                 let collector = preparation.finish().await?;
-                *observed.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(collector.clone());
+                *observed
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(collector.clone());
                 Ok(collector)
             })
             .await
@@ -1082,7 +1084,12 @@ async fn close_during_shell_preparation_fences_admission_without_waiting_for_fil
         "Close waited for shell filesystem preparation"
     );
     closed??;
-    assert!(prepared.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some());
+    assert!(
+        prepared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+    );
     assert_eq!(
         std::fs::read_dir(state.path().join("artifacts/sandbox-scratch"))?.count(),
         0,

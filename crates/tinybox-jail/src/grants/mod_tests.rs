@@ -11,7 +11,6 @@ fn resolve_hermetic(
     protected: &ProtectedPaths,
 ) -> tinybox_core::Result<JailGrants> {
     resolve_local_jail_grants_in(home, None, cfg, protected)
-
 }
 
 fn fake_home() -> std::io::Result<tempfile::TempDir> {
