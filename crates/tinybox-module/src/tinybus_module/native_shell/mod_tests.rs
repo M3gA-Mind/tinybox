@@ -221,3 +221,18 @@ async fn scratch_preparation_runs_outside_the_async_worker()
     shell.dispose_scratch().await?;
     Ok(())
 }
+
+#[test]
+fn missing_state_and_blocked_scratch_paths_are_refused()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let state = tempfile::tempdir()?;
+    let resolved = tinybox_core::ExecRequest::new(["unused"]);
+    for root in [state.path().join("missing"), state.path().to_path_buf()] {
+        std::fs::write(state.path().join("artifacts"), "blocks scratch creation")?;
+        assert!(matches!(
+            ShellContext::prepare(request(&root), &root, &resolved),
+            Err(tinybus::Error::MethodFailed { name, .. }) if name == tinybox_bus::INVALID_SHELL_EXEC
+        ));
+    }
+    Ok(())
+}
