@@ -119,8 +119,8 @@ impl ShellContext {
         Ok(Arc::new(Self {
             request,
             environment,
-            scratch: std::sync::Mutex::new(Some(scratch)),
-            scratch_cleanup_failed: std::sync::atomic::AtomicBool::new(false),
+            scratch: Arc::new(std::sync::Mutex::new(Some(scratch))),
+            scratch_cleanup_failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             host,
         }))
     }
@@ -162,6 +162,16 @@ impl ShellContext {
             ShellHost::Local(host) => host.drain_checked().await?,
             ShellHost::Jailed(host) => host.drain_checked().await?,
         }
+        Ok(())
+    }
+    pub(super) async fn dispose_scratch(&self) -> tinybox_core::Result<()> {
+        self.dispose_scratch_with(|path| std::fs::remove_dir_all(path))
+            .await
+    }
+    async fn dispose_scratch_with(
+        &self,
+        remove: impl FnOnce(&Path) -> std::io::Result<()> + Send + 'static,
+    ) -> tinybox_core::Result<()> {
         let mut scratch = self
             .scratch
             .lock()
@@ -169,7 +179,7 @@ impl ShellContext {
         if let Some(directory) = scratch.as_ref() {
             // Keep the TempDir and its path until deletion succeeds; close() consumes
             // ownership even on failure and would make cleanup impossible to retry.
-            if let Err(error) = std::fs::remove_dir_all(directory.path())
+            if let Err(error) = remove(directory.path())
                 && error.kind() != std::io::ErrorKind::NotFound
             {
                 self.scratch_cleanup_failed

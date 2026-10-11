@@ -165,3 +165,31 @@ async fn native_shell_jail_adds_owned_scratch_and_refuses_unsupported_constraint
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn scratch_deletion_runs_outside_the_async_worker()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let state = tempfile::tempdir()?;
+    let resolved = tinybox_core::ExecRequest::new(["unused"]);
+    let shell = ShellContext::prepare(request(state.path()), state.path(), &resolved)?;
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    let recorded = observed.clone();
+    let worker = std::thread::current().id();
+    shell
+        .dispose_scratch_with(move |path| {
+            *recorded
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                Some(std::thread::current().id());
+            std::fs::remove_dir_all(path)
+        })
+        .await?;
+    assert_ne!(
+        *observed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        Some(worker),
+        "recursive filesystem deletion must not run on the sole async worker"
+    );
+    Ok(())
+}

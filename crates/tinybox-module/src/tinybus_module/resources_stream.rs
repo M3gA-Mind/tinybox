@@ -247,6 +247,18 @@ impl StreamExecution {
         }
         Ok(())
     }
+    async fn dispose(&self) -> Result<()> {
+        self.stop().await?;
+        if let Collector::Shell(shell) = &self.collector {
+            shell.dispose_scratch().await.map_err(|_| {
+                failure(
+                    tinybox_bus::BACKEND_ERROR,
+                    "shell scratch cleanup remains pending",
+                )
+            })?;
+        }
+        Ok(())
+    }
 }
 impl Drop for StreamExecution {
     fn drop(&mut self) {
@@ -440,7 +452,7 @@ impl Resources {
     pub(super) async fn close_streams(&self, resource: &ResourceId) -> Result<()> {
         let mut failure = None;
         for stream in self.streams_for(resource) {
-            if let Err(error) = stream.stop().await {
+            if let Err(error) = stream.dispose().await {
                 failure.get_or_insert(error);
             }
         }
@@ -493,7 +505,7 @@ impl Resources {
                     "execution cleanup is not acknowledged",
                 ));
             }
-            stream.stop().await?;
+            stream.dispose().await?;
             self.streams
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
