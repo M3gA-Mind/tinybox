@@ -584,8 +584,7 @@ fn rejected_git_config_cannot_grant_its_nested_includes() -> Result<(), Box<dyn 
         components: vec![".ssh".into()],
         ..ProtectedPaths::default()
     };
-    let grants =
-        resolve_hermetic(Some(home.path()), &LocalGrantConfig::default(), &protected)?;
+    let grants = resolve_hermetic(Some(home.path()), &LocalGrantConfig::default(), &protected)?;
     assert!(
         !has(
             &grants.read_only,
