@@ -19,16 +19,22 @@ fn write_cli_fixture(path: &Path, script: impl AsRef<str>) -> std::io::Result<()
     );
     std::fs::write(path, script)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
-    probe_cli_fixture(|| std::process::Command::new(path).arg("--tinybox-probe").status())
+    probe_cli_fixture(|| {
+        std::process::Command::new(path)
+            .arg("--tinybox-probe")
+            .status()
+    })
 }
 
 /// Confirm the fixture is executable without recording a Docker invocation.
 fn probe_cli_fixture(
     mut probe: impl FnMut() -> std::io::Result<std::process::ExitStatus>,
 ) -> std::io::Result<()> {
-    for attempt in 0..200 {
+    // Forked children can retain a writer until exec. Successful execution
+    // proves the writer is gone; ETXTBSY alone is retryable, without a deadline.
+    loop {
         match probe() {
-            Err(error) if error.raw_os_error() == Some(26) && attempt < 199 => {
+            Err(error) if error.raw_os_error() == Some(26) => {
                 std::thread::yield_now();
             }
             result => {
@@ -41,12 +47,10 @@ fn probe_cli_fixture(
             }
         }
     }
-    Err(std::io::Error::other("fake Docker CLI remained busy"))
 }
 
 #[test]
-fn fixture_probe_waits_for_inherited_writers_without_an_attempt_limit()
--> std::io::Result<()> {
+fn fixture_probe_waits_for_inherited_writers_without_an_attempt_limit() -> std::io::Result<()> {
     use std::os::unix::process::ExitStatusExt;
     let mut busy = 300;
     probe_cli_fixture(|| {

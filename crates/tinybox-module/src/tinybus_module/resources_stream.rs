@@ -554,19 +554,28 @@ impl Resources {
             Ok(true)
         }
         .await;
-        if !matches!(admitted, Ok(true))
-            && let Collector::Shell(shell) = collector
-        {
-            // Retain ownership before awaiting cleanup, including if the caller cancels.
-            self.rejected_shells
-                .lock()
-                .await
-                .push((process.resource.clone(), shell));
-            self.dispose_rejected_shells(Some(&process.resource))
+        if !matches!(admitted, Ok(true)) {
+            self.dispose_rejected_collector(&process.resource, collector)
                 .await?;
         }
         admitted?;
         Ok(process)
+    }
+
+    async fn dispose_rejected_collector(
+        &self,
+        resource: &ResourceId,
+        collector: Collector,
+    ) -> Result<()> {
+        if let Collector::Shell(shell) = collector {
+            // Retain ownership before awaiting cleanup, including if the caller cancels.
+            self.rejected_shells
+                .lock()
+                .await
+                .push((resource.clone(), shell));
+            self.dispose_rejected_shells(Some(resource)).await?;
+        }
+        Ok(())
     }
 
     pub(super) async fn dispose_rejected_shells(
@@ -581,19 +590,16 @@ impl Resources {
                 index += 1;
                 continue;
             }
-            match shells[index].1.dispose_scratch().await {
-                Ok(()) => {
-                    shells.remove(index);
-                }
-                Err(_) => {
-                    error.get_or_insert_with(|| {
-                        failure(
-                            tinybox_bus::BACKEND_ERROR,
-                            "rejected shell scratch cleanup remains pending",
-                        )
-                    });
-                    index += 1;
-                }
+            if shells[index].1.dispose_scratch().await.is_ok() {
+                shells.remove(index);
+            } else {
+                error.get_or_insert_with(|| {
+                    failure(
+                        tinybox_bus::BACKEND_ERROR,
+                        "rejected shell scratch cleanup remains pending",
+                    )
+                });
+                index += 1;
             }
         }
         error.map_or(Ok(()), Err)
