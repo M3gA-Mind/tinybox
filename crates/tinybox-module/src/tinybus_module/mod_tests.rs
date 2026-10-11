@@ -1036,3 +1036,59 @@ async fn unsupported_git_include_expansions_refuse_the_whole_discovery()
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn shell_dispatch_uses_supervised_output_and_cleanup() -> tinybus::Result<()> {
+    let service = BoxService::default();
+    let resource = service
+        .reserve(tinybox_bus::ReserveRequest::Resource)
+        .await?;
+    service
+        .create(tinybox_bus::CreateRequest {
+            resource: resource.clone(),
+            backend: "passthrough".into(),
+            workspace: tinybox_bus::Workspace::Directory(".".into()),
+            ..Default::default()
+        })
+        .await?;
+    let process = service
+        .reserve(tinybox_bus::ReserveRequest::Process(resource.clone()))
+        .await?;
+    let process = service
+        .start_shell_exec(
+            tinybox_bus::SpawnRequest {
+                process,
+                command: tinybox_bus::ExecRequest {
+                    resource: resource.clone(),
+                    argv: Vec::new(),
+                    cwd: None,
+                    env: std::collections::BTreeMap::new(),
+                    stdin: None,
+                },
+            },
+            tinybox_bus::SelectShellRequest {
+                command: "echo fixture".into(),
+                preserve_pipeline_status: false,
+            },
+        )
+        .await?;
+    let batch = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let batch = service.read_output(process.clone(), 0).await?;
+            if batch.state != tinybox_bus::ExecutionState::Running {
+                return Ok::<_, tinybus::Error>(batch);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|error| tinybus::Error::failed(error.to_string()))??;
+    assert_eq!(
+        batch.state,
+        tinybox_bus::ExecutionState::Exited { exit_code: 0 }
+    );
+    service.release_output(process).await?;
+    service.close(resource).await?;
+    service.shutdown().await?;
+    Ok(())
+}
