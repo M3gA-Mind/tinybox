@@ -16,6 +16,7 @@ pub(super) struct StreamExecution {
     journal: Arc<OutputJournal>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     collector: Collector,
+    timed_out: Arc<std::sync::atomic::AtomicBool>,
 }
 #[derive(Clone)]
 enum Collector {
@@ -235,6 +236,8 @@ impl StreamExecution {
         let observer = journal.clone();
         let runner = collector.clone();
         let timeout = shell.as_ref().map(|request| request.timeout_ms);
+        let timed_out = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let timeout_outcome = timed_out.clone();
         let task = tokio::spawn(async move {
             let _completion = CompletionGuard(observer.clone());
             let result = if let Some(timeout) = timeout {
@@ -246,6 +249,7 @@ impl StreamExecution {
                 {
                     Some(result)
                 } else {
+                    timeout_outcome.store(true, std::sync::atomic::Ordering::SeqCst);
                     let _cleanup = runner.drain().await;
                     None
                 }
@@ -276,6 +280,7 @@ impl StreamExecution {
             journal,
             task: Mutex::new(Some(task)),
             collector,
+            timed_out,
         }
     }
     pub(super) fn running(&self) -> bool {
@@ -300,7 +305,12 @@ impl StreamExecution {
             )
         })?;
         if !self.journal.cleanup_acknowledged() {
-            self.journal.finish_failed(ExecutionFailure::BackendFailed);
+            let failure = if self.timed_out.load(std::sync::atomic::Ordering::SeqCst) {
+                ExecutionFailure::TimedOut
+            } else {
+                ExecutionFailure::BackendFailed
+            };
+            self.journal.finish_failed(failure);
         }
         Ok(())
     }
