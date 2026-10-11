@@ -104,7 +104,14 @@ async fn verify_discovery(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::err
         .await?;
     if cfg!(windows) {
         assert_eq!(selection.flavor, tinybox_bus::ShellFlavor::Cmd);
-        assert_eq!(selection.program, "cmd");
+        let system_root = std::env::var_os("SystemRoot").map_or_else(
+            || std::path::PathBuf::from(r"C:\Windows"),
+            std::path::PathBuf::from,
+        );
+        assert_eq!(
+            std::path::Path::new(&selection.program),
+            system_root.join("System32").join("cmd.exe")
+        );
         assert_eq!(selection.arguments, ["/D", "/E:ON", "/V:OFF", "/S", "/C"]);
         assert_eq!(selection.raw_arguments.as_deref(), Some("\"false | true\""));
     } else {
