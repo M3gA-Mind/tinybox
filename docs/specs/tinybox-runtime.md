@@ -214,8 +214,14 @@ the whole group and acknowledges cleanup only after it has waited for the
 leader and confirmed the group is gone. If cleanup cannot be confirmed, the
 sandbox retains a retry handle and returns
 `Error::ObservedCleanupPending`; it never treats killing the local Docker CLI
-as proof that the container workload stopped. Images without `setsid` refuse
-observed execution before running the requested command.
+as proof that the container workload stopped. Each execution first reserves a
+token-owned control directory; a startup fence lets a late supervisor observe
+an earlier cancellation without launching the requested command. The waiter
+keeps its done receipt until the sandbox has observed the acknowledgement, then
+releases it in a separate idempotent request. A per-execution sandbox view can
+retire its local failed-cleanup handle only after the owner confirms that the
+same container was destroyed. Images without `setsid` refuse observed
+execution before running the requested command.
 
 ### Snapshot identifiers
 

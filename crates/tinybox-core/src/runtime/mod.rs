@@ -290,6 +290,14 @@ pub trait Sandbox: std::fmt::Debug + Send + Sync + 'static {
         Ok(())
     }
 
+    /// Retire this sandbox's observed-execution handles after a trusted owner
+    /// has successfully destroyed the same box through another sandbox view.
+    ///
+    /// This only forgets local cleanup ownership; it never destroys a box or
+    /// contacts a provider. Callers must invoke it only after destruction of
+    /// `id` has been confirmed.
+    fn acknowledge_observed_cleanup_for_destroyed_box(&self, _id: &BoxId) {}
+
     /// Capture the current state of a box.
     ///
     /// What a snapshot contains depends on

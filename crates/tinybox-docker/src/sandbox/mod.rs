@@ -56,6 +56,9 @@ pub struct DockerSandbox {
 struct CleanupHandle {
     id: BoxId,
     token: String,
+    launched: bool,
+    acknowledged: Arc<AtomicBool>,
+    unsupported: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Default)]
@@ -295,6 +298,27 @@ impl DockerSandbox {
             .cloned()
             .collect()
     }
+
+    async fn reserve_observed_execution(&self, handle: &CleanupHandle) -> Result<()> {
+        match reserve_remote(self.host.clone(), &self.namespace, handle).await {
+            Ok(()) => Ok(()),
+            Err(reserve_error) => {
+                self.cleanup_or_retain(handle.clone()).await?;
+                Err(reserve_error)
+            }
+        }
+    }
+
+    async fn cleanup_or_retain(&self, handle: CleanupHandle) -> Result<bool> {
+        if let Ok(unsupported) = cleanup_remote(self.host.clone(), &self.namespace, &handle).await {
+            Ok(unsupported)
+        } else {
+            self.remember_observed_cleanup(handle);
+            Err(Error::ObservedCleanupPending {
+                provider: NAME.to_owned(),
+            })
+        }
+    }
 }
 
 #[async_trait]
@@ -459,6 +483,9 @@ impl Sandbox for DockerSandbox {
         let handle = CleanupHandle {
             id: id.clone(),
             token: uuid::Uuid::new_v4().simple().to_string(),
+            launched: false,
+            acknowledged: Arc::default(),
+            unsupported: Arc::default(),
         };
         let observed_request = observed::exec(&self.namespace, id, request, &handle.token)?;
         let mut retain_on_drop = RetainCleanupOnDrop {
@@ -466,6 +493,15 @@ impl Sandbox for DockerSandbox {
             handle: handle.clone(),
             armed: true,
         };
+        if let Err(error) = self.reserve_observed_execution(&handle).await {
+            retain_on_drop.disarm();
+            return Err(error);
+        }
+        let handle = CleanupHandle {
+            launched: true,
+            ..handle
+        };
+        retain_on_drop.handle = handle.clone();
         let control = Arc::new(ObservedControl::default());
         let observer = Arc::new(DockerExecutionObserver {
             inner: observer,
@@ -479,6 +515,16 @@ impl Sandbox for DockerSandbox {
         let result = self.host.run_observed(&observed_request, observer).await;
 
         if matches!(&result, Err(Error::UnsupportedStreaming { .. })) {
+            let reservation = CleanupHandle {
+                launched: false,
+                ..handle.clone()
+            };
+            if self.cleanup_or_retain(reservation).await.is_err() {
+                retain_on_drop.disarm();
+                return Err(Error::ObservedCleanupPending {
+                    provider: NAME.to_owned(),
+                });
+            }
             retain_on_drop.disarm();
             return result;
         }
@@ -519,6 +565,10 @@ impl Sandbox for DockerSandbox {
 
     fn has_pending_observed_cleanup(&self) -> bool {
         self.host.has_pending_observed_cleanup() || !lock(&self.pending_observed_cleanup).is_empty()
+    }
+
+    fn acknowledge_observed_cleanup_for_destroyed_box(&self, id: &BoxId) {
+        lock(&self.pending_observed_cleanup).retain(|_, handle| &handle.id != id);
     }
 
     async fn retry_observed_cleanup(&self) -> Result<()> {
@@ -626,7 +676,7 @@ impl Sandbox for DockerSandbox {
         // recoverable, a container without a record is a leak.
         self.remove_container(args::remove(&self.namespace, id))
             .await?;
-        lock(&self.pending_observed_cleanup).retain(|_, handle| &handle.id != id);
+        self.acknowledge_observed_cleanup_for_destroyed_box(id);
         self.store.remove(id)?;
         self.failed_create_attempts
             .lock()
@@ -650,6 +700,25 @@ async fn cleanup_remote(
     namespace: &str,
     handle: &CleanupHandle,
 ) -> Result<bool> {
+    if !handle.launched {
+        reserve_remote(host.clone(), namespace, handle).await?;
+        let request = observed::abort_reservation(namespace, &handle.id, &handle.token);
+        let output = tokio::time::timeout(Duration::from_secs(8), host.run(&request))
+            .await
+            .map_err(|_| cleanup_timeout_error())??;
+        if !output.succeeded() {
+            return Err(Error::Backend {
+                sandbox: NAME.to_owned(),
+                operation: "release unstarted observed execution reservation",
+                message: output.stderr_lossy().trim().to_owned(),
+            });
+        }
+        return Ok(false);
+    }
+    if handle.acknowledged.load(Ordering::Acquire) {
+        release_receipt(host, namespace, handle).await?;
+        return Ok(handle.unsupported.load(Ordering::Acquire));
+    }
     let request = observed::cancel_and_ack(namespace, &handle.id, &handle.token);
     let output = tokio::time::timeout(Duration::from_secs(8), host.run(&request))
         .await
@@ -661,7 +730,59 @@ async fn cleanup_remote(
             message: output.stderr_lossy().trim().to_owned(),
         });
     }
-    Ok(output.stdout_lossy().trim() == "unsupported")
+    let unsupported = output.stdout_lossy().trim() == "unsupported";
+    handle.unsupported.store(unsupported, Ordering::Release);
+    handle.acknowledged.store(true, Ordering::Release);
+    release_receipt(host, namespace, handle).await?;
+    Ok(unsupported)
+}
+
+async fn release_receipt(
+    host: Arc<dyn Host>,
+    namespace: &str,
+    handle: &CleanupHandle,
+) -> Result<()> {
+    let request = observed::release_receipt(namespace, &handle.id, &handle.token);
+    let output = tokio::time::timeout(Duration::from_secs(8), host.run(&request))
+        .await
+        .map_err(|_| Error::Backend {
+            sandbox: NAME.to_owned(),
+            operation: "release acknowledged observed execution receipt",
+            message: "container-side receipt release was not confirmed before the deadline"
+                .to_owned(),
+        })??;
+    if !output.succeeded() {
+        return Err(Error::Backend {
+            sandbox: NAME.to_owned(),
+            operation: "release acknowledged observed execution receipt",
+            message: output.stderr_lossy().trim().to_owned(),
+        });
+    }
+    Ok(())
+}
+
+async fn reserve_remote(
+    host: Arc<dyn Host>,
+    namespace: &str,
+    handle: &CleanupHandle,
+) -> Result<()> {
+    let request = observed::reserve(namespace, &handle.id, &handle.token);
+    let output = tokio::time::timeout(Duration::from_secs(8), host.run(&request))
+        .await
+        .map_err(|_| Error::Backend {
+            sandbox: NAME.to_owned(),
+            operation: "reserve observed execution control directory",
+            message: "container did not confirm its execution reservation before the deadline"
+                .to_owned(),
+        })??;
+    if !output.succeeded() || output.stdout_lossy().trim() != "ready" {
+        return Err(Error::Backend {
+            sandbox: NAME.to_owned(),
+            operation: "reserve observed execution control directory",
+            message: output.stderr_lossy().trim().to_owned(),
+        });
+    }
+    Ok(())
 }
 
 fn cleanup_timeout_error() -> Error {

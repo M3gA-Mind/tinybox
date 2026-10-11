@@ -12,19 +12,53 @@ use super::{NAME, args};
 
 const CONTROL_ROOT: &str = "/tmp";
 
+/// Reserve the token directory before dispatching an observed exec. Repeating
+/// this request is safe after a lost reply because the owner token is stable.
+const RESERVE: &str = r#"
+set -u
+dir=$1
+owner=$2
+umask 077
+if [ -e "$dir" ]; then
+  if [ ! -d "$dir" ]; then exit 125; fi
+  if [ -f "$dir/owner" ]; then
+    if [ "$(cat "$dir/owner" 2>/dev/null)" = "$owner" ]; then
+      printf 'ready\n'
+      exit 0
+    fi
+    exit 125
+  fi
+  if [ -e "$dir/started" ] || [ -e "$dir/cancel" ]; then exit 125; fi
+else
+  mkdir -m 700 "$dir" || exit 125
+fi
+if ! printf '%s\n' "$owner" > "$dir/owner"; then rm -rf "$dir"; exit 125; fi
+: > "$dir/reserved" || exit 125
+printf 'ready\n'
+"#;
+
 /// Run the requested command in its own session and supervise its process group.
 ///
-/// Arguments after `$0` are a private control directory followed by the user's
-/// argv. No user value is interpolated into this shell program.
+/// Arguments after `$0` are a private control directory, its owner token, and
+/// the user's argv. No user value is interpolated into this shell program.
 const SUPERVISOR: &str = r#"
 set -u
 dir=$1
+owner=$2
+shift
 shift
 umask 077
-mkdir -m 700 "$dir" || exit 125
+if [ ! -d "$dir" ] || [ "$(cat "$dir/owner" 2>/dev/null)" != "$owner" ] || [ -e "$dir/started" ]; then exit 125; fi
+mkdir "$dir/started" || exit 125
+if [ -f "$dir/cancel" ]; then
+  printf '%s\n' 125 > "$dir/status" || exit 125
+  : > "$dir/done" || exit 125
+  exit 125
+fi
 exec 3<&0
 if ! command -v setsid >/dev/null 2>&1; then
   : > "$dir/unsupported"
+  printf '%s\n' 125 > "$dir/status" || exit 125
   : > "$dir/done"
   exit 125
 fi
@@ -32,7 +66,7 @@ fi
 # `setsid` is launched as a background child of a non-job-control shell, so it
 # is not a process-group leader and can keep its own PID while creating the
 # workload session. The inner shell records that session leader before exec.
-setsid sh -c 'printf "%s\\n" "$$" > "$1/pid" || exit 125; shift; exec "$@"' \
+setsid sh -c 'printf "%s\n" "$$" > "$1/pid" || exit 125; shift; exec "$@"' \
   tinybox-observed-child "$dir" "$@" <&3 &
 leader=$!
 
@@ -67,7 +101,7 @@ case "$pid" in
     ;;
 esac
 
-printf '%s\\n' "$status" > "$dir/status" || exit 125
+printf '%s\n' "$status" > "$dir/status" || exit 125
 : > "$dir/done" || exit 125
 exit "$status"
 "#;
@@ -77,6 +111,8 @@ const CANCEL_AND_ACK: &str = r#"
 set -u
 dir=$1
 if [ ! -d "$dir" ]; then exit 1; fi
+owner=$2
+if [ "$(cat "$dir/owner" 2>/dev/null)" != "$owner" ]; then exit 1; fi
 : > "$dir/cancel" || exit 1
 attempt=0
 while [ ! -f "$dir/done" ]; do
@@ -84,9 +120,28 @@ while [ ! -f "$dir/done" ]; do
   attempt=$((attempt + 1))
   sleep 0.01
 done
-if [ -f "$dir/unsupported" ]; then printf 'unsupported\\n'; fi
-rm -rf "$dir" || exit 1
+if [ -f "$dir/unsupported" ]; then printf 'unsupported\n'; fi
 exit 0
+"#;
+
+/// Undo a reservation when observed execution was never dispatched.
+const ABORT_RESERVATION: &str = r#"
+set -u
+dir=$1
+owner=$2
+if [ ! -d "$dir" ]; then exit 0; fi
+if [ "$(cat "$dir/owner" 2>/dev/null)" != "$owner" ] || [ -e "$dir/started" ]; then exit 1; fi
+rm -rf "$dir"
+"#;
+
+/// Release a receipt only after the caller has observed its done acknowledgement.
+const RELEASE_RECEIPT: &str = r#"
+set -u
+dir=$1
+owner=$2
+if [ ! -e "$dir" ]; then exit 0; fi
+if [ ! -d "$dir" ] || [ "$(cat "$dir/owner" 2>/dev/null)" != "$owner" ] || [ ! -f "$dir/done" ]; then exit 1; fi
+rm -rf "$dir"
 "#;
 
 /// Build a `docker exec -i` request that preserves command arguments and stdin.
@@ -112,6 +167,7 @@ pub(super) fn exec(
         SUPERVISOR.to_owned(),
         "tinybox-observed".to_owned(),
         directory,
+        token.to_owned(),
     ]);
     argv.extend(request.argv.iter().cloned());
 
@@ -120,6 +176,21 @@ pub(super) fn exec(
         observed = observed.with_stdin(stdin.clone());
     }
     Ok(observed)
+}
+
+/// Build an idempotent reservation request for one execution token.
+pub(super) fn reserve(namespace: &str, id: &BoxId, token: &str) -> ExecRequest {
+    ExecRequest::new([
+        "docker".to_owned(),
+        "exec".to_owned(),
+        args::container_name(namespace, id),
+        "sh".to_owned(),
+        "-c".to_owned(),
+        RESERVE.to_owned(),
+        "tinybox-observed-reserve".to_owned(),
+        control_dir(token),
+        token.to_owned(),
+    ])
 }
 
 /// Build a request that asks the remote waiter to kill and reap one workload.
@@ -133,6 +204,37 @@ pub(super) fn cancel_and_ack(namespace: &str, id: &BoxId, token: &str) -> ExecRe
         CANCEL_AND_ACK.to_owned(),
         "tinybox-observed-cancel".to_owned(),
         control_dir(token),
+        token.to_owned(),
+    ])
+}
+
+/// Build a release request for a reservation that was never launched.
+pub(super) fn abort_reservation(namespace: &str, id: &BoxId, token: &str) -> ExecRequest {
+    ExecRequest::new([
+        "docker".to_owned(),
+        "exec".to_owned(),
+        args::container_name(namespace, id),
+        "sh".to_owned(),
+        "-c".to_owned(),
+        ABORT_RESERVATION.to_owned(),
+        "tinybox-observed-abort".to_owned(),
+        control_dir(token),
+        token.to_owned(),
+    ])
+}
+
+/// Build a receipt release request after acknowledgement was observed.
+pub(super) fn release_receipt(namespace: &str, id: &BoxId, token: &str) -> ExecRequest {
+    ExecRequest::new([
+        "docker".to_owned(),
+        "exec".to_owned(),
+        args::container_name(namespace, id),
+        "sh".to_owned(),
+        "-c".to_owned(),
+        RELEASE_RECEIPT.to_owned(),
+        "tinybox-observed-release".to_owned(),
+        control_dir(token),
+        token.to_owned(),
     ])
 }
 

@@ -31,6 +31,7 @@ async fn sandboxes_without_observed_cleanup_report_no_pending_work() -> Result<(
 
     assert!(!sandbox.has_pending_observed_cleanup());
     sandbox.retry_observed_cleanup().await?;
+    sandbox.acknowledge_observed_cleanup_for_destroyed_box(&BoxId::new("box-0")?);
     Ok(())
 }
 
