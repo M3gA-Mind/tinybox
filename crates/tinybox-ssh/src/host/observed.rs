@@ -122,11 +122,13 @@ pub(super) fn request(
     let script = tinybox_core::shell::script(&request.argv, request.cwd.as_deref(), &request.env);
     let child = format!(
         "if ! printf '%s\\n' \"$$\" > {}; then exit 125; fi; \
-         /bin/sh -c {}; code=$?; printf '%s\\n' \"$code\" > {}; \
-         while :; do sleep 3600; done",
+         trap ':' TERM; ( trap - TERM; /bin/sh -c {} <&3 ) & command_pid=$!; \
+         wait \"$command_pid\"; code=$?; printf '%s\\n' \"$code\" > {}; \
+         while :; do sleep 3600; done; : {id}",
         tinybox_core::shell::quote(&pid_file),
         tinybox_core::shell::quote(&script),
-        tinybox_core::shell::quote(&status_file)
+        tinybox_core::shell::quote(&status_file),
+        id = tinybox_core::shell::quote(id)
     );
     let wrapper = format!(
         "exec 3<&0; dir={dir}; pid_file={pid}; status_file={status}; wrapper_file={wrapper_file}; owner={owner}; \
@@ -146,11 +148,11 @@ pub(super) fn request(
          if [ -f \"$status_file\" ]; then code=$(cat \"$status_file\" 2>/dev/null); case \"$code\" in ''|*[!0-9]*) exit 125;; esac; fi; \
          group=$(cat \"$pid_file\" 2>/dev/null); case \"$group\" in ''|*[!0-9]*) exit 125;; esac; \
          kill -TERM -\"$group\" 2>/dev/null || true; \
-         wait \"$launcher\" 2>/dev/null || true; \
          count=0; while kill -0 -\"$group\" 2>/dev/null; do \
            count=$((count + 1)); if [ \"$count\" -ge 100 ]; then break; fi; sleep 0.01; \
          done; \
          if kill -0 -\"$group\" 2>/dev/null; then kill -KILL -\"$group\" 2>/dev/null || true; fi; \
+         wait \"$launcher\" 2>/dev/null || true; \
          count=0; while kill -0 -\"$group\" 2>/dev/null; do \
            count=$((count + 1)); if [ \"$count\" -ge 1000 ]; then exit 124; fi; sleep 0.01; \
          done; \
@@ -205,13 +207,11 @@ pub(super) fn cleanup_request(
            kill -TERM -\"$1\" 2>/dev/null || return 1; \
            count=0; while :; do \
              group_state \"$1\"; state=$?; if [ \"$state\" -eq 1 ]; then return 0; fi; if [ \"$state\" -ne 0 ]; then return 1; fi; \
-             group_leader_owned \"$1\" || return 1; \
              count=$((count + 1)); if [ \"$count\" -ge 100 ]; then break; fi; sleep 0.01; \
            done; \
            group_leader_owned \"$1\" || return 1; kill -KILL -\"$1\" 2>/dev/null || return 1; \
            count=0; while :; do \
              group_state \"$1\"; state=$?; if [ \"$state\" -eq 1 ]; then return 0; fi; if [ \"$state\" -ne 0 ]; then return 1; fi; \
-             group_leader_owned \"$1\" || return 1; \
              count=$((count + 1)); if [ \"$count\" -ge 1000 ]; then return 1; fi; sleep 0.01; \
            done; \
          }}; \

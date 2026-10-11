@@ -763,7 +763,9 @@ fn generated_remote_supervisor_kills_and_waits_for_its_process_group() -> Result
         .map_err(|error| Error::io("start local SSH protocol fixture", &error))?;
 
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !std::path::Path::new(&pid_file).exists() && Instant::now() < deadline {
+    while std::fs::metadata(&pid_file).map_or(true, |metadata| metadata.len() == 0)
+        && Instant::now() < deadline
+    {
         if let Some(status) = process
             .try_wait()
             .map_err(|error| Error::io("check local SSH protocol fixture", &error))?
@@ -863,7 +865,9 @@ fn generated_remote_supervisor_reaps_background_descendants_before_acknowledging
     });
 
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !std::path::Path::new(&pid_file).exists() && Instant::now() < deadline {
+    while std::fs::metadata(&pid_file).map_or(true, |metadata| metadata.len() == 0)
+        && Instant::now() < deadline
+    {
         if let Some(status) = process
             .try_wait()
             .map_err(|error| Error::io("check descendant protocol fixture", &error))?
@@ -1263,7 +1267,9 @@ fn cleanup_stops_the_owned_group_after_its_wrapper_dies() -> Result<()> {
         .map_err(|error| Error::io("start orphaned-group wrapper", &error))?;
     let pid_file = format!("{directory}/pid");
     let deadline = Instant::now() + Duration::from_secs(2);
-    while !std::path::Path::new(&pid_file).exists() && Instant::now() < deadline {
+    while std::fs::metadata(&pid_file).map_or(true, |metadata| metadata.len() == 0)
+        && Instant::now() < deadline
+    {
         if let Some(status) = wrapper
             .try_wait()
             .map_err(|error| Error::io("check orphaned-group wrapper", &error))?
@@ -1314,6 +1320,257 @@ fn cleanup_stops_the_owned_group_after_its_wrapper_dies() -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
+fn start_term_ignoring_group(directory: &str, id: &str) -> Result<(String, String)> {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let target = SshTarget::new("builder")?;
+    let prepare = observed::prepare_request(&target, id, directory);
+    let setup = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(last_arg(&prepare, "read generated cleanup setup")?)
+        .output()
+        .map_err(|error| Error::io("prepare generated cleanup fixture", &error))?;
+    assert!(setup.status.success());
+
+    let term_marker = format!("/tmp/tinybox-observed-term-{id}");
+    let ready_marker = format!("{directory}/command-ready");
+    let workload = format!(
+        "trap 'printf term > {}; exit 0' TERM; printf ready > {}; /bin/sh -c 'trap \"\" TERM; exec sleep 600' & wait",
+        tinybox_core::shell::quote(&term_marker),
+        tinybox_core::shell::quote(&ready_marker)
+    );
+    let request = observed::request(
+        &target,
+        &ExecRequest::new(["/bin/sh", "-c", &workload]),
+        id,
+        directory,
+    )?;
+    let mut wrapper = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(last_arg(&request, "read generated cleanup request")?)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| Error::io("start generated cleanup request", &error))?;
+    let pid_file = format!("{directory}/pid");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while std::fs::metadata(&pid_file).map_or(true, |metadata| metadata.len() == 0)
+        && Instant::now() < deadline
+    {
+        if let Some(status) = wrapper
+            .try_wait()
+            .map_err(|error| Error::io("poll generated cleanup wrapper", &error))?
+        {
+            return Err(Error::Backend {
+                sandbox: "SSH test fixture".to_owned(),
+                operation: "start generated cleanup request",
+                message: format!("wrapper exited before publishing its process group: {status}"),
+            });
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    while !std::path::Path::new(&ready_marker).exists() && Instant::now() < deadline {
+        if let Some(status) = wrapper
+            .try_wait()
+            .map_err(|error| Error::io("poll generated user command", &error))?
+        {
+            return Err(Error::Backend {
+                sandbox: "SSH test fixture".to_owned(),
+                operation: "start generated user command",
+                message: format!("wrapper exited before command readiness: {status}"),
+            });
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let group = std::fs::read_to_string(&pid_file)
+        .map_err(|error| Error::io("read generated cleanup group id", &error))?
+        .trim()
+        .to_owned();
+    let leader_info = Command::new("ps")
+        .args(["-ww", "-p", &group, "-o", "pid=,pgid=,sid=,command="])
+        .output()
+        .map_err(|error| Error::io("inspect generated cleanup anchor", &error))?;
+    assert!(
+        String::from_utf8_lossy(&leader_info.stdout).contains(id),
+        "generated group anchor did not carry its UUID: {}",
+        String::from_utf8_lossy(&leader_info.stdout)
+    );
+    wrapper
+        .kill()
+        .map_err(|error| Error::io("kill generated request wrapper", &error))?;
+    wrapper
+        .wait()
+        .map_err(|error| Error::io("reap generated request wrapper", &error))?;
+    Ok((group, term_marker))
+}
+
+#[cfg(target_os = "linux")]
+fn finish_term_ignoring_cleanup(
+    mut cleanup_process: std::process::Child,
+    group: &str,
+) -> Result<(std::process::Output, bool, bool)> {
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let mut cleanup_finished = false;
+    while Instant::now() < deadline {
+        if cleanup_process
+            .try_wait()
+            .map_err(|error| Error::io("poll completed TERM-resistant cleanup", &error))?
+            .is_some()
+        {
+            cleanup_finished = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if !cleanup_finished {
+        let _ = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("kill -KILL -{group} 2>/dev/null || true"))
+            .status();
+        let _ = cleanup_process.kill();
+    }
+    let output = cleanup_process
+        .wait_with_output()
+        .map_err(|error| Error::io("collect TERM-resistant cleanup result", &error))?;
+    let group_alive = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("kill -0 -{group} 2>/dev/null"))
+        .status()
+        .map_err(|error| Error::io("check TERM-resistant process group", &error))?
+        .success();
+    if group_alive {
+        let _ = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("kill -KILL -{group} 2>/dev/null || true"))
+            .status();
+    }
+    Ok((output, cleanup_finished, group_alive))
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cleanup_kills_a_term_ignoring_descendant_while_its_uuid_anchor_stays_owned() -> Result<()> {
+    use std::process::{Command, Stdio};
+
+    let target = SshTarget::new("builder")?;
+    let state = observed::RemoteCleanupState::default();
+    let (id, directory) = state.reserve();
+    let (group, term_marker) = start_term_ignoring_group(&directory, &id)?;
+
+    let cleanup = observed::cleanup_request(&target, &id, &directory, false);
+    let cleanup_process = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(last_arg(&cleanup, "read TERM-resistant group cleanup")?)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| Error::io("start TERM-resistant cleanup", &error))?;
+    let (output, cleanup_finished, group_alive) =
+        finish_term_ignoring_cleanup(cleanup_process, &group)?;
+
+    assert!(
+        cleanup_finished,
+        "cleanup did not finish its bounded escalation"
+    );
+    assert!(
+        output.status.success(),
+        "cleanup must kill the remaining owned session after its wrapper exits: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(output.stdout, b"clean\n");
+    let term_received = std::fs::read_to_string(&term_marker)
+        .map_err(|error| Error::io("read TERM delivery marker", &error))?;
+    assert_eq!(term_received, "term");
+    std::fs::remove_file(term_marker)
+        .map_err(|error| Error::io("remove TERM delivery marker", &error))?;
+    assert!(
+        !group_alive,
+        "cleanup left the TERM-ignoring descendant alive"
+    );
+    assert!(!std::path::Path::new(&directory).exists());
+    state.remove(&id);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn generated_supervisor_escalates_after_term_is_ignored_by_its_group() -> Result<()> {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let target = SshTarget::new("builder")?;
+    let state = observed::RemoteCleanupState::default();
+    let (id, directory) = state.reserve();
+    let prepare = observed::prepare_request(&target, &id, &directory);
+    let prepare_script = last_arg(&prepare, "read TERM-ignore setup")?;
+    let prepared = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(prepare_script)
+        .output()
+        .map_err(|error| Error::io("reserve TERM-ignore fixture", &error))?;
+    assert!(prepared.status.success());
+
+    let launch = observed::request(
+        &target,
+        &ExecRequest::new(["/bin/sh", "-c", "exit 7"]),
+        &id,
+        &directory,
+    )?;
+    let launch_script = last_arg(&launch, "read TERM-ignore launcher")?;
+    let mut wrapper = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!(
+            "trap '' TERM; exec /bin/sh -c {}",
+            tinybox_core::shell::quote(launch_script)
+        ))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| Error::io("start TERM-ignore supervisor", &error))?;
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut exit_status = None;
+    while Instant::now() < deadline {
+        if let Some(status) = wrapper
+            .try_wait()
+            .map_err(|error| Error::io("poll TERM-ignore supervisor", &error))?
+        {
+            exit_status = Some(status);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if exit_status.is_none() {
+        if let Ok(group) = std::fs::read_to_string(format!("{directory}/pid")) {
+            let _ = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(format!("kill -KILL -{} 2>/dev/null || true", group.trim()))
+                .status();
+        }
+        let _ = wrapper.kill();
+        let _ = wrapper.wait();
+        let cleanup = observed::cleanup_request(&target, &id, &directory, false);
+        if let Ok(script) = last_arg(&cleanup, "read TERM-ignore recovery") {
+            let _ = Command::new("/bin/sh").arg("-c").arg(script).status();
+        }
+    }
+    assert!(
+        exit_status.is_some(),
+        "supervisor hung waiting for a TERM-ignoring process group before escalation"
+    );
+    assert_eq!(exit_status.and_then(|status| status.code()), Some(7));
+    assert!(!std::path::Path::new(&directory).exists());
+    state.remove(&id);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn cleanup_keeps_a_reused_group_id_without_its_owner_marker() -> Result<()> {
     use std::process::{Command, Stdio};
@@ -1352,7 +1609,7 @@ fn cleanup_keeps_a_reused_group_id_without_its_owner_marker() -> Result<()> {
     let unrelated_group = String::from_utf8_lossy(&group_output.stdout)
         .trim()
         .to_owned();
-    assert!(!unrelated_group.is_empty());
+    assert_ne!(unrelated_group, "");
     let group_alive = Command::new("/bin/sh")
         .arg("-c")
         .arg(format!("kill -0 -{unrelated_group} 2>/dev/null"))
