@@ -30,4 +30,6 @@ pub struct ShellExecRequest {
     #[serde(default)]
     pub jail: Option<NativeJailConfig>,
 }
-const fn default_timeout() -> u64 { 30_000 }
+const fn default_timeout() -> u64 {
+    30_000
+}

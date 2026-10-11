@@ -171,7 +171,8 @@ impl JailLocalHost {
         let mut command = crate::LocalHost::command(request)?.into_std();
         // The host explicitly supplies the approved environment for jailed code.
         command.env_clear().envs(&request.env);
-        self.collect_command(command, request.stdin.clone(), observer).await
+        self.collect_command(command, request.stdin.clone(), observer)
+            .await
     }
 
     /// Collect a prepared shell inside this host's explicit native jail.

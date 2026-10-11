@@ -18,6 +18,7 @@ use tinybox_bus::{
 
 mod docker;
 mod native_jail;
+mod native_shell;
 mod output;
 mod resources;
 
@@ -278,6 +279,18 @@ impl BoxService {
         .await
     }
 
+    /// Start a shell with module-owned environment, scratch and supervision.
+    async fn start_shell_exec(
+        &self,
+        request: tinybox_bus::ShellExecRequest,
+    ) -> TinyBusResult<ProcessRef> {
+        let resources = self.resources.clone();
+        finish_operation(tokio::spawn(async move {
+            resources.start_shell_exec(request).await
+        }))
+        .await
+    }
+
     /// Run one Docker-isolated shell command with bounded output and runtime.
     async fn run_docker(
         &self,
@@ -467,7 +480,7 @@ tinybus_module::module_export_optional_static! {
     setup = setup,
     worker_threads = 1,
     provides = ["ai.tinyhumans.tinybox.Box"],
-    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput", "StartJailedExec", "RunDocker", "ResolveLocalGrants", "SelectShell"],
+    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput", "StartJailedExec", "RunDocker", "ResolveLocalGrants", "SelectShell", "StartShellExec"],
     signals = [],
     requires = [],
     optional = [],

@@ -291,7 +291,6 @@ fn older_shell_invocations_default_the_startup_removal_vocabulary() -> Result<()
     Ok(())
 }
 
-
 #[test]
 fn native_shell_wire_defaults_close_stdin_and_keep_a_bounded_runtime()
 -> Result<(), serde_json::Error> {

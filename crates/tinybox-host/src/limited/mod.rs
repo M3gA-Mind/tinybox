@@ -152,7 +152,12 @@ impl LimitedLocalHost {
         request: &ExecRequest,
         observer: Option<Arc<dyn ExecutionObserver>>,
     ) -> Result<ExecOutput> {
-        self.collect_command(LocalHost::command(request)?, request.stdin.clone(), observer).await
+        self.collect_command(
+            LocalHost::command(request)?,
+            request.stdin.clone(),
+            observer,
+        )
+        .await
     }
 
     /// Collect a prepared native command with the same bounded ownership as argv execution.

@@ -21,8 +21,8 @@ pub use grants::{LocalGrantConfig, LocalGrants, ProtectedPaths, ResolveLocalGran
 mod jail;
 pub use jail::{JailEnforcement, NativeJailConfig};
 
-mod shell_selection;
 mod shell_execution;
+mod shell_selection;
 pub use shell_execution::ShellExecRequest;
 pub use shell_selection::{SelectShellRequest, ShellFlavor, ShellInvocation};
 
