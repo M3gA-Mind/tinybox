@@ -706,6 +706,10 @@ async fn native_shell_timeout_acknowledges_child_cleanup_before_output_release()
             code: ExecutionFailure::TimedOut
         }
     );
+    assert_eq!(
+        std::fs::read_dir(state.path().join("artifacts/sandbox-scratch"))?.count(),
+        1
+    );
     resources.release_output(&process).await?;
     resources.close(&resource).await?;
     Ok(())
@@ -846,6 +850,39 @@ async fn native_shell_refuses_nonlocal_or_nondirectory_collectors_before_admissi
         .err()
         .ok_or("accepted nondirectory shell")?;
     assert_eq!(error.wire_name(), tinybox_bus::UNSUPPORTED_OPERATION);
+    resources.close(&resource).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelled_native_shell_retains_scratch_until_output_release()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    #[cfg(unix)]
+    let payload = "echo ready; sleep 60";
+    #[cfg(windows)]
+    let payload =
+        "echo ready & powershell -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 60\"";
+    let request = shell_request(&resources, &resource, state.path(), payload).await?;
+    let process = resources.start_shell_exec(request).await?;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while resources.read_output(&process, 0).await?.chunks.is_empty() {
+            tokio::task::yield_now().await;
+        }
+        Ok::<_, tinybus::Error>(())
+    })
+    .await??;
+    resources.cancel(&process).await?;
+    assert_eq!(
+        resources.read_output(&process, 0).await?.state,
+        ExecutionState::Cancelled
+    );
+    let scratch = state.path().join("artifacts/sandbox-scratch");
+    assert_eq!(std::fs::read_dir(&scratch)?.count(), 1);
+    resources.release_output(&process).await?;
+    assert_eq!(std::fs::read_dir(&scratch)?.count(), 0);
     resources.close(&resource).await?;
     Ok(())
 }
