@@ -583,3 +583,22 @@ fn rejected_git_config_cannot_grant_its_nested_includes() -> Result<(), Box<dyn 
     );
     Ok(())
 }
+
+#[test]
+fn protected_prefixes_also_reject_recursive_ancestor_grants()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir(home.path().join("private"))?;
+    let protected = ProtectedPaths {
+        prefixes: vec![home.path().join("private").to_str().ok_or("non-UTF8 fixture")?.into()],
+        ..ProtectedPaths::default()
+    };
+    let config = LocalGrantConfig {
+        toolchain_homes: false,
+        extra_read_write: vec![home.path().to_str().ok_or("non-UTF8 fixture")?.into()],
+        ..LocalGrantConfig::default()
+    };
+    let grants = resolve_local_jail_grants(None, &config, &protected);
+    assert_eq!(grants.read_write, Vec::<PathBuf>::new());
+    Ok(())
+}
