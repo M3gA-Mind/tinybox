@@ -148,7 +148,7 @@ impl StreamExecution {
                 .await
                 {
                     Ok(result) => Some(result),
-                    Some(Err(_)) | None => {
+                    Err(_) => {
                         let _cleanup = runner.drain().await;
                         None
                     }
@@ -168,7 +168,7 @@ impl StreamExecution {
                     Some(Err(tinybox_core::Error::OutputLimitExceeded { .. })) => {
                         observer.finish_failed(ExecutionFailure::OutputLimit);
                     }
-                    Err(_) => observer.finish_failed(ExecutionFailure::BackendFailed),
+                    Some(Err(_)) | None => observer.finish_failed(ExecutionFailure::BackendFailed),
                 }
             }
         });
