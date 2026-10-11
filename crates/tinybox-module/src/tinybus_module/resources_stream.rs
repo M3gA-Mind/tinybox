@@ -17,7 +17,10 @@ pub(super) struct StreamExecution {
 }
 #[derive(Clone)]
 enum Collector {
-    Host(Arc<dyn tinybox_core::Host>),
+    Host(
+        Arc<dyn tinybox_core::Host>,
+        Option<Arc<tinybox_host::LimitedLocalHost>>,
+    ),
     Jailed(Arc<tinybox_host::JailLocalHost>),
 }
 impl Collector {
@@ -27,19 +30,30 @@ impl Collector {
         observer: Arc<OutputJournal>,
     ) -> tinybox_core::Result<tinybox_core::ExecOutput> {
         match self {
-            Self::Host(host) => host.run_observed(command, observer).await,
+            Self::Host(host, _) => host.run_observed(command, observer).await,
             Self::Jailed(host) => host.run_observed(command, observer).await,
         }
     }
     fn pending(&self) -> bool {
         match self {
-            Self::Host(host) => host.has_pending_observed_cleanup(),
+            Self::Host(host, native) => {
+                host.has_pending_observed_cleanup()
+                    || native
+                        .as_ref()
+                        .is_some_and(|native| native.has_pending_cleanup())
+            }
             Self::Jailed(host) => host.has_pending_cleanup(),
         }
     }
     async fn drain(&self) -> tinybox_core::Result<()> {
         match self {
-            Self::Host(host) => host.retry_observed_cleanup().await,
+            Self::Host(host, native) => {
+                let remote = host.retry_observed_cleanup().await;
+                if let Some(native) = native {
+                    native.drain_checked().await?;
+                }
+                remote
+            }
             Self::Jailed(host) => host.drain_checked().await,
         }
     }
@@ -66,12 +80,13 @@ fn select_collector(
             root, config, resolved,
         )?)
     } else {
-        Collector::Host(super::configured_host(
-            &entry.host_config,
-            Arc::new(tinybox_host::LimitedLocalHost::new(
-                tinybox_bus::MAX_OUTPUT_BYTES,
-            )),
-        )?)
+        let native = Arc::new(tinybox_host::LimitedLocalHost::new(
+            tinybox_bus::MAX_OUTPUT_BYTES,
+        ));
+        Collector::Host(
+            super::configured_host(&entry.host_config, native.clone())?,
+            Some(native),
+        )
     })
 }
 impl StreamExecution {
