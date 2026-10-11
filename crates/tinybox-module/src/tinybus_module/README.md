@@ -25,6 +25,10 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | Inspect | ResourceId | ResourceInfo |
 | Close | ResourceId | unit |
 | Spawn | SpawnRequest | ProcessRef |
+| StartExec | SpawnRequest | ProcessRef |
+| StartJailedExec | SpawnRequest, NativeJailConfig | ProcessRef |
+| ReadOutput | ProcessRef, cursor | OutputBatch |
+| ReleaseOutput | ProcessRef | unit |
 | IsRunning | ProcessRef | bool |
 | Cancel | ProcessRef | unit |
 | AnalyzeShell | String | ShellAnalysis |
@@ -37,7 +41,7 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | FinishFileWrite | FinishFileWriteRequest | FileWriteProgress |
 | AbortFileWrite | AbortFileWriteRequest | unit |
 
-Capabilities advertises contract version 1.5; 1.0 denotes the original
+Capabilities advertises contract version 1.7; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -197,3 +201,27 @@ The jail owns a separate native collector for each execution. Output replay,
 Cancel, ReleaseOutput, Close and Shutdown use the same retained cleanup barriers
 as StartExec. Windows rejects this operation until its native jail has a
 supervised child bridge; explicit ordinary local execution remains available.
+
+
+## Observed SSH execution
+
+`StartExec` on an SSH passthrough resource uses a separate SSH supervisor and
+native collector for each execution. Binary stdin, stdout and stderr retain
+their bytes. Cancellation and close acknowledge the remote process group's
+cleanup before retiring the execution; failed acknowledgements keep the owner
+available for retry. Streaming never falls back to collected `Exec` output.
+Native-jail requests remain local operations and reject SSH resources.
+
+The compiled-artifact SSH fixture runs generated remote commands through a
+checked-in local transport script. It verifies that this script is selected
+before admitting a target, so the test does not contact an SSH server:
+
+```sh
+cargo build -p tinybox-module
+PATH="$PWD/crates/tinybox-module/tests/fixtures:$PATH" \
+TINYBOX_TEST_MODULE="$PWD/target/debug/libtinybox.so" \
+cargo test -p tinybox-module --test module_e2e -- --ignored
+```
+
+Use `libtinybox.dylib` for the artifact on macOS. Each artifact fixture loads an
+independent library path so concurrent module initialization stays isolated.
