@@ -294,6 +294,10 @@ point-in-time snapshot: hosts must prevent concurrent mutation and creation of
 protected entries within a granted tree, or use isolated disposable state.
 It does not install a kernel deny rule for filenames created later.
 
+Git include aliases retain their logical parent. Empty XDG_CONFIG_HOME is
+unset; unsupported ~user/ and %(prefix)/ expansion rejects complete discovery.
+[Contract specification](../../../../docs/specs/local-grants.md).
+
 ### Platform shell discovery
 
 Contract 1.10 adds `SelectShell`. The request carries command text and an optional

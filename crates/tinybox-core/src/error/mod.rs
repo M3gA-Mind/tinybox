@@ -15,6 +15,10 @@ use crate::capability::Capability;
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {
+    /// Local grant discovery cannot resolve a Git user-home or installation-prefix include.
+    #[error("unsupported git include pathname expansion")]
+    UnsupportedGitIncludePath,
+
     /// An identifier was empty, over-long, or contained characters outside the
     /// permitted `[A-Za-z0-9._-]` set.
     #[error("identifier {value:?} is not a valid {kind}")]

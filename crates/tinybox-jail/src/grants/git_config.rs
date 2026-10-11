@@ -13,19 +13,28 @@ impl Builder<'_> {
     /// Read-only grants for the user's git config files and everything they
     /// `include`, each canonicalized (a config is often a symlink into a
     /// dotfiles repo, and the jail needs the target).
-    pub(super) fn add_gitconfig(&mut self, home: &Path) {
+    pub(super) fn add_gitconfig(&mut self, home: &Path) -> tinybox_core::Result<()> {
+        self.add_gitconfig_at(home, std::env::var_os("XDG_CONFIG_HOME").as_deref())
+    }
+
+    pub(super) fn add_gitconfig_at(
+        &mut self,
+        home: &Path,
+        xdg: Option<&std::ffi::OsStr>,
+    ) -> tinybox_core::Result<()> {
         let mut roots: Vec<PathBuf> = GITCONFIG_FILES.iter().map(|f| home.join(f)).collect();
-        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        if let Some(xdg) = xdg_root(xdg) {
             roots.push(Path::new(&xdg).join("git/config"));
         }
         self.fixed_read_only(&home.join(".config/git/ignore"), "gitignore");
-        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        if let Some(xdg) = xdg_root(xdg) {
             self.fixed_read_only(&Path::new(&xdg).join("git/ignore"), "gitignore");
         }
         let mut visited = HashSet::new();
         for root in roots {
-            self.add_gitconfig_file(&root, home, 0, &mut visited);
+            self.add_gitconfig_file(&root, home, 0, &mut visited)?;
         }
+        Ok(())
     }
 
     fn add_gitconfig_file(
@@ -33,36 +42,40 @@ impl Builder<'_> {
         file: &Path,
         home: &Path,
         depth: usize,
-        visited: &mut HashSet<PathBuf>,
-    ) {
+        visited: &mut HashSet<(PathBuf, PathBuf)>,
+    ) -> tinybox_core::Result<()> {
         let Some(canonical) = self.admit(file, "gitconfig") else {
-            return;
+            return Ok(());
         };
         if !canonical.is_file() {
-            return;
+            return Ok(());
         }
         // Protect each requested link location, even when multiple configs
         // resolve to one target. A writable parent could replace that link.
         self.fixed_read_only(file, "gitconfig");
-        if !visited.insert(canonical.clone()) || depth >= GITCONFIG_MAX_DEPTH {
-            return;
+        let base = file.parent().unwrap_or(home);
+        let location = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+        if !visited.insert((canonical.clone(), location)) || depth >= GITCONFIG_MAX_DEPTH {
+            return Ok(());
         }
         let Ok(text) = std::fs::read_to_string(&canonical) else {
-            return;
+            return Ok(());
         };
         // Relative includes resolve against the directory of the file *as
         // named*, which for a symlinked config is the link's directory.
-        let base = file.parent().unwrap_or(home);
         for target in include_paths(&text) {
             let resolved = if let Some(rest) = target.strip_prefix("~/") {
                 home.join(rest)
+            } else if target.starts_with('~') || target.starts_with("%(prefix)") {
+                return Err(tinybox_core::Error::UnsupportedGitIncludePath);
             } else if Path::new(&target).is_absolute() {
                 PathBuf::from(&target)
             } else {
                 base.join(&target)
             };
-            self.add_gitconfig_file(&resolved, home, depth + 1, visited);
+            self.add_gitconfig_file(&resolved, home, depth + 1, visited)?;
         }
+        Ok(())
     }
 }
 
@@ -132,3 +145,7 @@ fn include_value(value: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "git_config_tests.rs"]
 mod tests;
+
+fn xdg_root(value: Option<&std::ffi::OsStr>) -> Option<&Path> {
+    value.filter(|value| !value.is_empty()).map(Path::new)
+}

@@ -29,12 +29,14 @@ const SUBTREE_MAX_ENTRIES: usize = 1_000_000;
 const SUBTREE_MAX_DEPTH: usize = 128;
 
 /// Build the grant set for `home` (the user's home directory, if known).
-#[must_use]
+/// # Errors
+/// Returns an error for unsupported Git user-home or installation-prefix
+/// includes instead of returning a partially discovered grant set.
 pub fn resolve_local_jail_grants(
     home: Option<&Path>,
     cfg: &LocalGrantConfig,
     protected: &ProtectedPaths,
-) -> JailGrants {
+) -> tinybox_core::Result<JailGrants> {
     let home = home.map(|h| h.canonicalize().unwrap_or_else(|_| h.to_path_buf()));
     let mut b = Builder::new(home.as_deref(), protected);
 
@@ -49,7 +51,7 @@ pub fn resolve_local_jail_grants(
             b.fixed_read_only(Path::new(dir), "toolchain");
         }
         if let Some(h) = home.as_deref() {
-            b.add_gitconfig(h);
+            b.add_gitconfig(h)?;
         }
     }
     for raw in &cfg.extra_read_only {
@@ -72,7 +74,7 @@ pub fn resolve_local_jail_grants(
         b.grants.read_only.len(),
         b.grants.read_write.len()
     );
-    b.grants
+    Ok(b.grants)
 }
 
 struct Builder<'a> {
