@@ -172,3 +172,28 @@ fn inherited_bash_options_cannot_abort_the_requested_payload()
     );
     Ok(())
 }
+
+#[test]
+#[cfg(unix)]
+fn exported_bash_functions_cannot_hide_pipeline_failures()
+-> Result<(), Box<dyn std::error::Error>> {
+    const CHILD: &str = "TINYBOX_SHELL_FUNCTION_REGRESSION_CHILD";
+    if bash_path().is_none() {
+        return Ok(());
+    }
+    if std::env::var_os(CHILD).is_some() {
+        assert!(!build_shell_command(&request(false)).status()?.success());
+        return Ok(());
+    }
+    let status = std::process::Command::new(std::env::current_exe()?)
+        .args([
+            "--exact",
+            "local::shell::tests::exported_bash_functions_cannot_hide_pipeline_failures",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .env("BASH_FUNC_false%%", "() { return 0; }")
+        .status()?;
+    assert!(status.success(), "exported function hid the failing pipeline stage");
+    Ok(())
+}
