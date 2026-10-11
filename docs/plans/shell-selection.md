@@ -38,5 +38,7 @@ preserves raw Windows quoting and uses existing output/cancellation ownership.
 Do not mark that consumer objection resolved on discovery-only evidence.
 
 Windows explicitly enables extensions and disables delayed expansion.
-Unix builders remove BASH_ENV and ENV; ShellInvocation returns those removal
-names. Providers apply them after approved environment overrides.
+Unix builders remove BASH_ENV, ENV, SHELLOPTS and BASHOPTS; ShellInvocation
+returns those removal names. Bash uses -p to ignore imported environment
+functions. Each discovery probes the standard paths again so shell installation
+or removal is reflected immediately. Providers apply them after approved environment overrides.

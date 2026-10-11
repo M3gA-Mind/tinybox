@@ -204,15 +204,13 @@ fn exported_bash_functions_cannot_hide_pipeline_failures() -> Result<(), Box<dyn
     Ok(())
 }
 
-
 #[test]
 fn bash_discovery_rechecks_availability() -> Result<(), Box<dyn std::error::Error>> {
     // A changing candidate list represents installation/removal without altering
     // global system paths or relying on the machine's installed shell.
     let fixture = tempfile::NamedTempFile::new()?;
-    // The discovery API returns standard static paths in production; leak only
-    // this small test path so the same candidate can be checked repeatedly.
-    let candidate: &'static str = Box::leak(fixture.path().to_string_lossy().into_owned().into_boxed_str());
+    let candidate_string = fixture.path().to_string_lossy().into_owned();
+    let candidate = candidate_string.as_str();
     assert_eq!(bash_path_in(&[candidate]), Some(candidate));
     fixture.close()?;
     assert_eq!(bash_path_in(&[candidate]), None);

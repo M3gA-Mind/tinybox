@@ -109,13 +109,11 @@ fn bash_path() -> Option<&'static str> {
     bash_path_in(&["/usr/bin/bash", "/bin/bash"])
 }
 
-fn bash_path_in(paths: &[&'static str]) -> Option<&'static str> {
-    static BASH: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
-    *BASH.get_or_init(|| {
-        paths
-            .iter().copied()
-            .find(|path| std::path::Path::new(path).is_file())
-    })
+fn bash_path_in<'a>(paths: &[&'a str]) -> Option<&'a str> {
+    paths
+        .iter()
+        .copied()
+        .find(|path| std::path::Path::new(path).is_file())
 }
 
 #[cfg(test)]
