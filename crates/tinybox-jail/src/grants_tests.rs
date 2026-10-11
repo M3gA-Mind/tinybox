@@ -648,3 +648,17 @@ fn git_ignore_patterns_cannot_add_config_include_grants()
     assert!(!has(&grants.read_only, &home.path().join("neutral-secret").canonicalize()?), "{grants:?}");
     Ok(())
 }
+
+#[test]
+#[cfg(unix)]
+fn credential_root_alias_keeps_its_requested_ancestor_protected()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    let outside = tempfile::tempdir()?;
+    std::os::unix::fs::symlink(outside.path(), home.path().join(".ssh"))?;
+    let protected = ProtectedPaths { credential_roots: vec![home.path().join(".ssh").to_str().ok_or("non-UTF8 fixture")?.into()], ..ProtectedPaths::default() };
+    let config = LocalGrantConfig { toolchain_homes: false, extra_read_only: vec!["~".into()], ..LocalGrantConfig::default() };
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &protected);
+    assert_eq!(grants.read_only, Vec::<PathBuf>::new());
+    Ok(())
+}
