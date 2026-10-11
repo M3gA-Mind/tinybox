@@ -5,7 +5,7 @@
 1. Reproduce the absent module consumer through the unconditional real-artifact
    test in crates/tinybox-module/tests/grants_manifest_e2e.rs.
 2. Add ShellExecRequest in crates/tinybox-bus/src/shell_execution.rs, append
-   StartShellExec and contract 1.11, and add TimedOut output failure.
+   StartNativeShellExec and contract 1.14, and add TimedOut output failure.
 3. Extend the existing collectors in tinybox-host/src/limited/{mod,jailed}.rs
    with observed standard-command bridges; retain owned kill/reap behavior.
 4. Implement validation, environment and scratch ownership in the module's

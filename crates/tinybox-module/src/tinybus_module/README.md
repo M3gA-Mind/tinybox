@@ -20,6 +20,9 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | Reserve | ReserveRequest | ResourceId |
 | Create | CreateRequest | ResourceInfo |
 | RunDocker | DockerRunRequest | DockerRunOutput |
+| RunDockerWithoutWorkspace | DockerRunRequest with an empty `workspace` | DockerRunOutput |
+| DockerStatus | DockerStatusRequest | DockerStatus |
+| CleanupDocker | CleanupDockerRequest | CleanupDockerOutput |
 | Forward | ForwardRequest | ForwardInfo |
 | CloseForward | CloseForwardRequest | unit |
 | Exec | ExecRequest | ExecOutput |
@@ -43,9 +46,10 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | AbortFileWrite | AbortFileWriteRequest | unit |
 | ResolveLocalGrants | ResolveLocalGrantsRequest | LocalGrants |
 | SelectShell | SelectShellRequest | ShellInvocation |
-| StartShellExec | ShellExecRequest | ProcessRef |
+| StartShellExec | SpawnRequest, SelectShellRequest | ProcessRef |
+| StartNativeShellExec | ShellExecRequest | ProcessRef |
 
-Capabilities advertises contract version 1.11; 1.0 denotes the original
+Capabilities advertises contract version 1.14; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -81,6 +85,27 @@ mount, capability-drop, environment, label, and timeout settings. Runtime is
 capped at 24 hours. It does not create a long-lived resource or fall back to a
 host command. The caller remains responsible for validating requested network
 and mount policy before sending the request.
+
+Version 1.9 adds bounded `DockerStatus` and `CleanupDocker` operations. The
+status probe reports whether the module host's daemon responds before the
+requested deadline. Cleanup lists and stops containers matching the requested
+`key=value` label and reports the number of IDs submitted to Docker. Invalid
+labels and deadlines are refused; daemon or cleanup failures return a stable
+module error rather than claiming successful cleanup.
+
+Version 1.10 adds `RunDockerWithoutWorkspace` for Docker runtimes that do not
+mount a host workspace. It accepts the same bounded Docker settings as
+`RunDocker`, requires an empty `workspace`, and omits both the workspace bind
+mount and working-directory override. `login_shell` defaults to false for
+existing callers; when true, the command runs through `sh -lc` rather than
+`sh -c`, preserving login-shell runtime behavior. All other image, network,
+resource, rootfs, read-only mount, capability-drop, environment, label, output,
+and timeout behavior remains shared with `RunDocker`.
+
+Version 1.11 adds `ResolveLocalGrants` for discovering canonical read-only and
+writable local grants under a caller-supplied protected-path floor. Git
+configuration discovery follows Git's XDG config-home selection and supports
+include chains up to Git's ten-level limit.
 
 Create requires an explicit backend and rejects one unavailable on the current
 platform before it creates a resource slot. `passthrough` is record-only on
@@ -265,7 +290,7 @@ cover actual Docker when a local daemon is available.
 
 ### Local grant discovery
 
-Contract 1.9 adds `ResolveLocalGrants`. The caller supplies its operator home,
+Contract 1.11 adds `ResolveLocalGrants`. The caller supplies its operator home,
 `LocalGrantConfig`, and `ProtectedPaths` floor. TinyBox resolves existing paths,
 canonicalizes symlinks, discovers toolchain homes and Git include chains, and
 returns read-only and writable grants. Discovery does not start a process or
@@ -301,12 +326,14 @@ unset; unsupported ~user/ and %(prefix)/ expansion rejects complete discovery.
 
 ### Platform shell discovery
 
-Contract 1.10 adds `SelectShell`. The request carries command text and an optional
+Contract 1.12 adds `SelectShell`. The request carries command text and an optional
 pipeline-status preservation flag. Unix selects Bash at a standard path with
 `set -o pipefail` by default, or /bin/sh without that Bash-only flag when Bash is
 absent. Unix uses non-login `-c` to avoid loading login profiles before the
-payload. Windows selects cmd `/D /E:ON /V:OFF /S /C`, disabling registry AutoRun hooks and
-stripping one explicit outer wrapper around the raw command-line payload.
+payload. Windows selects `SystemRoot/System32/cmd.exe` from the parent
+environment independently of payload PATH and COMSPEC overrides. Its
+`/D /E:ON /V:OFF /S /C` switches disable registry AutoRun hooks and strip one
+explicit outer wrapper around the raw command-line payload.
 Quoted executable/argument pairs, redirection paths and percent expansion remain
 inside that wrapper.
 The result includes Windows bootstrap environment names, never their values.
@@ -320,9 +347,17 @@ returns those removal names. Bash uses -p to ignore exported functions.
 Discovery checks standard Bash paths on every call. Providers apply the
 removals after approved environment overrides.
 
+Contract 1.13 adds `StartShellExec(SpawnRequest, SelectShellRequest)`. Supply an
+empty argv in SpawnRequest; its resource, cwd, environment and stdin retain
+their usual meaning. This operation supports local passthrough resources only,
+because selection describes the module machine's shell. It uses the native
+builder, including Windows raw arguments, and the existing supervised bounded
+output, cancellation and cleanup lifecycle. Read and release its journal with
+ReadOutput and ReleaseOutput. Retries must preserve both requests exactly.
+
 ## Native shell execution
 
-Contract 1.11 adds `StartShellExec(ShellExecRequest) -> ProcessRef` for local
+Contract 1.14 adds `StartNativeShellExec(ShellExecRequest) -> ProcessRef` for local
 passthrough resources. It composes platform shell selection with safe parent
 environment snapshots, approved overrides, private scratch, bounded pipes and
 owned timeout/cancellation cleanup. `ReadOutput` retains scratch until

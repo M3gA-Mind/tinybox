@@ -181,7 +181,7 @@ async fn verify_native_shell(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::
     let payload = "printf fixture > 'output (fixture).txt'; echo native-fixture";
     let running: tinybox_bus::ProcessRef = proxy
         .call(
-            "StartShellExec",
+            "StartNativeShellExec",
             (serde_json::json!({
                 "process":process, "resource":resource,
                 "shell":{"command":payload},

@@ -3,7 +3,7 @@
 Status: implemented upstream; review and cross-platform CI pending. Owner: TinyBox.
 Sequence: [native shell plan](../plans/native-shell-execution.md).
 
-Contract 1.11 appends StartShellExec(ShellExecRequest) -> ProcessRef.
+Contract 1.14 appends StartNativeShellExec(ShellExecRequest) -> ProcessRef.
 The caller supplies process/resource reservations, SelectShellRequest, optional
 cwd, approved extra environment, stdin, native jail configuration, timeout
 (default 30 seconds, positive, at most 24 hours), and approved existing absolute

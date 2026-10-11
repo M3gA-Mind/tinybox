@@ -39,7 +39,7 @@ fn cmd_preserves_quoted_payload_and_lists_bootstrap_names_without_values() {
         ShellFlavor::Cmd,
         None,
     );
-    assert_eq!(selected.program, "cmd");
+    assert_eq!(selected.program, cmd_path());
     assert_eq!(selected.arguments, ["/D", "/E:ON", "/V:OFF", "/S", "/C"]);
     assert_eq!(selected.raw_arguments, Some(format!("\"{payload}\"")));
     assert_eq!(
@@ -234,5 +234,39 @@ fn fallback_shell_survives_an_overridden_payload_path() -> Result<(), Box<dyn st
     );
     let status = command_for(selected).env("PATH", "").status()?;
     assert!(status.success());
+    Ok(())
+}
+
+#[test]
+fn cmd_selection_uses_the_parent_system_directory() {
+    let selected = selection_for(&request(false), ShellFlavor::Cmd, None);
+    let root = std::env::var_os("SystemRoot").map_or_else(
+        || std::path::PathBuf::from(r"C:\Windows"),
+        std::path::PathBuf::from,
+    );
+    assert_eq!(
+        std::path::Path::new(&selected.program),
+        root.join("System32").join("cmd.exe")
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn cmd_startup_ignores_the_payload_path() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = tempfile::tempdir()?;
+    // A test runner is a valid executable but cannot interpret cmd's switches.
+    std::fs::copy(std::env::current_exe()?, fixture.path().join("cmd.exe"))?;
+    let requested = SelectShellRequest {
+        command: "echo %PATH%".into(),
+        preserve_pipeline_status: false,
+    };
+    let output = build_shell_command(&requested)
+        .env("PATH", fixture.path())
+        .output()?;
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout)?.trim(),
+        fixture.path().to_string_lossy()
+    );
     Ok(())
 }

@@ -177,10 +177,10 @@ fn spawn_in_with_missing_id_errors() {
 }
 
 #[test]
-fn spawn_in_uses_default_backend() {
-    let base = tempdir("spawn-default");
-    let reg = JailRegistry::open(&base).unwrap();
-    let a = reg.create("def").unwrap();
+fn spawn_in_uses_default_backend() -> io::Result<()> {
+    let base = tempfile::tempdir()?;
+    let reg = JailRegistry::open(&base)?;
+    let a = reg.create("def")?;
     let cmd = if cfg!(windows) {
         let mut c = Command::new("cmd");
         c.args(["/C", "exit"]);
@@ -190,14 +190,14 @@ fn spawn_in_uses_default_backend() {
     };
     let result = reg.spawn_in(&a.id, cmd);
     if super::super::default_backend().is_available() {
-        let mut child = result.unwrap();
-        let _ = child.wait().unwrap();
+        assert!(result?.wait()?.success());
     } else {
         assert_eq!(
             result.err().map(|error| error.kind()),
             Some(io::ErrorKind::Unsupported)
         );
     }
+    Ok(())
 }
 
 #[test]
@@ -224,6 +224,19 @@ fn open_creates_base_directory_if_missing() {
     let reg = JailRegistry::open(path).unwrap();
     assert!(path.exists());
     assert!(reg.list().is_empty());
+}
+
+#[test]
+fn open_creates_a_missing_nested_base_directory() -> io::Result<()> {
+    let parent = tempfile::tempdir()?;
+    let base = parent.path().join("nested").join("registry");
+    assert!(!base.exists());
+
+    let registry = JailRegistry::open(&base)?;
+
+    assert!(base.is_dir());
+    assert!(registry.list().is_empty());
+    Ok(())
 }
 
 #[test]
@@ -350,27 +363,58 @@ fn registry_uses_the_injected_clock_for_timestamps() {
 }
 
 #[test]
-fn failed_index_write_rolls_back_registry_mutations() {
-    let base = tempdir("rollback");
-    let reg = JailRegistry::open(base.path()).unwrap();
-    let blocked_tmp = base.path().join("index.json.tmp");
-    fs::create_dir(&blocked_tmp).unwrap();
+fn create_rolls_back_when_index_persistence_fails() -> io::Result<()> {
+    let base = tempfile::tempdir()?;
+    fs::create_dir(base.path().join("index.json.tmp"))?;
+    let reg = JailRegistry::open(base.path())?;
 
-    let create_error = reg.create("not-persisted").err();
-    assert!(create_error.is_some());
+    assert!(reg.create("not-persisted").is_err());
     assert!(reg.list().is_empty());
+    assert_eq!(fs::read_dir(base.path())?.count(), 1);
+    Ok(())
+}
 
-    fs::remove_dir(&blocked_tmp).unwrap();
-    let record = reg.create("original").unwrap();
-    fs::create_dir(&blocked_tmp).unwrap();
+#[test]
+fn rename_and_notes_roll_back_when_index_persistence_fails() -> io::Result<()> {
+    let base = tempfile::tempdir()?;
+    let reg = JailRegistry::open(base.path())?;
+    let created = reg.create("original")?;
+    fs::create_dir(base.path().join("index.json.tmp"))?;
 
-    assert!(reg.rename(&record.id, "changed").is_err());
-    assert_eq!(
-        reg.get(&record.id).map(|item| item.label),
-        Some("original".into())
-    );
-    assert!(reg.set_notes(&record.id, Some("changed".into())).is_err());
-    assert_eq!(reg.get(&record.id).and_then(|item| item.notes), None);
+    assert!(reg.rename(&created.id, "changed").is_err());
+    assert!(reg.set_notes(&created.id, Some("changed".into())).is_err());
+    let current = reg
+        .get(&created.id)
+        .ok_or_else(|| io::Error::other("record disappeared"))?;
+    assert_eq!(current.label, "original");
+    assert!(current.notes.is_none());
+    Ok(())
+}
+
+#[test]
+fn delete_keeps_memory_aligned_when_index_persistence_fails() -> io::Result<()> {
+    let base = tempfile::tempdir()?;
+    let reg = JailRegistry::open(base.path())?;
+    let created = reg.create("remove")?;
+    fs::create_dir(base.path().join("index.json.tmp"))?;
+
+    assert!(reg.delete(&created.id).is_err());
+    assert!(reg.get(&created.id).is_none());
+    assert!(!created.dir.exists());
+    Ok(())
+}
+
+#[test]
+fn delete_persists_when_the_jail_directory_is_already_missing() -> io::Result<()> {
+    let base = tempfile::tempdir()?;
+    let reg = JailRegistry::open(base.path())?;
+    let created = reg.create("removed-outside")?;
+    fs::remove_dir_all(&created.dir)?;
+
+    reg.delete(&created.id)?;
+
+    assert!(reg.get(&created.id).is_none());
+    Ok(())
 }
 
 #[test]
@@ -396,22 +440,22 @@ fn open_rejects_a_file_as_registry_directory() {
     let base = tempdir("not-directory");
     let file = base.path().join("file");
     fs::write(&file, b"not a directory").unwrap();
-    let error = JailRegistry::open(file).err();
-    assert!(error.is_some());
+    assert!(JailRegistry::open(file).is_err());
 }
 
 #[test]
-fn spawn_rejects_a_jail_directory_removed_after_creation() {
-    let base = tempdir("removed-jail");
-    let reg = JailRegistry::open(base.path()).unwrap();
-    let record = reg.create("removed").unwrap();
-    fs::remove_dir_all(&record.dir).unwrap();
+fn spawn_rejects_a_jail_directory_removed_after_creation() -> io::Result<()> {
+    let base = tempfile::tempdir()?;
+    let reg = JailRegistry::open(base.path())?;
+    let record = reg.create("removed")?;
+    fs::remove_dir_all(&record.dir)?;
 
     let error = reg
         .spawn_in_with(&record.id, &super::super::NoopBackend, Command::new("true"))
         .err()
         .map(|error| error.kind());
     assert_eq!(error, Some(io::ErrorKind::NotFound));
+    Ok(())
 }
 
 #[cfg(unix)]

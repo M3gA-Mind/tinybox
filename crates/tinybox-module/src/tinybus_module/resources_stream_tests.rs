@@ -207,6 +207,7 @@ async fn a_panicked_job_is_joined_and_cleanup_failure_stays_owned_until_retry() 
         },
         jail: None,
         shell: None,
+        platform_shell: None,
         journal,
         task: Mutex::new(Some(task)),
         collector: Collector::Host(Arc::new(tinybox_host::LimitedLocalHost::new(64)), None),
@@ -367,6 +368,7 @@ async fn remote_cleanup_failure_keeps_binary_output_and_owner_until_retry_ack() 
         },
         command,
         Collector::Host(host.clone(), None),
+        None,
         None,
         None,
     );
@@ -557,6 +559,7 @@ async fn confirmed_container_destroy_keeps_native_cleanup_retryable_without_dest
             request,
             tinybox_core::ExecRequest::new(["fixture"]),
             Collector::Sandbox(Arc::new(sandbox), entry.id.clone(), None),
+            None,
             None,
             None,
         ));
@@ -883,6 +886,91 @@ async fn cancelled_native_shell_retains_scratch_until_output_release()
     assert_eq!(std::fs::read_dir(&scratch)?.count(), 1);
     resources.release_output(&process).await?;
     assert_eq!(std::fs::read_dir(&scratch)?.count(), 0);
+    resources.close(&resource).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_shell_execution_preserves_admission_and_request_identity() -> Result<()> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let request = request(&resources, &resource, Vec::new()).await?;
+    let shell = tinybox_bus::SelectShellRequest {
+        command: "echo fixture".into(),
+        preserve_pipeline_status: false,
+    };
+    let process = resources
+        .start_platform_shell_exec(request.clone(), shell.clone())
+        .await?;
+    assert_eq!(
+        process,
+        resources
+            .start_platform_shell_exec(request.clone(), shell.clone())
+            .await?
+    );
+    let mut different = shell.clone();
+    different.command = "echo different".into();
+    assert!(
+        resources
+            .start_platform_shell_exec(request.clone(), different)
+            .await
+            .is_err()
+    );
+    assert!(resources.start_exec(request.clone()).await.is_err());
+    completed(&resources, &process).await?;
+    let batch = resources.read_output(&process, 0).await?;
+    assert_eq!(batch.state, ExecutionState::Exited { exit_code: 0 });
+    let bytes: Vec<_> = batch
+        .chunks
+        .iter()
+        .flat_map(|chunk| chunk.bytes.iter().copied())
+        .collect();
+    assert_eq!(String::from_utf8_lossy(&bytes).trim(), "fixture");
+    resources.release_output(&process).await?;
+    let mut nonempty = request;
+    nonempty.command.argv = true_command();
+    assert!(
+        resources
+            .start_platform_shell_exec(nonempty, shell)
+            .await
+            .is_err()
+    );
+    resources.close(&resource).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn shell_execution_rejects_remote_selection_without_consuming_admission() -> Result<()> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let request = request(&resources, &resource, Vec::new()).await?;
+    let shell = tinybox_bus::SelectShellRequest {
+        command: "echo fixture".into(),
+        preserve_pipeline_status: false,
+    };
+    let slot = resources.slot(&resource).await?;
+    {
+        let mut guard = slot.lock().await;
+        let entry = guard
+            .as_mut()
+            .ok_or_else(|| Error::failed("fixture resource missing"))?;
+        entry.native_host = false;
+    }
+    assert!(
+        matches!(resources.start_platform_shell_exec(request.clone(), shell.clone()).await,
+        Err(tinybus::Error::MethodFailed { ref name, .. }) if name.as_str() == tinybox_bus::UNSUPPORTED_OPERATION)
+    );
+    {
+        let mut guard = slot.lock().await;
+        let entry = guard
+            .as_mut()
+            .ok_or_else(|| Error::failed("fixture resource missing"))?;
+        entry.native_host = true;
+    }
+    let process = resources.start_platform_shell_exec(request, shell).await?;
+    completed(&resources, &process).await?;
+    resources.cancel(&process).await?;
+    resources.release_output(&process).await?;
     resources.close(&resource).await?;
     Ok(())
 }

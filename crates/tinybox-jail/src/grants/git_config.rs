@@ -4,10 +4,10 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Git config files read at startup, relative to `$HOME`.
-const GITCONFIG_FILES: &[&str] = &[".gitconfig", ".config/git/config"];
+const GITCONFIG_FILE: &str = ".gitconfig";
 
 /// Deepest `include` chain followed when collecting git config files.
-const GITCONFIG_MAX_DEPTH: usize = 8;
+const GITCONFIG_MAX_DEPTH: usize = 10;
 
 impl Builder<'_> {
     /// Read-only grants for the user's git config files and everything they
@@ -22,14 +22,9 @@ impl Builder<'_> {
         home: &Path,
         xdg: Option<&std::ffi::OsStr>,
     ) -> tinybox_core::Result<()> {
-        let mut roots: Vec<PathBuf> = GITCONFIG_FILES.iter().map(|f| home.join(f)).collect();
-        if let Some(xdg) = xdg_root(xdg) {
-            roots.push(Path::new(&xdg).join("git/config"));
-        }
-        self.fixed_read_only(&home.join(".config/git/ignore"), "gitignore");
-        if let Some(xdg) = xdg_root(xdg) {
-            self.fixed_read_only(&Path::new(&xdg).join("git/ignore"), "gitignore");
-        }
+        let config_home = xdg_root(xdg).map_or_else(|| home.join(".config"), Path::to_path_buf);
+        let roots = [home.join(GITCONFIG_FILE), config_home.join("git/config")];
+        self.fixed_read_only(&config_home.join("git/ignore"), "gitignore");
         let mut visited = HashSet::new();
         for root in roots {
             self.add_gitconfig_file(&root, home, 0, &mut visited)?;
@@ -88,16 +83,20 @@ pub(super) fn include_paths(config: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in logical_lines(config) {
         let line = line.trim();
+        let mut assignment = line;
         if let Some(section) = line.strip_prefix('[') {
-            let name = section.split([']', ' ', '\t', '"']).next().unwrap_or("");
+            let Some((header, rest)) = section.split_once(']') else {
+                continue;
+            };
+            let name = header.split([']', ' ', '\t', '"']).next().unwrap_or("");
             in_include =
                 name.eq_ignore_ascii_case("include") || name.eq_ignore_ascii_case("includeif");
-            continue;
+            assignment = rest.trim();
         }
         if !in_include {
             continue;
         }
-        if let Some((key, value)) = line.split_once('=')
+        if let Some((key, value)) = assignment.split_once('=')
             && key.trim().eq_ignore_ascii_case("path")
             && let Some(value) = include_value(value)
         {

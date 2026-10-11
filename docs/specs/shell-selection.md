@@ -12,7 +12,7 @@ uses the module-owned output and cleanup supervisor.
 
 ## Contract
 
-Contract 1.10 appends SelectShell(SelectShellRequest) -> ShellInvocation.
+Contract 1.12 appends SelectShell(SelectShellRequest) -> ShellInvocation.
 The request carries command text and preserve_pipeline_status, default false.
 The result carries flavor, program, ordinary arguments, optional Windows raw
 arguments, and bootstrap environment variable names.
@@ -23,7 +23,8 @@ non-login -c; Bash also uses -p to ignore imported environment functions. Bash p
 sh never receives that Bash-only prefix. For "false | true", Bash's default
 selection reports the failing stage; preservation retains the last-stage status.
 
-Windows selects cmd with /D /E:ON /V:OFF /S /C. /D suppresses registry AutoRun. /S strips
+Windows selects SystemRoot/System32/cmd.exe from the parent environment,
+independently of payload PATH or COMSPEC overrides, with /D /E:ON /V:OFF /S /C. /D suppresses registry AutoRun. /S strips
 exactly one supplied outer wrapper around the raw payload, leaving inner quoted
 executable paths, argument pairs and redirection paths intact. Native builders
 must use raw_arg for this payload rather than ordinary argument escaping.
@@ -43,11 +44,9 @@ approved environment, working directory, pipes and lifecycle.
   with a quoted argument.
 - The actual compiled dynamic module passes production manifest admission and
   executes SelectShell, including when the surrounding test build is static.
-- Hosts execute behavior through the compiled module. Contract 1.11 appends
-  StartShellExec(ShellExecRequest) -> ProcessRef. The request supplies the
-  resource, shell text, cwd, approved environment overrides, stdin, state
-  directory, timeout and optional native jail configuration. See
-  [native shell execution](native-shell-execution.md).
+- Hosts execute behavior through the compiled module. Contract 1.13 appends
+  StartShellExec(SpawnRequest, SelectShellRequest) -> ProcessRef. The spawn
+  command supplies the resource, cwd, environment and stdin with empty argv.
 - StartShellExec supports local passthrough resources only and rejects other
   providers before consuming the process reservation. Selection describes the
   module machine, so its plan cannot be applied to remote hosts or containers.
