@@ -7,21 +7,21 @@ fn sandbox_selection_and_spec_mapping_preserve_host_policy() -> Result<()> {
     let host: Arc<dyn Host> = Arc::new(SshArgumentHost::default());
     let store = Arc::new(MemoryStore::new());
     assert!(
-        make_sandbox("passthrough", host.clone(), store.clone())?
+        make_sandbox("passthrough", host.clone(), store.clone(), "fixture")?
             .local_sandbox
             .is_some()
     );
     assert!(
-        make_sandbox("docker", host.clone(), store.clone())?
+        make_sandbox("docker", host.clone(), store.clone(), "fixture")?
             .local_sandbox
             .is_none()
     );
     assert!(
-        make_sandbox("namespace", host.clone(), store.clone())?
+        make_sandbox("namespace", host.clone(), store.clone(), "fixture")?
             .local_sandbox
             .is_none()
     );
-    assert!(make_sandbox("unknown", host, store).is_err());
+    assert!(make_sandbox("unknown", host, store, "fixture").is_err());
 
     for (policy, expected) in [
         (

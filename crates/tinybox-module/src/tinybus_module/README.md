@@ -141,10 +141,11 @@ Nonzero exits remain results. Cancellation is acknowledged only after kill/reap;
 failed cleanup retains native ownership for Cancel, Close or Shutdown retry.
 Release refuses running or unacknowledged cleanup. Resource Close retires its
 journals after stream cleanup is acknowledged. Streaming is currently available
-for local and SSH passthrough resources; sandbox providers explicitly refuse it.
+for local and SSH passthrough resources and Docker resources; other sandbox
+providers explicitly refuse it.
 
 Workspace file transfer uses the bounded Begin/Read/Write/Finish/Abort operations
-above. MicroVM configuration and streaming for sandbox providers remain
+above. MicroVM configuration and observed namespace execution remain
 subsequent slices.
 
 Operations serialize within each resource; unrelated resources have independent
@@ -225,3 +226,27 @@ cargo test -p tinybox-module --test module_e2e -- --ignored
 
 Use `libtinybox.dylib` for the artifact on macOS. Each artifact fixture loads an
 independent library path so concurrent module initialization stays isolated.
+
+
+## Observed Docker execution
+
+`StartExec` on Docker resources uses the existing box/store identity and a
+separate host collector and cleanup journal for each execution. The provider
+reserves a private owner token before launching its container-side supervisor.
+Cancellation waits for the supervisor's process-group reap acknowledgement;
+lost acknowledgement or receipt-release replies retain enough state for retry.
+Cancelling one execution leaves other executions in the container running.
+
+Resource Close may remove the entire container to retire an unreachable
+waiter. After the provider acknowledges removal, the module retires each
+execution view's remote journal and still drains its native CLI owner. A failed
+native drain keeps the resource available for Close retry without repeating
+container destruction. Resource reservations supply unique Docker namespaces,
+so two resource-local stores cannot collide on their first box identifier.
+`StartJailedExec` rejects Docker resources instead of executing them locally.
+
+The compiled-artifact Docker fixture uses the checked-in local `docker` script
+alongside the SSH fixture in the command above. It executes the generated
+supervisor shell and verifies stream behavior and scoped cancellation without
+a Docker daemon; it does not establish container isolation. Provider live tests
+cover actual Docker when a local daemon is available.

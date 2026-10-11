@@ -394,6 +394,189 @@ async fn remote_cleanup_failure_keeps_binary_output_and_owner_until_retry_ack() 
     Ok(())
 }
 
+#[derive(Debug, Default)]
+struct DockerFaultHost {
+    names: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    destroys: std::sync::atomic::AtomicUsize,
+    pending: std::sync::atomic::AtomicBool,
+    reject_retry: std::sync::atomic::AtomicBool,
+}
+#[async_trait::async_trait]
+impl tinybox_core::Host for DockerFaultHost {
+    fn name(&self) -> &'static str {
+        "fixture"
+    }
+    async fn run(
+        &self,
+        command: &tinybox_core::ExecRequest,
+    ) -> tinybox_core::Result<tinybox_core::ExecOutput> {
+        match command.argv.get(1).map(String::as_str) {
+            Some("run") => {
+                let name = command
+                    .argv
+                    .windows(2)
+                    .find(|pair| pair[0] == "--name")
+                    .ok_or_else(|| tinybox_core::Error::EmptyCommand {
+                        sandbox: "fixture".into(),
+                    })?[1]
+                    .clone();
+                if !self
+                    .names
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(name)
+                {
+                    return Err(tinybox_core::Error::Backend {
+                        sandbox: "docker".into(),
+                        operation: "create",
+                        message: "container name already in use".into(),
+                    });
+                }
+                Ok(tinybox_core::ExecOutput::new(
+                    0,
+                    b"created".to_vec(),
+                    Vec::new(),
+                ))
+            }
+            Some("inspect") => Ok(tinybox_core::ExecOutput::new(
+                0,
+                b"running".to_vec(),
+                Vec::new(),
+            )),
+            Some("rm") => {
+                self.destroys
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(tinybox_core::ExecOutput::new(0, Vec::new(), Vec::new()))
+            }
+            Some("exec")
+                if command
+                    .argv
+                    .iter()
+                    .any(|argument| argument == "tinybox-observed-reserve") =>
+            {
+                Ok(tinybox_core::ExecOutput::new(
+                    0,
+                    b"ready\n".to_vec(),
+                    Vec::new(),
+                ))
+            }
+            _ => Err(tinybox_core::Error::ObservedCleanupPending {
+                provider: "fixture".into(),
+            }),
+        }
+    }
+    async fn run_observed(
+        &self,
+        _: &tinybox_core::ExecRequest,
+        observer: Arc<dyn tinybox_core::ExecutionObserver>,
+    ) -> tinybox_core::Result<tinybox_core::ExecOutput> {
+        observer.output(tinybox_core::OutputStream::Stdout, b"owned")?;
+        self.pending
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Err(tinybox_core::Error::ObservedCleanupPending {
+            provider: "fixture".into(),
+        })
+    }
+    fn has_pending_observed_cleanup(&self) -> bool {
+        self.pending.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    async fn retry_observed_cleanup(&self) -> tinybox_core::Result<()> {
+        if self.reject_retry.load(std::sync::atomic::Ordering::SeqCst) {
+            Err(tinybox_core::Error::ObservedCleanupPending {
+                provider: "fixture".into(),
+            })
+        } else {
+            self.pending
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+}
+async fn mock_docker_resource(
+    resources: &Resources,
+    host: Arc<DockerFaultHost>,
+) -> Result<ResourceId> {
+    let resource = resources.reserve(ReserveRequest::Resource).await?;
+    resources
+        .create_on(
+            CreateRequest {
+                resource: resource.clone(),
+                backend: "docker".into(),
+                workspace: Workspace::Image("fixture".into()),
+                ..Default::default()
+            },
+            host,
+        )
+        .await?;
+    Ok(resource)
+}
+#[tokio::test]
+async fn docker_resources_use_distinct_container_names() -> Result<()> {
+    let resources = Resources::default();
+    let host = Arc::new(DockerFaultHost::default());
+    let first = mock_docker_resource(&resources, host.clone()).await?;
+    let second = mock_docker_resource(&resources, host.clone()).await?;
+    assert_eq!(
+        host.names
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len(),
+        2
+    );
+    resources.close(&first).await?;
+    resources.close(&second).await?;
+    Ok(())
+}
+#[tokio::test]
+async fn confirmed_container_destroy_keeps_native_cleanup_retryable_without_destroying_twice()
+-> Result<()> {
+    let resources = Resources::default();
+    let host = Arc::new(DockerFaultHost::default());
+    host.reject_retry
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let resource = mock_docker_resource(&resources, host.clone()).await?;
+    let request = request(&resources, &resource, vec!["fixture".into()]).await?;
+    let process = ProcessRef {
+        resource: resource.clone(),
+        process: request.process.clone(),
+    };
+    let slot = resources.slot(&resource).await?;
+    {
+        let guard = slot.lock().await;
+        let entry = guard
+            .as_ref()
+            .ok_or_else(|| Error::failed("fixture resource missing"))?;
+        let sandbox = entry
+            .docker_sandbox
+            .as_ref()
+            .ok_or_else(|| Error::failed("fixture Docker sandbox missing"))?
+            .for_observed_host(host.clone());
+        let execution = Arc::new(StreamExecution::start(
+            request,
+            tinybox_core::ExecRequest::new(["fixture"]),
+            Collector::Sandbox(Arc::new(sandbox), entry.id.clone(), None),
+            None,
+        ));
+        resources
+            .streams
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(process.process.clone(), execution);
+    }
+    assert!(resources.cancel(&process).await.is_err());
+    assert_eq!(host.destroys.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(resources.close(&resource).await.is_err());
+    assert_eq!(host.destroys.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(resources.is_running(&process).await?);
+    host.reject_retry
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    resources.close(&resource).await?;
+    assert_eq!(host.destroys.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(resources.stream(&process)?.is_none());
+    assert!(resources.slot(&resource).await.is_err());
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn collector_drain_joins_its_owned_active_native_supervisor() -> Result<()> {

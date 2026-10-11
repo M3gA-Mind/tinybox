@@ -222,6 +222,70 @@ async fn compiled_module_streams_ssh_output_and_acknowledges_remote_cancellation
     Ok(())
 }
 
+/// The caller prepends the checked-in local Docker fixture to PATH before starting
+/// this process; no runtime environment mutation or real Docker server is needed.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires TINYBOX_TEST_MODULE and the local Docker fixture first on PATH"]
+async fn compiled_module_streams_docker_output_and_acknowledges_container_cancellation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/docker")
+        .canonicalize()?;
+    let path = std::env::var_os("PATH").ok_or("PATH is required")?;
+    let selected = std::env::split_paths(&path)
+        .find_map(|directory| {
+            let candidate = directory.join("docker");
+            candidate.is_file().then_some(candidate)
+        })
+        .ok_or("local Docker transport fixture is required")?;
+    assert_eq!(
+        selected.canonicalize()?,
+        fixture,
+        "refuse real Docker transport"
+    );
+    let artifact = std::env::var_os("TINYBOX_TEST_MODULE")
+        .ok_or("TINYBOX_TEST_MODULE must point at libtinybox")?;
+    // Give this independently loaded module its own native-library identity;
+    // another artifact fixture may load the original path concurrently.
+    let artifact_directory = tempfile::tempdir()?;
+    let isolated_artifact = artifact_directory.path().join(
+        std::path::Path::new(&artifact)
+            .file_name()
+            .ok_or("module filename is required")?,
+    );
+    std::fs::copy(artifact, &isolated_artifact)?;
+    let workspace = tempfile::tempdir()?;
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let modules = ModuleHost::new(broker);
+    modules.load_file(isolated_artifact)?;
+    let client = Connection::connect(bus.connect().await?).await?;
+    wait_until_serving(&client, &modules).await?;
+    let proxy = client.proxy(BUS_NAME, OBJECT_PATH, BUS_NAME)?;
+    let resource: ResourceId = proxy.call("Reserve", (ReserveRequest::Resource,)).await?;
+    proxy
+        .call::<ResourceInfo>(
+            "Create",
+            (CreateRequest {
+                resource: resource.clone(),
+                backend: "docker".into(),
+                workspace: Workspace::Directory(workspace.path().to_string_lossy().into_owned()),
+                ..Default::default()
+            },),
+        )
+        .await?;
+    verify_docker_rejects_local_jail(&proxy, &resource).await?;
+    verify_live_output(&proxy, &resource).await?;
+    verify_binary_stdin(&proxy, &resource).await?;
+    verify_cancellation_is_scoped(&proxy, &resource).await?;
+    proxy.call::<()>("Close", (resource,)).await?;
+    wait_until_idle(&modules).await?;
+    broker_task.abort();
+    Ok(())
+}
+
 async fn wait_until_serving(
     client: &Connection,
     modules: &ModuleHost,
@@ -592,5 +656,115 @@ async fn verify_jailed_cancel(
     assert_eq!(batch.state, ExecutionState::Cancelled);
     assert!(!proxy.call::<bool>("IsRunning", (process.clone(),)).await?);
     proxy.call::<()>("ReleaseOutput", (process,)).await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn verify_docker_rejects_local_jail(
+    proxy: &tinybus::Proxy,
+    resource: &ResourceId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tinybox_bus::{ExecRequest, JailEnforcement, NativeJailConfig, ProcessRef, SpawnRequest};
+    let process: ResourceId = proxy
+        .call("Reserve", (ReserveRequest::Process(resource.clone()),))
+        .await?;
+    let request = SpawnRequest {
+        process,
+        command: ExecRequest {
+            resource: resource.clone(),
+            argv: vec!["/bin/true".into()],
+            cwd: None,
+            env: std::collections::BTreeMap::default(),
+            stdin: None,
+        },
+    };
+    let result = proxy
+        .call::<ProcessRef>(
+            "StartJailedExec",
+            (
+                request.clone(),
+                NativeJailConfig {
+                    read_only: Vec::new(),
+                    read_write: Vec::new(),
+                    allow_net: true,
+                    allow_subprocess: true,
+                    enforcement: JailEnforcement::Declared,
+                    require_process_isolation: false,
+                },
+            ),
+        )
+        .await;
+    assert_eq!(
+        result
+            .err()
+            .ok_or("Docker admitted local jail execution")?
+            .wire_name(),
+        tinybox_bus::UNSUPPORTED_OPERATION
+    );
+    let process: ProcessRef = proxy.call("StartExec", (request,)).await?;
+    proxy.call::<()>("Cancel", (process.clone(),)).await?;
+    proxy.call::<()>("ReleaseOutput", (process,)).await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn verify_cancellation_is_scoped(
+    proxy: &tinybus::Proxy,
+    resource: &ResourceId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tinybox_bus::{ExecRequest, ExecutionState, OutputBatch, ProcessRef, SpawnRequest};
+    let mut processes = Vec::new();
+    for _ in 0..2 {
+        let process: ResourceId = proxy
+            .call("Reserve", (ReserveRequest::Process(resource.clone()),))
+            .await?;
+        let process: ProcessRef = proxy
+            .call(
+                "StartExec",
+                (SpawnRequest {
+                    process,
+                    command: ExecRequest {
+                        resource: resource.clone(),
+                        argv: vec![
+                            "/bin/sh".into(),
+                            "-c".into(),
+                            "printf ready; exec sleep 600".into(),
+                        ],
+                        cwd: None,
+                        env: std::collections::BTreeMap::default(),
+                        stdin: None,
+                    },
+                },),
+            )
+            .await?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let batch: OutputBatch = proxy.call("ReadOutput", (process.clone(), 0_u64)).await?;
+                if !batch.chunks.is_empty() {
+                    assert_eq!(batch.state, ExecutionState::Running);
+                    return Ok::<_, tinybus::Error>(());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+        processes.push(process);
+    }
+    proxy.call::<()>("Cancel", (processes[0].clone(),)).await?;
+    let other: OutputBatch = proxy
+        .call("ReadOutput", (processes[1].clone(), 0_u64))
+        .await?;
+    assert_eq!(other.state, ExecutionState::Running);
+    assert!(
+        proxy
+            .call::<bool>("IsRunning", (processes[1].clone(),))
+            .await?
+    );
+    for process in processes {
+        proxy.call::<()>("Cancel", (process.clone(),)).await?;
+        let batch: OutputBatch = proxy.call("ReadOutput", (process.clone(), 0_u64)).await?;
+        assert_eq!(batch.state, ExecutionState::Cancelled);
+        proxy.call::<()>("ReleaseOutput", (process,)).await?;
+    }
     Ok(())
 }
