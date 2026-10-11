@@ -576,7 +576,7 @@ async fn empty_command_is_rejected_before_remote_probes() -> Result<()> {
         .await,
         Err(Error::EmptyCommand { .. })
     ));
-    assert!(inner.requests().is_empty());
+    assert_eq!(inner.requests().len(), 0);
     Ok(())
 }
 
