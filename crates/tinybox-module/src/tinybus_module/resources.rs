@@ -23,11 +23,15 @@ use tokio::sync::Mutex;
 #[path = "resources_stream.rs"]
 mod stream;
 
+type ResourceSlot = Arc<Mutex<Option<Resource>>>;
+
 struct Resource {
     host: Arc<dyn Host>,
     host_config: HostConfig,
     native_host: bool,
     sandbox: Arc<dyn Sandbox>,
+    sandbox_destroyed: bool,
+    docker_sandbox: Option<Arc<tinybox_docker::DockerSandbox>>,
     id: BoxId,
     execution_supported: bool,
     processes: BTreeMap<ResourceId, OwnedProcess>,
@@ -39,6 +43,37 @@ struct Resource {
     writers: BTreeMap<ResourceId, OwnedWriter>,
     completed_writes: BTreeMap<ResourceId, CompletedWrite>,
     completed_write_order: VecDeque<ResourceId>,
+}
+
+impl Resource {
+    fn new(
+        request: &CreateRequest,
+        host: Arc<dyn Host>,
+        selection: SandboxSelection,
+        id: BoxId,
+        execution_supported: bool,
+        collector: Option<Arc<tinybox_host::LimitedLocalHost>>,
+    ) -> Self {
+        Self {
+            native_host: host.name() == tinybox_host::LOCAL,
+            host,
+            host_config: request.host.clone(),
+            sandbox: selection.sandbox,
+            sandbox_destroyed: false,
+            docker_sandbox: selection.docker_sandbox,
+            id,
+            execution_supported,
+            processes: BTreeMap::new(),
+            local_sandbox: selection.local_sandbox,
+            collector,
+            forwards: BTreeMap::new(),
+            workspace_root: directory_workspace(&request.workspace),
+            readers: BTreeMap::new(),
+            writers: BTreeMap::new(),
+            completed_writes: BTreeMap::new(),
+            completed_write_order: VecDeque::new(),
+        }
+    }
 }
 
 struct OwnedReader {
@@ -67,6 +102,7 @@ struct OwnedForward {
 
 struct SandboxSelection {
     sandbox: Arc<dyn Sandbox>,
+    docker_sandbox: Option<Arc<tinybox_docker::DockerSandbox>>,
     local_sandbox: Option<Arc<tinybox_core::PassthroughSandbox>>,
 }
 
@@ -97,7 +133,7 @@ pub(super) struct Resources {
 
 #[derive(Default)]
 struct State {
-    entries: BTreeMap<ResourceId, Arc<Mutex<Option<Resource>>>>,
+    entries: BTreeMap<ResourceId, ResourceSlot>,
     reservations: BTreeMap<ResourceId, (ReserveRequest, std::time::SystemTime)>,
     pending_processes: BTreeMap<ResourceId, (ResourceId, Arc<AtomicBool>)>,
     next: u64,
@@ -279,12 +315,14 @@ impl Resources {
                 return Err(failure(tinybox_bus::EXEC_CANCELLED, "resource is closing"));
             }
             let resource_host = host.clone();
-            let native_host = host.name() == tinybox_host::LOCAL;
             let store = Arc::new(MemoryStore::new());
-            let SandboxSelection {
-                sandbox,
-                local_sandbox,
-            } = make_sandbox(&request.backend, host.clone(), store.clone())?;
+            let selection = make_sandbox(
+                &request.backend,
+                host.clone(),
+                store.clone(),
+                &request.resource.0,
+            )?;
+            let sandbox = selection.sandbox.clone();
             let spec = make_spec(&request, host.name())?;
             let info = match sandbox.create(&spec).await {
                 Ok(info) => info,
@@ -297,45 +335,27 @@ impl Resources {
                         && let Ok(records) = tinybox_core::Store::list(store.as_ref())
                         && let Some(info) = records.into_iter().next()
                     {
-                        *slot_guard = Some(Resource {
-                            host: resource_host,
-                            host_config: request.host.clone(),
-                            native_host,
-                            sandbox,
-                            id: info.id,
-                            execution_supported: supports_execution(platform, &request.backend),
-                            processes: BTreeMap::new(),
+                        *slot_guard = Some(Resource::new(
+                            &request,
+                            resource_host,
+                            selection,
+                            info.id,
+                            supports_execution(platform, &request.backend),
                             collector,
-                            local_sandbox,
-                            forwards: BTreeMap::new(),
-                            workspace_root: directory_workspace(&request.workspace),
-                            readers: BTreeMap::new(),
-                            writers: BTreeMap::new(),
-                            completed_writes: BTreeMap::new(),
-                            completed_write_order: VecDeque::new(),
-                        });
+                        ));
                     }
                     return Err(backend_error(&error));
                 }
             };
             let execution_supported = supports_execution(platform, &request.backend);
-            *slot_guard = Some(Resource {
-                host: resource_host,
-                host_config: request.host.clone(),
-                native_host,
-                sandbox: sandbox.clone(),
-                id: info.id.clone(),
+            *slot_guard = Some(Resource::new(
+                &request,
+                resource_host,
+                selection,
+                info.id.clone(),
                 execution_supported,
-                processes: BTreeMap::new(),
                 collector,
-                local_sandbox,
-                forwards: BTreeMap::new(),
-                workspace_root: directory_workspace(&request.workspace),
-                readers: BTreeMap::new(),
-                writers: BTreeMap::new(),
-                completed_writes: BTreeMap::new(),
-                completed_write_order: VecDeque::new(),
-            });
+            ));
             let published_ports = published_port_facts(sandbox.as_ref(), &info.id, &info).await?;
             let result = ResourceInfo {
                 resource: request.resource.clone(),
@@ -358,7 +378,7 @@ impl Resources {
         allocation
     }
 
-    async fn slot(&self, resource: &ResourceId) -> Result<Arc<Mutex<Option<Resource>>>> {
+    async fn slot(&self, resource: &ResourceId) -> Result<ResourceSlot> {
         self.state
             .lock()
             .await
@@ -1171,35 +1191,8 @@ impl Resources {
 
     pub(super) async fn close(&self, resource: &ResourceId) -> Result<()> {
         validate_id(resource)?;
-        let slot = {
-            let mut state = self.state.lock().await;
-            if let Some((kind, _)) = state.reservations.get(resource) {
-                if kind != &ReserveRequest::Resource {
-                    return Err(failure(
-                        tinybox_bus::INVALID_ID,
-                        "not a resource reservation",
-                    ));
-                }
-                state.reservations.remove(resource);
-            }
-            let Some(slot) = state.entries.get(resource).cloned() else {
-                return Ok(());
-            };
-            state.reservations.retain(|_, (kind, _)| {
-                kind != &ReserveRequest::Process(resource.clone())
-                    && kind != &ReserveRequest::Forward(resource.clone())
-                    && kind != &ReserveRequest::FileRead(resource.clone())
-                    && kind != &ReserveRequest::FileWrite(resource.clone())
-            });
-            let mut executions = self
-                .executions
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            executions.closing.insert(resource.clone());
-            if let Some(native) = executions.native.get(resource) {
-                native.abort();
-            }
-            slot
+        let Some(slot) = self.begin_close(resource).await? else {
+            return Ok(());
         };
         let mut slot = slot.lock().await;
         let mut failure = self.close_streams(resource).await.err();
@@ -1212,6 +1205,12 @@ impl Resources {
             let sandbox = entry.sandbox.clone();
             let id = entry.id.clone();
             for process in entry.processes.values_mut() {
+                if entry.sandbox_destroyed
+                    && let OwnedProcess::Sandbox { stopped, .. } = process
+                {
+                    *stopped = true;
+                    continue;
+                }
                 if let Err(error) = stop_process(&sandbox, &id, process).await {
                     failure.get_or_insert(error);
                 }
@@ -1220,6 +1219,11 @@ impl Resources {
                 && let Err(error) = collector.drain_checked().await
             {
                 failure.get_or_insert_with(|| backend_error(&error));
+            }
+            if entry.docker_sandbox.is_some()
+                && let Some(error) = self.close_container_streams(resource, entry).await?
+            {
+                failure.get_or_insert(error);
             }
             entry.processes.retain(|_, process| match process {
                 OwnedProcess::Native(process) => !process.is_cleaned(),
@@ -1249,11 +1253,14 @@ impl Resources {
                 return failure
                     .map_or_else(|| Err(Error::failed("stream cleanup remains pending")), Err);
             }
-            entry
-                .sandbox
-                .destroy(&entry.id)
-                .await
-                .map_err(|error| backend_error(&error))?;
+            if !entry.sandbox_destroyed {
+                entry
+                    .sandbox
+                    .destroy(&entry.id)
+                    .await
+                    .map_err(|error| backend_error(&error))?;
+                entry.sandbox_destroyed = true;
+            }
         }
         *slot = None;
         self.state.lock().await.entries.remove(resource);
@@ -1264,6 +1271,66 @@ impl Resources {
         executions.closing.remove(resource);
         executions.native.remove(resource);
         failure.map_or(Ok(()), Err)
+    }
+
+    async fn begin_close(&self, resource: &ResourceId) -> Result<Option<ResourceSlot>> {
+        let mut state = self.state.lock().await;
+        if let Some((kind, _)) = state.reservations.get(resource) {
+            if kind != &ReserveRequest::Resource {
+                return Err(failure(
+                    tinybox_bus::INVALID_ID,
+                    "not a resource reservation",
+                ));
+            }
+            state.reservations.remove(resource);
+        }
+        let Some(slot) = state.entries.get(resource).cloned() else {
+            return Ok(None);
+        };
+        state.reservations.retain(|_, (kind, _)| {
+            kind != &ReserveRequest::Process(resource.clone())
+                && kind != &ReserveRequest::Forward(resource.clone())
+                && kind != &ReserveRequest::FileRead(resource.clone())
+                && kind != &ReserveRequest::FileWrite(resource.clone())
+        });
+        let mut executions = self
+            .executions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        executions.closing.insert(resource.clone());
+        if let Some(native) = executions.native.get(resource) {
+            native.abort();
+        }
+        Ok(Some(slot))
+    }
+
+    async fn close_container_streams(
+        &self,
+        resource: &ResourceId,
+        entry: &mut Resource,
+    ) -> Result<Option<Error>> {
+        // Explicit resource Close can retire an unreachable container
+        // waiter by destroying its entire box. Cancel of one execution
+        // never destroys that shared container or another execution.
+        // Remember the acknowledgement: Docker removes its store record,
+        // so a later native cleanup retry must not destroy it again.
+        if !entry.sandbox_destroyed {
+            entry
+                .sandbox
+                .destroy(&entry.id)
+                .await
+                .map_err(|error| backend_error(&error))?;
+            entry.sandbox_destroyed = true;
+        }
+        for process in entry.processes.values_mut() {
+            if let OwnedProcess::Sandbox { stopped, .. } = process {
+                *stopped = true;
+            }
+        }
+        Ok(self
+            .close_destroyed_box_streams(resource, &entry.id)
+            .await
+            .err())
     }
 
     pub(super) async fn shutdown(&self) -> Result<()> {
@@ -1434,21 +1501,31 @@ fn make_sandbox(
     backend: &str,
     host: Arc<dyn Host>,
     store: Arc<MemoryStore>,
+    namespace: &str,
 ) -> Result<SandboxSelection> {
     match backend {
         "passthrough" => {
             let sandbox = Arc::new(tinybox_core::PassthroughSandbox::new(host, store));
             Ok(SandboxSelection {
                 sandbox: sandbox.clone(),
+                docker_sandbox: None,
                 local_sandbox: Some(sandbox),
             })
         }
-        "docker" => Ok(SandboxSelection {
-            sandbox: Arc::new(tinybox_docker::DockerSandbox::new(host, store)),
-            local_sandbox: None,
-        }),
+        "docker" => {
+            let sandbox = Arc::new(
+                tinybox_docker::DockerSandbox::with_namespace(host, store, namespace)
+                    .map_err(|error| backend_error(&error))?,
+            );
+            Ok(SandboxSelection {
+                sandbox: sandbox.clone(),
+                docker_sandbox: Some(sandbox),
+                local_sandbox: None,
+            })
+        }
         "namespace" => Ok(SandboxSelection {
             sandbox: Arc::new(tinybox_linux::NamespaceSandbox::new(host, store)),
+            docker_sandbox: None,
             local_sandbox: None,
         }),
         _ => Err(failure(
