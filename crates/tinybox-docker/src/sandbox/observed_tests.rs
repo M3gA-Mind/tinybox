@@ -470,6 +470,7 @@ async fn bash_supervisor_reaps_its_watcher_without_changing_workload_stderr() ->
     let output = tokio::time::timeout(
         Duration::from_secs(5),
         tokio::process::Command::new("bash")
+            .arg("-b")
             .arg("-c")
             .arg(SUPERVISOR)
             .arg("tinybox-observed")
