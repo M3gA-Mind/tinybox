@@ -35,8 +35,9 @@ pub use files::{
 /// 1.3 adds native jail discovery.
 /// 1.4 adds detailed shell facts for host execution policy. 1.5 adds bounded
 /// file transfer for mounted workspaces. 1.6 adds bounded live native output.
-/// 1.7 adds explicitly approved native directory-jail execution.
-pub const CONTRACT_VERSION: (u32, u32) = (1, 7);
+/// 1.7 adds explicitly approved native directory-jail execution. 1.8 adds a
+/// bounded, module-owned one-shot Docker operation.
+pub const CONTRACT_VERSION: (u32, u32) = (1, 8);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.
@@ -105,6 +106,7 @@ pub const METHODS: &[&str] = &[
     "ReadOutput",
     "ReleaseOutput",
     "StartJailedExec",
+    "RunDocker",
 ];
 
 /// Facts about the detected native directory-jail backend.
@@ -157,6 +159,8 @@ pub const INVALID_FILE_CHUNK: &str = "ai.tinyhumans.tinybox.Error.InvalidFileChu
 pub const FILE_UNSUPPORTED: &str = "ai.tinyhumans.tinybox.Error.FileUnsupported";
 /// Stable error name for a workspace file operation failure.
 pub const FILE_ERROR: &str = "ai.tinyhumans.tinybox.Error.FileOperation";
+/// Stable error name for an invalid Docker run request.
+pub const INVALID_DOCKER_RUN: &str = "ai.tinyhumans.tinybox.Error.InvalidDockerRun";
 
 /// Opaque module-minted reservation identifier bound by one module instance.
 /// IDs use ASCII letters, digits, hyphens, or underscores, up to [`MAX_ID_BYTES`].
@@ -308,6 +312,68 @@ pub struct CreateRequest {
     /// Variables inherited by commands.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+}
+
+/// Run one Docker-isolated shell command and collect bounded output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DockerRunRequest {
+    /// Host workspace mounted read-write at `/workspace`.
+    pub workspace: String,
+    /// Container image; `None` uses the existing one-shot default.
+    #[serde(default)]
+    pub image: Option<String>,
+    /// Shell command executed with `sh -c`.
+    pub command: String,
+    /// Docker network mode; `None` uses the existing isolated default.
+    #[serde(default)]
+    pub network: Option<String>,
+    /// Memory limit in MiB, or `None` for the existing one-shot default.
+    #[serde(default)]
+    pub memory_limit_mb: Option<u64>,
+    /// CPU quota in cores, or `None` for the existing one-shot default.
+    #[serde(default)]
+    pub cpus: Option<f64>,
+    /// Read-only container root filesystem; `None` preserves the existing
+    /// read-only default.
+    #[serde(default)]
+    pub read_only_rootfs: Option<bool>,
+    /// Additional read-only host paths mounted at the same path in the box.
+    #[serde(default)]
+    pub read_only_mounts: Vec<String>,
+    /// Additional Linux capabilities to drop.
+    #[serde(default)]
+    pub extra_cap_drops: Vec<String>,
+    /// Environment variables passed to the command.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    /// Optional Docker label for the owned container.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Maximum command runtime in milliseconds.
+    #[serde(default = "default_docker_run_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+/// Bounded result from one Docker command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DockerRunOutput {
+    /// Process exit code; `-1` denotes a signal or timeout.
+    pub exit_code: i32,
+    /// Bounded, lossily decoded stdout.
+    pub stdout: String,
+    /// Bounded, lossily decoded stderr.
+    pub stderr: String,
+    /// Whether the module stopped the command after its deadline.
+    pub timed_out: bool,
+}
+
+/// Maximum accepted one-shot Docker runtime, in milliseconds.
+pub const MAX_DOCKER_RUN_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
+/// Default Docker command runtime, in milliseconds.
+pub const DEFAULT_DOCKER_RUN_TIMEOUT_MS: u64 = 30_000;
+
+fn default_docker_run_timeout_ms() -> u64 {
+    DEFAULT_DOCKER_RUN_TIMEOUT_MS
 }
 
 impl Default for CreateRequest {

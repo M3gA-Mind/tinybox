@@ -263,6 +263,24 @@ jobs:
           esac
           cargo run --locked -p tinybox-module --example verify_module -- "$module"
 
+      - name: Exercise one-shot Docker request through TinyBus module
+        if: ${{ runner.os != 'Windows' }}
+        shell: bash
+        env:
+          LIBRARY_NAME: ${{ needs.prepare.outputs.library_name }}
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) module="target/release/lib${LIBRARY_NAME}.so" ;;
+            macOS) module="target/release/lib${LIBRARY_NAME}.dylib" ;;
+            *) echo "unsupported Unix runner: ${RUNNER_OS}" >&2; exit 1 ;;
+          esac
+          fixture_dir="$GITHUB_WORKSPACE/crates/tinybox-module/tests/fixtures"
+          PATH="$fixture_dir:$PATH" TINYBOX_TEST_MODULE="$module" \
+            cargo test --locked -p tinybox-module --test module_e2e \
+              compiled_module_runs_one_shot_docker_through_a_broker \
+              -- --ignored --exact
+
       - name: Verify Windows module through TinyBus loader
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
