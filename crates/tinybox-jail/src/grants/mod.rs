@@ -37,6 +37,18 @@ pub fn resolve_local_jail_grants(
     cfg: &LocalGrantConfig,
     protected: &ProtectedPaths,
 ) -> tinybox_core::Result<JailGrants> {
+    let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
+    resolve_local_jail_grants_in(home, xdg_config_home.as_deref(), cfg, protected)
+}
+
+/// [`resolve_local_jail_grants`] with `XDG_CONFIG_HOME` passed in rather than
+/// read from the process environment, so callers (and tests) stay hermetic.
+pub(crate) fn resolve_local_jail_grants_in(
+    home: Option<&Path>,
+    xdg_config_home: Option<&std::ffi::OsStr>,
+    cfg: &LocalGrantConfig,
+    protected: &ProtectedPaths,
+) -> tinybox_core::Result<JailGrants> {
     let home = home.map(|h| h.canonicalize().unwrap_or_else(|_| h.to_path_buf()));
     let mut b = Builder::new(home.as_deref(), protected);
 
@@ -51,7 +63,7 @@ pub fn resolve_local_jail_grants(
             b.fixed_read_only(Path::new(dir), "toolchain");
         }
         if let Some(h) = home.as_deref() {
-            b.add_gitconfig(h)?;
+            b.add_gitconfig_at(h, xdg_config_home)?;
         }
     }
     for raw in &cfg.extra_read_only {
