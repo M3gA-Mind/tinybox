@@ -85,6 +85,26 @@ async fn compiled_manifest_admits_and_executes_local_grant_discovery()
         ]
     );
     assert_eq!(result.read_write, Vec::<String>::new());
+    for include in ["~other/shared.conf", "%(prefix)/shared.conf"] {
+        std::fs::write(
+            home.path().join(".gitconfig"),
+            format!("[include]\npath = {include}\n"),
+        )?;
+        let result = proxy
+            .call::<tinybox_bus::LocalGrants>(
+                "ResolveLocalGrants",
+                (tinybox_bus::ResolveLocalGrantsRequest {
+                    home: Some(home.path().to_str().ok_or("home is not UTF-8")?.into()),
+                    config: tinybox_bus::LocalGrantConfig::default(),
+                    protected: tinybox_bus::ProtectedPaths::default(),
+                },),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(tinybus::Error::MethodFailed { ref name, .. }) if name.as_str() == tinybox_bus::UNSUPPORTED_OPERATION),
+            "{include}: {result:?}"
+        );
+    }
     proxy.call::<()>("Shutdown", ()).await?;
     broker_task.abort();
     Ok(())

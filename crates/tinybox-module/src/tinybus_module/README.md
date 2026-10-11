@@ -41,6 +41,7 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | WriteFileChunk | WriteFileChunkRequest | FileWriteProgress |
 | FinishFileWrite | FinishFileWriteRequest | FileWriteProgress |
 | AbortFileWrite | AbortFileWriteRequest | unit |
+| ResolveLocalGrants | ResolveLocalGrantsRequest | LocalGrants |
 
 Capabilities advertises contract version 1.9; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
@@ -291,3 +292,7 @@ system toolchain roots, which may therefore be omitted. Discovery is a
 point-in-time snapshot: hosts must prevent concurrent mutation and creation of
 protected entries within a granted tree, or use isolated disposable state.
 It does not install a kernel deny rule for filenames created later.
+
+Git include aliases retain their logical parent. Empty XDG_CONFIG_HOME is
+unset; unsupported ~user/ and %(prefix)/ expansion rejects complete discovery.
+[Contract specification](../../../../docs/specs/local-grants.md).
