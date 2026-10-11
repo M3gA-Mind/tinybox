@@ -10,6 +10,18 @@ mod types;
 pub(super) use types::ShellContext;
 use types::ShellHost;
 impl ShellContext {
+    pub(super) async fn prepare_owned(
+        request: ShellExecRequest,
+        root: std::path::PathBuf,
+        resolved: tinybox_core::ExecRequest,
+    ) -> Result<Arc<Self>> {
+        Self::prepare_owned_with(move || Self::prepare(request, &root, &resolved)).await
+    }
+    async fn prepare_owned_with(
+        prepare: impl FnOnce() -> Result<Arc<Self>> + Send + 'static,
+    ) -> Result<Arc<Self>> {
+        prepare()
+    }
     pub(super) fn prepare(
         request: ShellExecRequest,
         root: &Path,

@@ -150,7 +150,7 @@ fn require_owned_collector(entry: &super::Resource) -> Result<()> {
     }
     Ok(())
 }
-fn select_execution_collector(
+async fn select_execution_collector(
     entry: &super::Resource,
     jail: Option<&tinybox_bus::NativeJailConfig>,
     shell: Option<&tinybox_bus::ShellExecRequest>,
@@ -169,16 +169,19 @@ fn select_execution_collector(
                 "native shell requires directory resource",
             )
         })?;
-        Collector::Shell(super::super::native_shell::ShellContext::prepare(
-            shell.clone(),
-            root,
-            resolved,
-        )?)
+        Collector::Shell(
+            super::super::native_shell::ShellContext::prepare_owned(
+                shell.clone(),
+                root.clone(),
+                resolved.clone(),
+            )
+            .await?,
+        )
     } else {
         select_collector(entry, jail, resolved)?
     })
 }
-fn prepare_execution(
+async fn prepare_execution(
     entry: &super::Resource,
     request: &SpawnRequest,
     jail: Option<&tinybox_bus::NativeJailConfig>,
@@ -219,7 +222,7 @@ fn prepare_execution(
             shell.clone(),
         )
     } else {
-        select_execution_collector(entry, jail, shell, &resolved)?
+        select_execution_collector(entry, jail, shell, &resolved).await?
     };
     Ok((resolved, collector))
 }
@@ -429,7 +432,8 @@ impl Resources {
             jail.as_ref(),
             shell.as_ref(),
             platform_shell.as_ref(),
-        )?;
+        )
+        .await?;
         let mut state = self.state.lock().await;
         let executions = self
             .executions
