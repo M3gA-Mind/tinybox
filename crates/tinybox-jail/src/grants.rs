@@ -286,11 +286,29 @@ impl<'a> Builder<'a> {
 // A configured protected root may itself be a symlink (for example /etc on
 // macOS). Preserve its requested spelling and its existing resolved target.
 fn root_spellings(root: &Path) -> impl Iterator<Item = String> {
-    std::iter::once(normalized_floor_path(&root.to_string_lossy())).chain(
-        root.canonicalize()
-            .ok()
-            .map(|canonical| normalized_floor_path(&canonical.to_string_lossy())),
-    )
+    let location = root.parent().and_then(|parent| {
+        let mut ancestor = parent;
+        let mut missing = Vec::new();
+        let mut canonical = loop {
+            if let Ok(canonical) = ancestor.canonicalize() {
+                break canonical;
+            }
+            missing.push(ancestor.file_name()?);
+            ancestor = ancestor.parent()?;
+        };
+        for component in missing.into_iter().rev() {
+            canonical.push(component);
+        }
+        canonical.push(root.file_name()?);
+        Some(normalized_floor_path(&canonical.to_string_lossy()))
+    });
+    std::iter::once(normalized_floor_path(&root.to_string_lossy()))
+        .chain(location)
+        .chain(
+            root.canonicalize()
+                .ok()
+                .map(|canonical| normalized_floor_path(&canonical.to_string_lossy())),
+        )
 }
 
 // Windows canonical paths may carry an extended drive or UNC namespace;
