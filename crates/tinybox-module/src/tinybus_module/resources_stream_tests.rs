@@ -1091,3 +1091,21 @@ async fn close_during_shell_preparation_fences_admission_without_waiting_for_fil
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn native_shell_replay_ignores_rediscovered_program()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    let shell = shell_request(&resources, &resource, state.path(), "echo replay").await?;
+    let process = resources.start_shell_exec(shell.clone()).await?;
+    let stream = resources.stream(&process)?.ok_or("missing stream")?;
+    let mut rediscovered = stream.request.clone();
+    rediscovered.command.argv = vec!["different-discovered-shell".into()];
+    stream.check_replay(&rediscovered, None, Some(&shell), None)?;
+    completed(&resources, &process).await?;
+    resources.release_output(&process).await?;
+    resources.close(&resource).await?;
+    Ok(())
+}
