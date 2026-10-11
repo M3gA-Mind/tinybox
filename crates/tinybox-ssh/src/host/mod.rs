@@ -240,7 +240,7 @@ impl Host for SshHost {
     }
 
     fn has_pending_observed_cleanup(&self) -> bool {
-        self.observed_cleanup.has_pending()
+        self.observed_cleanup.has_pending() || self.inner.has_pending_observed_cleanup()
     }
 
     async fn retry_observed_cleanup(&self) -> Result<()> {
@@ -264,6 +264,9 @@ impl Host for SshHost {
                     first_error.get_or_insert(error);
                 }
             }
+        }
+        if let Err(error) = self.inner.retry_observed_cleanup().await {
+            first_error.get_or_insert(error);
         }
         first_error.map_or(Ok(()), Err)
     }

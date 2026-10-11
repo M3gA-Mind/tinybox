@@ -38,6 +38,9 @@ struct MockHost {
     fail_prepare: AtomicBool,
     panic_observed: AtomicBool,
     observed_started: Notify,
+    inner_cleanup_pending: AtomicBool,
+    fail_inner_retry: AtomicBool,
+    inner_retry_calls: AtomicUsize,
 }
 
 impl MockHost {
@@ -119,6 +122,21 @@ impl Host for MockHost {
             stdout.to_vec(),
             b"remote-error-bytes".to_vec(),
         ))
+    }
+
+    fn has_pending_observed_cleanup(&self) -> bool {
+        self.inner_cleanup_pending.load(Ordering::SeqCst)
+    }
+
+    async fn retry_observed_cleanup(&self) -> Result<()> {
+        self.inner_retry_calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail_inner_retry.load(Ordering::SeqCst) {
+            return Err(Error::ObservedCleanupPending {
+                provider: "inner test host".to_owned(),
+            });
+        }
+        self.inner_cleanup_pending.store(false, Ordering::SeqCst);
+        Ok(())
     }
 }
 
@@ -302,6 +320,68 @@ async fn failed_remote_kill_keeps_a_retryable_cleanup_handle() -> Result<()> {
         3,
         "two failed attempts are followed by one explicit retained-handle retry"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cleanup_retry_attempts_remote_and_inner_owners_even_when_one_fails() -> Result<()> {
+    let inner = Arc::new(MockHost {
+        inner_cleanup_pending: AtomicBool::new(true),
+        fail_inner_retry: AtomicBool::new(true),
+        ..MockHost::default()
+    });
+    let host = SshHost::new(inner.clone(), SshTarget::new("builder")?);
+    let (remote_id, _) = host.observed_cleanup.reserve();
+    host.observed_cleanup.mark_pending(&remote_id);
+
+    assert!(host.has_pending_observed_cleanup());
+    assert!(matches!(
+        host.retry_observed_cleanup().await,
+        Err(Error::ObservedCleanupPending { .. })
+    ));
+    assert_eq!(inner.inner_retry_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        inner
+            .requests()
+            .iter()
+            .filter(|request| is_cleanup_request(request))
+            .count(),
+        1,
+        "remote cleanup is attempted despite the inner cleanup failure"
+    );
+    assert!(!host.observed_cleanup.has_pending());
+    assert!(host.has_pending_observed_cleanup());
+
+    inner.fail_inner_retry.store(false, Ordering::SeqCst);
+    host.retry_observed_cleanup().await?;
+    assert_eq!(inner.inner_retry_calls.load(Ordering::SeqCst), 2);
+    assert!(!host.has_pending_observed_cleanup());
+    Ok(())
+}
+
+#[tokio::test]
+async fn inner_cleanup_retry_runs_even_when_remote_cleanup_fails() -> Result<()> {
+    let inner = Arc::new(MockHost {
+        fail_cleanup: AtomicUsize::new(1),
+        inner_cleanup_pending: AtomicBool::new(true),
+        ..MockHost::default()
+    });
+    let host = SshHost::new(inner.clone(), SshTarget::new("builder")?);
+    let (remote_id, _) = host.observed_cleanup.reserve();
+    host.observed_cleanup.mark_pending(&remote_id);
+
+    assert!(matches!(
+        host.retry_observed_cleanup().await,
+        Err(Error::ObservedCleanupPending { .. })
+    ));
+    assert_eq!(inner.inner_retry_calls.load(Ordering::SeqCst), 1);
+    assert!(host.observed_cleanup.has_pending());
+    assert!(!inner.has_pending_observed_cleanup());
+    assert!(host.has_pending_observed_cleanup());
+
+    host.retry_observed_cleanup().await?;
+    assert_eq!(inner.inner_retry_calls.load(Ordering::SeqCst), 2);
+    assert!(!host.has_pending_observed_cleanup());
     Ok(())
 }
 
