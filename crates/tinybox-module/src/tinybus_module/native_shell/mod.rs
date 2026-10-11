@@ -22,6 +22,14 @@ impl ShellContext {
         root: &Path,
         resolved: &tinybox_core::ExecRequest,
     ) -> Result<Arc<Self>> {
+        Self::prepare_with_backend(request, root, resolved, tinybox_jail::default_backend())
+    }
+    fn prepare_with_backend(
+        request: ShellExecRequest,
+        root: &Path,
+        resolved: &tinybox_core::ExecRequest,
+        backend: Arc<dyn tinybox_jail::JailBackend>,
+    ) -> Result<Arc<Self>> {
         if request.timeout_ms == 0
             || request.timeout_ms > 86_400_000
             || request.shell.command.contains('\0')
@@ -90,7 +98,6 @@ impl ShellContext {
             environment.remove(&name);
         }
         let host = if let Some(config) = &request.jail {
-            let backend = tinybox_jail::default_backend();
             let mut jail = super::native_jail::prepare(root, config, resolved, backend.as_ref())?;
             jail.read_write.push(scratch.path().to_path_buf());
             if config.enforcement == tinybox_bus::JailEnforcement::Enforced {
