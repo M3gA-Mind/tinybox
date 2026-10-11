@@ -17,9 +17,16 @@ pub(super) struct StreamExecution {
 }
 #[derive(Clone)]
 enum Collector {
-    Host(Arc<dyn tinybox_core::Host>),
+    Host(
+        Arc<dyn tinybox_core::Host>,
+        Option<Arc<tinybox_host::LimitedLocalHost>>,
+    ),
     Jailed(Arc<tinybox_host::JailLocalHost>),
-    Sandbox(Arc<dyn tinybox_core::Sandbox>, tinybox_core::BoxId),
+    Sandbox(
+        Arc<dyn tinybox_core::Sandbox>,
+        tinybox_core::BoxId,
+        Option<Arc<tinybox_host::LimitedLocalHost>>,
+    ),
 }
 impl Collector {
     async fn run(
@@ -28,20 +35,30 @@ impl Collector {
         observer: Arc<OutputJournal>,
     ) -> tinybox_core::Result<tinybox_core::ExecOutput> {
         match self {
-            Self::Host(host) => host.run_observed(command, observer).await,
+            Self::Host(host, _) => host.run_observed(command, observer).await,
             Self::Jailed(host) => host.run_observed(command, observer).await,
-            Self::Sandbox(sandbox, id) => sandbox.exec_observed(id, command, observer).await,
+            Self::Sandbox(sandbox, id, _) => sandbox.exec_observed(id, command, observer).await,
         }
     }
     fn pending(&self) -> bool {
         match self {
-            Self::Host(host) => host.has_pending_observed_cleanup(),
+            Self::Host(host, native) => {
+                host.has_pending_observed_cleanup()
+                    || native
+                        .as_ref()
+                        .is_some_and(|native| native.has_pending_cleanup())
+            }
             Self::Jailed(host) => host.has_pending_cleanup(),
-            Self::Sandbox(sandbox, _) => sandbox.has_pending_observed_cleanup(),
+            Self::Sandbox(sandbox, _, native) => {
+                sandbox.has_pending_observed_cleanup()
+                    || native
+                        .as_ref()
+                        .is_some_and(|native| native.has_pending_cleanup())
+            }
         }
     }
     fn acknowledge_destroyed_box(&self, id: &tinybox_core::BoxId) {
-        if let Self::Sandbox(sandbox, owned_id) = self
+        if let Self::Sandbox(sandbox, owned_id, _) = self
             && owned_id == id
         {
             sandbox.acknowledge_observed_cleanup_for_destroyed_box(id);
@@ -49,9 +66,21 @@ impl Collector {
     }
     async fn drain(&self) -> tinybox_core::Result<()> {
         match self {
-            Self::Host(host) => host.retry_observed_cleanup().await,
+            Self::Host(host, native) => {
+                let remote = host.retry_observed_cleanup().await;
+                if let Some(native) = native {
+                    native.drain_checked().await?;
+                }
+                remote
+            }
             Self::Jailed(host) => host.drain_checked().await,
-            Self::Sandbox(sandbox, _) => sandbox.retry_observed_cleanup().await,
+            Self::Sandbox(sandbox, _, native) => {
+                let remote = sandbox.retry_observed_cleanup().await;
+                if let Some(native) = native {
+                    native.drain_checked().await?;
+                }
+                remote
+            }
         }
     }
 }
@@ -77,16 +106,18 @@ fn select_collector(
             root, config, resolved,
         )?)
     } else {
-        let host = super::configured_host(
-            &entry.host_config,
-            Arc::new(tinybox_host::LimitedLocalHost::new(
-                tinybox_bus::MAX_OUTPUT_BYTES,
-            )),
-        )?;
+        let native = Arc::new(tinybox_host::LimitedLocalHost::new(
+            tinybox_bus::MAX_OUTPUT_BYTES,
+        ));
+        let host = super::configured_host(&entry.host_config, native.clone())?;
         if let Some(sandbox) = &entry.docker_sandbox {
-            Collector::Sandbox(Arc::new(sandbox.for_observed_host(host)), entry.id.clone())
+            Collector::Sandbox(
+                Arc::new(sandbox.for_observed_host(host)),
+                entry.id.clone(),
+                Some(native),
+            )
         } else {
-            Collector::Host(host)
+            Collector::Host(host, Some(native))
         }
     })
 }

@@ -208,7 +208,7 @@ async fn a_panicked_job_is_joined_and_cleanup_failure_stays_owned_until_retry() 
         jail: None,
         journal,
         task: Mutex::new(Some(task)),
-        collector: Collector::Host(Arc::new(tinybox_host::LimitedLocalHost::new(64))),
+        collector: Collector::Host(Arc::new(tinybox_host::LimitedLocalHost::new(64)), None),
     };
     assert!(stream.running());
     stream.stop().await?;
@@ -365,7 +365,7 @@ async fn remote_cleanup_failure_keeps_binary_output_and_owner_until_retry_ack() 
             },
         },
         command,
-        Collector::Host(host.clone()),
+        Collector::Host(host.clone(), None),
         None,
     );
     assert!(stream.stop().await.is_err());
@@ -554,7 +554,7 @@ async fn confirmed_container_destroy_keeps_native_cleanup_retryable_without_dest
         let execution = Arc::new(StreamExecution::start(
             request,
             tinybox_core::ExecRequest::new(["fixture"]),
-            Collector::Sandbox(Arc::new(sandbox), entry.id.clone()),
+            Collector::Sandbox(Arc::new(sandbox), entry.id.clone(), None),
             None,
         ));
         resources
@@ -574,5 +574,46 @@ async fn confirmed_container_destroy_keeps_native_cleanup_retryable_without_dest
     assert_eq!(host.destroys.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(resources.stream(&process)?.is_none());
     assert!(resources.slot(&resource).await.is_err());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn collector_drain_joins_its_owned_active_native_supervisor() -> Result<()> {
+    use std::future::Future;
+    use std::task::Poll;
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let request = request(
+        &resources,
+        &resource,
+        vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf ready; exec /bin/sleep 600".into(),
+        ],
+    )
+    .await?;
+    let process = resources.start_exec(request).await?;
+    loop {
+        if !resources.read_output(&process, 0).await?.chunks.is_empty() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    let stream = resources
+        .stream(&process)?
+        .ok_or_else(|| Error::failed("missing fixture stream"))?;
+    let mut drain = Box::pin(stream.collector.drain());
+    let completion =
+        std::future::poll_fn(|context| Poll::Ready(drain.as_mut().poll(context))).await;
+    drop(drain);
+    resources.cancel(&process).await?;
+    resources.release_output(&process).await?;
+    resources.close(&resource).await?;
+    assert!(
+        matches!(completion, Poll::Pending),
+        "collector drain must join its owned native supervisor"
+    );
     Ok(())
 }
