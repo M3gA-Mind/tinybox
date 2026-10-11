@@ -814,3 +814,70 @@ fn discovered_git_configuration_cannot_be_poisoned_via_its_target_ancestor()
     assert_eq!(grants.read_write, Vec::<PathBuf>::new());
     Ok(())
 }
+
+#[test]
+fn directory_extras_cannot_expose_nested_protected_components()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir_all(home.path().join("project/nested"))?;
+    fs::write(home.path().join("project/nested/.npmrc"), "secret")?;
+    let protected = ProtectedPaths {
+        components: vec![".npmrc".into()],
+        ..ProtectedPaths::default()
+    };
+    let config = LocalGrantConfig {
+        toolchain_homes: false,
+        extra_read_only: vec!["~/project".into()],
+        extra_read_write: vec!["~/project".into()],
+        ..LocalGrantConfig::default()
+    };
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &protected);
+    assert_eq!(grants, JailGrants::default());
+    Ok(())
+}
+
+#[test]
+fn directory_extras_cannot_expose_nested_protected_component_pairs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir_all(home.path().join("project/nested/.docker"))?;
+    fs::write(home.path().join("project/nested/.docker/config.json"), "secret")?;
+    let protected = ProtectedPaths {
+        component_pairs: vec![[".docker".into(), "config.json".into()]],
+        ..ProtectedPaths::default()
+    };
+    let config = LocalGrantConfig {
+        toolchain_homes: false,
+        extra_read_only: vec!["~/project".into()],
+        ..LocalGrantConfig::default()
+    };
+    assert_eq!(
+        resolve_local_jail_grants(Some(home.path()), &config, &protected),
+        JailGrants::default()
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn aliased_directory_extras_preserve_logical_parent_component_pairs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir(home.path().join("neutral"))?;
+    fs::write(home.path().join("neutral/credentials.toml"), "secret")?;
+    std::os::unix::fs::symlink(home.path().join("neutral"), home.path().join(".cargo"))?;
+    let protected = ProtectedPaths {
+        component_pairs: vec![[".cargo".into(), "credentials.toml".into()]],
+        ..ProtectedPaths::default()
+    };
+    let config = LocalGrantConfig {
+        toolchain_homes: false,
+        extra_read_only: vec!["~/.cargo".into()],
+        ..LocalGrantConfig::default()
+    };
+    assert_eq!(
+        resolve_local_jail_grants(Some(home.path()), &config, &protected),
+        JailGrants::default()
+    );
+    Ok(())
+}
