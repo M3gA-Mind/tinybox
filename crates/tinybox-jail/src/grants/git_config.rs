@@ -81,10 +81,9 @@ pub(super) fn include_paths(config: &str) -> Vec<String> {
         }
         if let Some((key, value)) = line.split_once('=')
             && key.trim().eq_ignore_ascii_case("path")
+            && let Some(value) = include_value(value)
         {
-            if let Some(value) = include_value(value) {
-                out.push(value);
-            }
+            out.push(value);
         }
     }
     out
