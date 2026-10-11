@@ -20,7 +20,12 @@ impl ShellContext {
     async fn prepare_owned_with(
         prepare: impl FnOnce() -> Result<Arc<Self>> + Send + 'static,
     ) -> Result<Arc<Self>> {
-        prepare()
+        tokio::task::spawn_blocking(prepare).await.map_err(|_| {
+            super::resources::failure(
+                tinybox_bus::BACKEND_ERROR,
+                "native shell preparation worker failed",
+            )
+        })?
     }
     pub(super) fn prepare(
         request: ShellExecRequest,

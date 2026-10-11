@@ -20,6 +20,8 @@ state_dir/artifacts/sandbox-scratch. TMPDIR, TEMP and TMP default to it unless
 explicitly overridden. Approved state directory ACLs must be private on Windows;
 the host owns approval of state_dir. Native jails add this module-created
 scratch as a writable grant after validating caller grants and enforcement.
+Filesystem preparation and recursive cleanup run on blocking workers so slow
+storage does not stall the module runtime.
 
 Capture uses owned pipes and the existing combined output budget, not shell
 redirection. ReadOutput, Cancel, ReleaseOutput, Close and Shutdown retain their
