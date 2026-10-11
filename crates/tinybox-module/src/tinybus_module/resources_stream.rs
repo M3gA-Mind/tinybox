@@ -126,6 +126,15 @@ fn select_collector(
         }
     })
 }
+fn require_owned_collector(entry: &super::Resource) -> Result<()> {
+    if entry.collector.is_none() {
+        return Err(failure(
+            tinybox_bus::UNSUPPORTED_OPERATION,
+            "owned native collector unavailable",
+        ));
+    }
+    Ok(())
+}
 fn select_execution_collector(
     entry: &super::Resource,
     jail: Option<&tinybox_bus::NativeJailConfig>,
@@ -316,12 +325,7 @@ impl Resources {
                 "live output is unavailable for this provider",
             ));
         }
-        if entry.collector.is_none() {
-            return Err(failure(
-                tinybox_bus::UNSUPPORTED_OPERATION,
-                "owned native collector unavailable",
-            ));
-        }
+        require_owned_collector(entry)?;
         // Each execution owns its cleanup collector. Cancelling one stream must
         // not drain an unrelated running supervisor or inherit its failure.
         // Resolve before consuming admission, and fence native start against Close.
