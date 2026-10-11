@@ -153,6 +153,76 @@ async fn compiled_module_transfers_workspace_files_over_a_broker()
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires TINYBOX_TEST_MODULE to point at the built cdylib"]
+async fn compiled_module_runs_one_shot_docker_through_a_broker()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/docker")
+        .canonicalize()?;
+    let path = std::env::var_os("PATH").ok_or("PATH is required")?;
+    let selected = std::env::split_paths(&path)
+        .find_map(|directory| {
+            let candidate = directory.join("docker");
+            candidate.is_file().then_some(candidate)
+        })
+        .ok_or("local Docker transport fixture is required")?;
+    assert_eq!(
+        selected.canonicalize()?,
+        fixture,
+        "refuse real Docker transport"
+    );
+    let artifact = std::env::var_os("TINYBOX_TEST_MODULE")
+        .ok_or("TINYBOX_TEST_MODULE must point at libtinybox")?;
+    let workspace = tempfile::tempdir()?;
+
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let broker_task = broker.spawn(bus.clone());
+    let modules = ModuleHost::new(broker);
+    let loaded = modules.load_file(artifact)?;
+    assert_eq!(loaded.name, "tinybox-module");
+    let declared: Vec<&str> = loaded
+        .manifest
+        .provides
+        .iter()
+        .flat_map(|interface| interface.methods.iter())
+        .map(tinybus::MemberName::as_str)
+        .collect();
+    assert_eq!(declared, tinybox_bus::METHODS);
+
+    let client = Connection::connect(bus.connect().await?).await?;
+    wait_until_serving(&client, &modules).await?;
+    let proxy = client.proxy(BUS_NAME, OBJECT_PATH, BUS_NAME)?;
+    let result: tinybox_bus::DockerRunOutput = proxy
+        .call(
+            "RunDocker",
+            (tinybox_bus::DockerRunRequest {
+                workspace: workspace.path().display().to_string(),
+                image: None,
+                command: "ignored by fixture".into(),
+                network: None,
+                memory_limit_mb: None,
+                cpus: None,
+                read_only_rootfs: None,
+                read_only_mounts: Vec::new(),
+                extra_cap_drops: Vec::new(),
+                env: std::collections::BTreeMap::new(),
+                label: None,
+                timeout_ms: 120_000,
+            },),
+        )
+        .await?;
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.stdout, "fixture-container\n");
+    assert_eq!(result.stderr, "");
+    assert!(!result.timed_out);
+    modules.shutdown(Duration::from_secs(5)).await;
+    broker_task.abort();
+    Ok(())
+}
+
 /// The caller prepends the checked-in local SSH fixture to PATH before starting
 /// this process; no runtime environment mutation or real SSH server is needed.
 #[cfg(unix)]

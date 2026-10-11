@@ -19,6 +19,7 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | JailStatus | none | JailStatus |
 | Reserve | ReserveRequest | ResourceId |
 | Create | CreateRequest | ResourceInfo |
+| RunDocker | DockerRunRequest | DockerRunOutput |
 | Forward | ForwardRequest | ForwardInfo |
 | CloseForward | CloseForwardRequest | unit |
 | Exec | ExecRequest | ExecOutput |
@@ -41,7 +42,7 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | FinishFileWrite | FinishFileWriteRequest | FileWriteProgress |
 | AbortFileWrite | AbortFileWriteRequest | unit |
 
-Capabilities advertises contract version 1.7; 1.0 denotes the original
+Capabilities advertises contract version 1.8; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -69,6 +70,14 @@ use their caller-mounted local directory. Image-backed workspaces and SSH
 hosts return a stable unsupported error; file transfer does not shell out or
 copy data through an execution command. The caller remains responsible for
 approving the workspace and requested relative path.
+
+Version 1.8 adds `RunDocker` for one-shot commands. TinyBox owns the local
+Docker CLI invocation, `--rm` container lifetime, and bounded output collection;
+the caller supplies the existing image, network, memory, CPU, rootfs, read-only
+mount, capability-drop, environment, label, and timeout settings. Runtime is
+capped at 24 hours. It does not create a long-lived resource or fall back to a
+host command. The caller remains responsible for validating requested network
+and mount policy before sending the request.
 
 Create requires an explicit backend and rejects one unavailable on the current
 platform before it creates a resource slot. `passthrough` is record-only on
