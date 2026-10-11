@@ -209,12 +209,22 @@ fn bash_discovery_rechecks_availability() -> Result<(), Box<dyn std::error::Erro
     // A changing candidate list represents installation/removal without altering
     // global system paths or relying on the machine's installed shell.
     let fixture = tempfile::NamedTempFile::new()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(fixture.path(), std::fs::Permissions::from_mode(0o700))?;
+    }
     let candidate_string = fixture.path().to_string_lossy().into_owned();
     let candidate = candidate_string.as_str();
     assert_eq!(bash_path_in(&[candidate]), Some(candidate));
     fixture.close()?;
     assert_eq!(bash_path_in(&[candidate]), None);
     std::fs::write(candidate, "fixture")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(candidate, std::fs::Permissions::from_mode(0o700))?;
+    }
     let discovered = bash_path_in(&[candidate]);
     std::fs::remove_file(candidate)?;
     assert_eq!(discovered, Some(candidate));
@@ -268,5 +278,39 @@ fn cmd_startup_ignores_the_payload_path() -> Result<(), Box<dyn std::error::Erro
         String::from_utf8(output.stdout)?.trim(),
         fixture.path().to_string_lossy()
     );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn inherited_posix_mode_cannot_change_bash_command_substitution()
+-> Result<(), Box<dyn std::error::Error>> {
+    let Some(bash) = bash_path() else { return Ok(()); };
+    let selected = selection_for(&SelectShellRequest {
+        command: "set -e; x=$(false; echo reached); echo \"$x\"".into(),
+        preserve_pipeline_status: true,
+    }, ShellFlavor::Posix, Some(bash));
+    // Supply the ambient value before applying the invocation's removal list.
+    let mut command = std::process::Command::new(&selected.program);
+    command.args(&selected.arguments).env("POSIXLY_CORRECT", "1");
+    for name in selected.remove_environment { command.env_remove(name); }
+    let output = command.output()?;
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"reached\n");
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn bash_discovery_skips_non_executable_files()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::PermissionsExt;
+    let first = tempfile::NamedTempFile::new()?;
+    let second = tempfile::NamedTempFile::new()?;
+    std::fs::set_permissions(second.path(), std::fs::Permissions::from_mode(0o700))?;
+    let first = first.path().to_str().ok_or("non utf8 fixture")?;
+    let second = second.path().to_str().ok_or("non utf8 fixture")?;
+    assert_eq!(bash_path_in(&[first, second]), Some(second));
+    assert_eq!(bash_path_in(&[first]), None);
     Ok(())
 }
