@@ -114,7 +114,7 @@ workspace:  alpine:3
 runner:     local / docker
 isolation:  kernel
 untrusted:  safe
-supports:   filesystem snapshots, forking, resource limits
+supports:   filesystem snapshots, forking
 ```
 
 Snapshot a box and branch it — the fork inherits the parent's filesystem and
@@ -384,9 +384,13 @@ Arch Linux; macOS 15 and 26 on Intel and Apple Silicon; Windows Server 2022 and
 
 ## Documentation
 
+- [Serialized module contract](crates/tinybox-module/src/tinybus_module/README.md)
+  — the TinyBus methods and lifecycle semantics
 - [`docs/specs/tinybox-runtime.md`](docs/specs/tinybox-runtime.md) — the runtime
   specification: the model, the capability contract, and the adopted
   optimizations
+- [`docs/specs/constraint-preflight.md`](docs/specs/constraint-preflight.md) —
+  hard preflight and current backend limitations
 - [`docs/adr/`](docs/adr/0001-record-architecture-decisions.md) — architecture
   decision records, including [why backends drive a CLI through the `Host`
   trait](docs/adr/0004-drive-backends-through-the-host-trait.md)

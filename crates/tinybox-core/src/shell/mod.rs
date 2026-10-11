@@ -20,6 +20,8 @@
 //! callers are in different crates. Every function here is pure, so every case
 //! can be pinned in a test.
 
+pub mod analysis;
+
 /// Wrap one argument so a POSIX shell reproduces it exactly.
 ///
 /// Single quotes suppress every form of expansion a shell performs — variables,
@@ -93,9 +95,17 @@ pub fn script(
     parts.join(" ")
 }
 
+pub mod classify;
+pub mod env_guard;
+pub mod executor;
 pub mod scan;
 
 #[cfg(test)]
+#[path = "classify_tests.rs"]
+mod classify_test;
+#[cfg(test)]
+#[path = "scan_tests.rs"]
 mod scan_test;
 #[cfg(test)]
+#[path = "mod_tests.rs"]
 mod test;

@@ -1,19 +1,24 @@
 //! macOS backend: Seatbelt via `sandbox-exec`.
 //!
 //! `sandbox-exec` is a built-in macOS binary that takes a Scheme-style
-//! profile (the "Seatbelt" / TrustedBSD policy language) and execs the
+//! profile (the "Seatbelt" / `TrustedBSD` policy language) and execs the
 //! requested command under it. Chromium, iOS simulators and Apple's own
 //! tools use the same SPI under the hood. The CLI is technically
 //! deprecated but has stayed shipping for a decade and is the only
 //! supported way to apply Seatbelt without private framework bindings.
 
-#![cfg(target_os = "macos")]
-
+use std::fmt::Write as _;
 use std::process::{Child, Command};
 
 use super::jail::{Jail, JailBackend};
 
 /// macOS Seatbelt backend that launches commands with `sandbox-exec`.
+///
+/// Only environment variables explicitly set on the command are forwarded.
+/// The wrapper clears inherited variables because `Command` does not expose
+/// whether the caller used `env_clear`; inheriting could restore credentials
+/// the caller deliberately removed. Configure required variables with `env`.
+/// Stdio uses the launcher defaults (inherit).
 #[derive(Debug)]
 pub struct SeatbeltBackend;
 
@@ -25,6 +30,7 @@ impl Default for SeatbeltBackend {
 
 impl SeatbeltBackend {
     /// Creates the Seatbelt backend.
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -35,46 +41,108 @@ impl JailBackend for SeatbeltBackend {
         "seatbelt"
     }
 
+    /// Checks launcher presence only; this is not an enforcement probe.
     fn is_available(&self) -> bool {
         std::path::Path::new("/usr/bin/sandbox-exec").exists()
     }
 
+    fn constraint_support(&self) -> tinybox_core::ConstraintSupport {
+        declared_constraint_support(self.is_available())
+    }
+
+    /// Launcher presence proves no process-isolation guarantee.
+    fn isolation(&self) -> tinybox_core::IsolationLevel {
+        tinybox_core::IsolationLevel::None
+    }
+
     fn spawn(&self, jail: &Jail, cmd: Command) -> std::io::Result<Child> {
-        let profile = render_profile(jail);
-
-        // sandbox-exec only accepts profiles from disk or from `-p`. Inline
-        // (`-p`) is simpler and avoids a tempfile lifecycle problem (the
-        // child may outlive our parent scope).
-        let program = cmd.get_program().to_os_string();
-        let args: Vec<_> = cmd.get_args().map(|a| a.to_os_string()).collect();
-        let envs: Vec<_> = cmd
-            .get_envs()
-            .map(|(k, v)| (k.to_os_string(), v.map(|s| s.to_os_string())))
-            .collect();
-        let cwd = cmd.get_current_dir().map(|p| p.to_path_buf());
-
-        let mut wrapper = Command::new("/usr/bin/sandbox-exec");
-        wrapper.arg("-p").arg(profile).arg(program).args(args);
-        for (k, v) in envs {
-            match v {
-                Some(val) => {
-                    wrapper.env(k, val);
-                }
-                None => {
-                    wrapper.env_remove(k);
-                }
-            }
+        let mut wrapper =
+            prepare_command(jail, &cmd, std::ffi::OsStr::new("/usr/bin/sandbox-exec"));
+        // The launcher is a fresh `Command`, so a process group the caller set
+        // on `cmd` does not carry over. Make the launcher a group leader here:
+        // a caller that times the child out signals that group, and without
+        // it only the launcher dies while the shell pipeline it started runs
+        // on. (Linux and the no-op backend spawn `cmd` itself, so the caller's
+        // setting applies there.)
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            wrapper.process_group(0);
         }
-        if let Some(d) = cwd {
-            wrapper.current_dir(d);
-        }
-        // Inherit stdio from the original command intent. `std::process`
-        // doesn't expose the original `Stdio`, so we leave the inherited
-        // defaults — callers can re-wire by spawning into a pre-set stdio
-        // via the returned `Child` is not possible; for now we match the
-        // sandbox-exec defaults (inherit). Document this in mod.rs.
         wrapper.spawn()
     }
+
+    fn spawn_captured(&self, jail: &Jail, cmd: Command) -> std::io::Result<Child> {
+        prepare_captured_command(jail, &cmd, std::ffi::OsStr::new("/usr/bin/sandbox-exec")).spawn()
+    }
+}
+
+/// Executable presence does not prove the host enforces Seatbelt profiles.
+fn declared_constraint_support(available: bool) -> tinybox_core::ConstraintSupport {
+    use tinybox_core::{Constraint, ConstraintSupport, Enforcement};
+    if !available {
+        return ConstraintSupport::NONE;
+    }
+    ConstraintSupport::NONE
+        .with(Constraint::Filesystem, Enforcement::BestEffort)
+        .with(Constraint::Network, Enforcement::BestEffort)
+        .with(Constraint::Subprocess, Enforcement::BestEffort)
+}
+
+/// Build the launcher separately so forwarding can be checked on any host.
+fn prepare_command(jail: &Jail, cmd: &Command, launcher: &std::ffi::OsStr) -> Command {
+    let profile = render_profile(jail);
+
+    // sandbox-exec only accepts profiles from disk or from `-p`. Inline
+    // (`-p`) is simpler and avoids a tempfile lifecycle problem (the
+    // child may outlive our parent scope).
+    let program = cmd.get_program().to_os_string();
+    let args: Vec<_> = cmd.get_args().map(std::ffi::OsStr::to_os_string).collect();
+    let envs: Vec<_> = cmd
+        .get_envs()
+        .map(|(k, v)| (k.to_os_string(), v.map(std::ffi::OsStr::to_os_string)))
+        .collect();
+    let working_directory = cmd.get_current_dir().map(std::path::Path::to_path_buf);
+
+    let mut wrapper = Command::new(launcher);
+    // Fail closed for environment authority: never restore values that an
+    // opaque Command may have deliberately cleared.
+    wrapper.env_clear();
+    wrapper.arg("-p").arg(profile).arg(program).args(args);
+    for (k, v) in envs {
+        match v {
+            Some(val) => {
+                wrapper.env(k, val);
+            }
+            None => {
+                wrapper.env_remove(k);
+            }
+        }
+    }
+    if let Some(d) = working_directory {
+        wrapper.current_dir(d);
+    }
+    // Inherit stdio from the original command intent. `std::process`
+    // doesn't expose the original `Stdio`, so we leave the inherited
+    // defaults — callers can re-wire by spawning into a pre-set stdio
+    // via the returned `Child` is not possible; for now we match the
+    // sandbox-exec defaults (inherit). Document this in mod.rs.
+    wrapper
+}
+
+/// Reconstruct the launcher with explicit owned-pipe semantics.
+fn prepare_captured_command(jail: &Jail, cmd: &Command, launcher: &std::ffi::OsStr) -> Command {
+    let mut wrapper = prepare_command(jail, cmd, launcher);
+    wrapper
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        wrapper.process_group(0);
+    }
+    wrapper
 }
 
 /// Render a Seatbelt profile.
@@ -106,15 +174,17 @@ fn render_profile(jail: &Jail) -> String {
     }
 
     // The actual directory jail: deny writes everywhere, then re-allow
-    // them under root + /private/tmp (the macOS scratchpad most tools
-    // assume exists and is writable). Shell redirections to /dev/null are
-    // ordinary output disposal, not a write to another workspace; permit
-    // that exact device without opening the rest of /dev.
+    // them under root, every `read_write` path, and /private/tmp (the macOS
+    // scratchpad most tools assume exists and is writable). Shell
+    // redirections to /dev/null are ordinary output disposal, not a write to
+    // another workspace; permit that exact device without opening the rest
+    // of /dev.
     out.push_str("(deny file-write*)\n");
-    out.push_str(&format!(
-        "(allow file-write*\n  (subpath \"{}\")\n  (subpath \"/private/tmp\")\n  (literal \"/dev/null\")\n)\n",
-        escape(&jail.root.to_string_lossy())
-    ));
+    out.push_str("(allow file-write*\n");
+    for path in std::iter::once(&jail.root).chain(&jail.read_write) {
+        let _ = writeln!(out, "  (subpath \"{}\")", escape(&path.to_string_lossy()));
+    }
+    out.push_str("  (subpath \"/private/tmp\")\n  (literal \"/dev/null\")\n)\n");
 
     // `read_only` is informational on macOS — reads are already allowed
     // by `(allow default)`. We keep the field on `Jail` because Landlock

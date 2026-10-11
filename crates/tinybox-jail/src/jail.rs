@@ -10,8 +10,8 @@ use std::process::{Child, Command};
 
 /// Declarative description of a directory jail.
 ///
-/// One `root` (read/write), zero or more `read_only` paths, an optional
-/// allow-list of extra paths the child *may* read, and a network toggle.
+/// One `root` (read/write), zero or more extra `read_write` paths, zero or
+/// more `read_only` paths, and a network toggle.
 /// Backends translate this into Landlock rules, a Seatbelt profile, or an
 /// `AppContainer` ACL.
 #[derive(Debug, Clone)]
@@ -22,6 +22,11 @@ pub struct Jail {
     /// Extra paths the child may read (e.g. `/usr/lib`, the runtime-node
     /// install). Writes are still denied.
     pub read_only: Vec<PathBuf>,
+    /// Extra paths outside the root the child may read **and write**, with
+    /// the same access the root gets. Meant for host-owned scratch the child
+    /// must write to without it landing inside the root (e.g. a per-call
+    /// output-capture directory). Grant the narrowest directory that works.
+    pub read_write: Vec<PathBuf>,
     /// Allow outbound network. Most agent tools need this; some risky tools
     /// (untrusted code execution) should disable it.
     pub allow_net: bool,
@@ -40,6 +45,7 @@ impl Jail {
         Self {
             root: root.as_ref().to_path_buf(),
             read_only: Vec::new(),
+            read_write: Vec::new(),
             allow_net: true,
             allow_subprocess: true,
             label: label.into(),
@@ -53,21 +59,47 @@ impl Jail {
         self
     }
 
-    /// Asks the backend to block network access where it can.
+    /// Grants read and write access to an extra path outside the root.
+    ///
+    /// Backends grant it exactly what they grant the root: a Landlock rule on
+    /// Linux, a `file-write*` subpath on macOS, an `AppContainer` ACL on
+    /// Windows. The path should exist before spawning; backends that need an
+    /// open handle (Landlock) fail the spawn when it does not.
+    #[must_use]
+    pub fn add_read_write(mut self, path: impl AsRef<Path>) -> Self {
+        self.read_write.push(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// Requests network denial; strict preflight refuses unsupported backends.
     #[must_use]
     pub fn deny_net(mut self) -> Self {
         self.allow_net = false;
         self
     }
 
-    /// Asks the backend to forbid spawning further subprocesses where it can.
+    /// Requests subprocess denial; strict preflight refuses unsupported backends.
     #[must_use]
     pub fn deny_subprocess(mut self) -> Self {
         self.allow_subprocess = false;
         self
     }
 
-    /// Canonicalize `root` and `read_only` so backends never see `..` or
+    /// Hard constraints implied by this jail's grants and denial flags.
+    #[must_use]
+    pub fn constraints(&self) -> Vec<tinybox_core::Constraint> {
+        use tinybox_core::Constraint;
+        let mut constraints = vec![Constraint::Filesystem];
+        if !self.allow_net {
+            constraints.push(Constraint::Network);
+        }
+        if !self.allow_subprocess {
+            constraints.push(Constraint::Subprocess);
+        }
+        constraints
+    }
+
+    /// Canonicalize `root`, `read_only` and `read_write` so backends never see `..` or
     /// symlink trickery. Returns an error if `root` does not exist.
     ///
     /// # Errors
@@ -75,7 +107,7 @@ impl Jail {
     /// Returns the filesystem error encountered while canonicalizing `root`.
     pub fn canonicalize(&mut self) -> std::io::Result<()> {
         self.root = self.root.canonicalize()?;
-        for p in &mut self.read_only {
+        for p in self.read_only.iter_mut().chain(self.read_write.iter_mut()) {
             if let Ok(c) = p.canonicalize() {
                 *p = c;
             }
@@ -112,6 +144,39 @@ pub trait JailBackend: Send + Sync {
     /// a backend.
     fn is_available(&self) -> bool;
 
+    /// Declares implemented constraints; unknown backends claim nothing.
+    fn constraint_support(&self) -> tinybox_core::ConstraintSupport {
+        tinybox_core::ConstraintSupport::NONE
+    }
+
+    /// Process isolation provided by this backend, independent of path checks.
+    fn isolation(&self) -> tinybox_core::IsolationLevel {
+        tinybox_core::IsolationLevel::None
+    }
+
+    /// Whether the backend confines processes sufficiently for untrusted code.
+    fn is_suitable_for_untrusted_code(&self) -> bool {
+        self.isolation() >= tinybox_core::IsolationLevel::Kernel
+            && self
+                .constraint_support()
+                .enforcement(tinybox_core::Constraint::Filesystem)
+                == tinybox_core::Enforcement::Enforced
+    }
+
+    /// Inspect all hard constraints a directory jail requests.
+    fn plan_check(&self, jail: &Jail) -> tinybox_core::PlanCheck {
+        self.constraint_support().plan_check(&jail.constraints())
+    }
+
+    /// Refuse incomplete filesystem, network or subprocess confinement.
+    ///
+    /// # Errors
+    /// Returns a typed constraint refusal before any child is spawned.
+    fn require(&self, jail: &Jail) -> tinybox_core::Result<()> {
+        self.constraint_support()
+            .require(self.name(), &jail.constraints())
+    }
+
     /// Spawn `cmd` under the jail described by `jail`. Backends own how the
     /// jail is materialized (Landlock ruleset, sandbox-exec wrapper,
     /// `AppContainer` profile + restricted token).
@@ -120,6 +185,17 @@ pub trait JailBackend: Send + Sync {
     ///
     /// Returns an error if the backend cannot apply the jail or spawn command.
     fn spawn(&self, jail: &Jail, cmd: Command) -> std::io::Result<Child>;
+
+    /// Spawn with module-owned stdin, stdout, and stderr pipes.
+    /// Wrapping providers must apply these pipes to their actual launcher.
+    /// # Errors
+    /// Returns the provider's confinement or native startup error.
+    fn spawn_captured(&self, jail: &Jail, mut cmd: Command) -> std::io::Result<Child> {
+        cmd.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        self.spawn(jail, cmd)
+    }
 }
 
 #[cfg(test)]
