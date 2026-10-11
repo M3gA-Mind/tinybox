@@ -24,7 +24,8 @@ scratch as a writable grant after validating caller grants and enforcement.
 Capture uses owned pipes and the existing combined output budget, not shell
 redirection. ReadOutput, Cancel, ReleaseOutput, Close and Shutdown retain their
 cleanup barriers. Timeouts drop the waiter, wait for supervised kill/reap and
-then publish TimedOut. Cleanup failures retain ownership and scratch for retry.
+then publish TimedOut. Cleanup failures retain ownership and scratch for retry;
+the pending timeout outcome survives until a later cleanup retry succeeds.
 Scratch survives through journal retention and is reclaimed after acknowledged
 release/close. Exact original request identity makes retry idempotent even if
 the parent environment changed; mixing shell/argv reservations is refused.
