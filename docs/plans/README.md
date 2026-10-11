@@ -23,3 +23,5 @@ See [`example-retry-policy.md`](example-retry-policy.md) for a test-first sample
 
 Shell discovery: [shell-selection.md](shell-selection.md).
 Local grant discovery: [local-grants.md](local-grants.md).
+
+- [Native shell execution](native-shell-execution.md)

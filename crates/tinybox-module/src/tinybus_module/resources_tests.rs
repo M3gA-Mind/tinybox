@@ -2285,7 +2285,7 @@ async fn native_cancel_and_close_terminate_descendants_and_reap_direct_children(
                         .lines()
                         .find(|line| line.starts_with("State:"))
                         .is_some_and(|line| line.contains("Z (zombie)")),
-                    "descendant still executes after native cleanup"
+                    "descendant still executes after native cleanup ({mode}): {status}"
                 );
             }
         }

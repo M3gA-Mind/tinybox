@@ -207,6 +207,7 @@ async fn a_panicked_job_is_joined_and_cleanup_failure_stays_owned_until_retry() 
         },
         jail: None,
         shell: None,
+        platform_shell: None,
         journal,
         task: Mutex::new(Some(task)),
         collector: Collector::Host(Arc::new(tinybox_host::LimitedLocalHost::new(64)), None),
@@ -367,6 +368,7 @@ async fn remote_cleanup_failure_keeps_binary_output_and_owner_until_retry_ack() 
         },
         command,
         Collector::Host(host.clone(), None),
+        None,
         None,
         None,
     );
@@ -559,6 +561,7 @@ async fn confirmed_container_destroy_keeps_native_cleanup_retryable_without_dest
             Collector::Sandbox(Arc::new(sandbox), entry.id.clone(), None),
             None,
             None,
+            None,
         ));
         resources
             .streams
@@ -621,6 +624,272 @@ async fn collector_drain_joins_its_owned_active_native_supervisor() -> Result<()
     Ok(())
 }
 
+async fn shell_request(
+    resources: &Resources,
+    resource: &ResourceId,
+    state: &std::path::Path,
+    payload: &str,
+) -> Result<tinybox_bus::ShellExecRequest> {
+    Ok(tinybox_bus::ShellExecRequest {
+        process: resources
+            .reserve(ReserveRequest::Process(resource.clone()))
+            .await?,
+        resource: resource.clone(),
+        shell: tinybox_bus::SelectShellRequest {
+            command: payload.into(),
+            preserve_pipeline_status: false,
+        },
+        cwd: None,
+        extra_env: std::collections::BTreeMap::default(),
+        state_dir: state.to_string_lossy().into_owned(),
+        timeout_ms: 5000,
+        stdin: None,
+        jail: None,
+    })
+}
+#[tokio::test]
+async fn native_shell_replay_uses_original_request_and_retains_scratch_until_release()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    let request = shell_request(&resources, &resource, state.path(), "echo owned").await?;
+    let process = resources.start_shell_exec(request.clone()).await?;
+    assert_eq!(resources.start_shell_exec(request.clone()).await?, process);
+    let mut changed = request;
+    changed.timeout_ms += 1;
+    assert!(resources.start_shell_exec(changed).await.is_err());
+    completed(&resources, &process).await?;
+    assert_eq!(
+        resources.read_output(&process, 0).await?.state,
+        ExecutionState::Exited { exit_code: 0 }
+    );
+    let scratch = state.path().join("artifacts/sandbox-scratch");
+    assert_eq!(std::fs::read_dir(&scratch)?.count(), 1);
+    resources.release_output(&process).await?;
+    assert_eq!(std::fs::read_dir(&scratch)?.count(), 0);
+    resources.close(&resource).await?;
+    Ok(())
+}
+#[tokio::test]
+async fn native_shell_invalid_budget_does_not_consume_its_reservation()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    let mut request = shell_request(&resources, &resource, state.path(), "echo accepted").await?;
+    request.timeout_ms = 0;
+    assert!(resources.start_shell_exec(request.clone()).await.is_err());
+    request.timeout_ms = 5000;
+    let process = resources.start_shell_exec(request).await?;
+    completed(&resources, &process).await?;
+    resources.release_output(&process).await?;
+    resources.close(&resource).await?;
+    Ok(())
+}
+#[tokio::test]
+async fn native_shell_timeout_acknowledges_child_cleanup_before_output_release()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    #[cfg(unix)]
+    let payload = "echo partial; sleep 60";
+    #[cfg(windows)]
+    let payload =
+        "echo partial & powershell -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 60\"";
+    let mut request = shell_request(&resources, &resource, state.path(), payload).await?;
+    request.timeout_ms = 100;
+    let process = resources.start_shell_exec(request).await?;
+    completed(&resources, &process).await?;
+    let output = resources.read_output(&process, 0).await?;
+    assert_eq!(
+        output.state,
+        ExecutionState::Failed {
+            code: ExecutionFailure::TimedOut
+        }
+    );
+    assert_eq!(
+        std::fs::read_dir(state.path().join("artifacts/sandbox-scratch"))?.count(),
+        1
+    );
+    resources.release_output(&process).await?;
+    resources.close(&resource).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn native_shell_clears_startup_hooks_after_approved_overrides_and_captures_binary_pipes()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    let startup = state.path().join("startup.sh");
+    std::fs::write(&startup, "exit 77\n")?;
+    let mut request = shell_request(
+        &resources,
+        &resource,
+        state.path(),
+        "cat; printf \\\\377 >&2; false; echo $APPROVED",
+    )
+    .await?;
+    request
+        .extra_env
+        .insert("BASH_ENV".into(), startup.to_string_lossy().into_owned());
+    request
+        .extra_env
+        .insert("SHELLOPTS".into(), "errexit".into());
+    request.extra_env.insert("APPROVED".into(), "yes".into());
+    request.stdin = Some(vec![0, 255, 1]);
+    let process = resources.start_shell_exec(request).await?;
+    completed(&resources, &process).await?;
+    let output = resources.read_output(&process, 0).await?;
+    assert_eq!(output.state, ExecutionState::Exited { exit_code: 0 });
+    let stdout: Vec<u8> = output
+        .chunks
+        .iter()
+        .filter(|c| c.stream == tinybox_bus::OutputStream::Stdout)
+        .flat_map(|c| c.bytes.clone())
+        .collect();
+    assert_eq!(stdout, [0, 255, 1, b'y', b'e', b's', 10]);
+    let stderr: Vec<u8> = output
+        .chunks
+        .iter()
+        .filter(|c| c.stream == tinybox_bus::OutputStream::Stderr)
+        .flat_map(|c| c.bytes.clone())
+        .collect();
+    assert_eq!(stderr, [255]);
+    resources.release_output(&process).await?;
+    resources.close(&resource).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn native_shell_output_limit_terminates_and_reaps_before_release()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    let request = shell_request(&resources, &resource, state.path(), "yes output").await?;
+    let process = resources.start_shell_exec(request).await?;
+    completed(&resources, &process).await?;
+    let output = resources.read_output(&process, 0).await?;
+    assert_eq!(
+        output.state,
+        ExecutionState::Failed {
+            code: ExecutionFailure::OutputLimit
+        }
+    );
+    resources.release_output(&process).await?;
+    resources.close(&resource).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_scratch_deletion_keeps_output_and_close_retryable()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    for close in [false, true] {
+        let resources = Resources::default();
+        let resource = local_resource(&resources).await?;
+        let state = tempfile::tempdir()?;
+        let request = shell_request(&resources, &resource, state.path(), "echo owned").await?;
+        let process = resources.start_shell_exec(request).await?;
+        completed(&resources, &process).await?;
+        let scratch = std::fs::read_dir(state.path().join("artifacts/sandbox-scratch"))?
+            .next()
+            .ok_or("missing scratch")??
+            .path();
+        let retained = scratch.with_extension("retained");
+        std::fs::rename(&scratch, &retained)?;
+        std::fs::write(&scratch, "blocks directory removal")?;
+        assert!(resources.release_output(&process).await.is_err());
+        assert!(resources.stream(&process)?.is_some());
+        if close {
+            assert!(resources.close(&resource).await.is_err());
+            assert!(resources.stream(&process)?.is_some());
+        }
+        std::fs::remove_file(&scratch)?;
+        std::fs::rename(&retained, &scratch)?;
+        if !close {
+            resources.release_output(&process).await?;
+        }
+        resources.close(&resource).await?;
+        assert!(!scratch.exists());
+        assert!(resources.stream(&process)?.is_none());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_shell_refuses_nonlocal_or_nondirectory_collectors_before_admission()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    let shell = shell_request(&resources, &resource, state.path(), "echo owned").await?;
+    let slot = resources.slot(&resource).await?;
+    {
+        let mut entry = slot.lock().await;
+        let entry = entry.as_mut().ok_or("missing resource")?;
+        entry.native_host = false;
+    }
+    let error = resources
+        .start_shell_exec(shell.clone())
+        .await
+        .err()
+        .ok_or("accepted nonlocal shell")?;
+    assert_eq!(error.wire_name(), tinybox_bus::UNSUPPORTED_OPERATION);
+    {
+        let mut entry = slot.lock().await;
+        let entry = entry.as_mut().ok_or("missing resource")?;
+        entry.native_host = true;
+        entry.workspace_root = None;
+    }
+    let error = resources
+        .start_shell_exec(shell)
+        .await
+        .err()
+        .ok_or("accepted nondirectory shell")?;
+    assert_eq!(error.wire_name(), tinybox_bus::UNSUPPORTED_OPERATION);
+    resources.close(&resource).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelled_native_shell_retains_scratch_until_output_release()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    #[cfg(unix)]
+    let payload = "echo ready; sleep 60";
+    #[cfg(windows)]
+    let payload =
+        "echo ready & powershell -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 60\"";
+    let request = shell_request(&resources, &resource, state.path(), payload).await?;
+    let process = resources.start_shell_exec(request).await?;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while resources.read_output(&process, 0).await?.chunks.is_empty() {
+            tokio::task::yield_now().await;
+        }
+        Ok::<_, tinybus::Error>(())
+    })
+    .await??;
+    resources.cancel(&process).await?;
+    assert_eq!(
+        resources.read_output(&process, 0).await?.state,
+        ExecutionState::Cancelled
+    );
+    let scratch = state.path().join("artifacts/sandbox-scratch");
+    assert_eq!(std::fs::read_dir(&scratch)?.count(), 1);
+    resources.release_output(&process).await?;
+    assert_eq!(std::fs::read_dir(&scratch)?.count(), 0);
+    resources.close(&resource).await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn native_shell_execution_preserves_admission_and_request_identity() -> Result<()> {
     let resources = Resources::default();
@@ -631,19 +900,19 @@ async fn native_shell_execution_preserves_admission_and_request_identity() -> Re
         preserve_pipeline_status: false,
     };
     let process = resources
-        .start_shell_exec(request.clone(), shell.clone())
+        .start_platform_shell_exec(request.clone(), shell.clone())
         .await?;
     assert_eq!(
         process,
         resources
-            .start_shell_exec(request.clone(), shell.clone())
+            .start_platform_shell_exec(request.clone(), shell.clone())
             .await?
     );
     let mut different = shell.clone();
     different.command = "echo different".into();
     assert!(
         resources
-            .start_shell_exec(request.clone(), different)
+            .start_platform_shell_exec(request.clone(), different)
             .await
             .is_err()
     );
@@ -660,7 +929,12 @@ async fn native_shell_execution_preserves_admission_and_request_identity() -> Re
     resources.release_output(&process).await?;
     let mut nonempty = request;
     nonempty.command.argv = true_command();
-    assert!(resources.start_shell_exec(nonempty, shell).await.is_err());
+    assert!(
+        resources
+            .start_platform_shell_exec(nonempty, shell)
+            .await
+            .is_err()
+    );
     resources.close(&resource).await?;
     Ok(())
 }
@@ -683,7 +957,7 @@ async fn shell_execution_rejects_remote_selection_without_consuming_admission() 
         entry.native_host = false;
     }
     assert!(
-        matches!(resources.start_shell_exec(request.clone(), shell.clone()).await,
+        matches!(resources.start_platform_shell_exec(request.clone(), shell.clone()).await,
         Err(tinybus::Error::MethodFailed { ref name, .. }) if name.as_str() == tinybox_bus::UNSUPPORTED_OPERATION)
     );
     {
@@ -693,7 +967,7 @@ async fn shell_execution_rejects_remote_selection_without_consuming_admission() 
             .ok_or_else(|| Error::failed("fixture resource missing"))?;
         entry.native_host = true;
     }
-    let process = resources.start_shell_exec(request, shell).await?;
+    let process = resources.start_platform_shell_exec(request, shell).await?;
     completed(&resources, &process).await?;
     resources.cancel(&process).await?;
     resources.release_output(&process).await?;

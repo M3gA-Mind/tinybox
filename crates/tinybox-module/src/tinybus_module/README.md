@@ -47,8 +47,9 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | ResolveLocalGrants | ResolveLocalGrantsRequest | LocalGrants |
 | SelectShell | SelectShellRequest | ShellInvocation |
 | StartShellExec | SpawnRequest, SelectShellRequest | ProcessRef |
+| StartNativeShellExec | ShellExecRequest | ProcessRef |
 
-Capabilities advertises contract version 1.13; 1.0 denotes the original
+Capabilities advertises contract version 1.14; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -343,7 +344,8 @@ shared quote-preserving TinyBox command builder.
 Windows explicitly enables extensions and disables delayed expansion.
 Unix builders remove BASH_ENV, ENV, SHELLOPTS and BASHOPTS; ShellInvocation
 returns those removal names. Bash uses -p to ignore exported functions.
-Discovery checks standard Bash paths on every call. Providers apply them after approved environment overrides.
+Discovery checks standard Bash paths on every call. Providers apply the
+removals after approved environment overrides.
 
 Contract 1.13 adds `StartShellExec(SpawnRequest, SelectShellRequest)`. Supply an
 empty argv in SpawnRequest; its resource, cwd, environment and stdin retain
@@ -352,3 +354,14 @@ because selection describes the module machine's shell. It uses the native
 builder, including Windows raw arguments, and the existing supervised bounded
 output, cancellation and cleanup lifecycle. Read and release its journal with
 ReadOutput and ReleaseOutput. Retries must preserve both requests exactly.
+
+## Native shell execution
+
+Contract 1.14 adds `StartNativeShellExec(ShellExecRequest) -> ProcessRef` for local
+passthrough resources. It composes platform shell selection with safe parent
+environment snapshots, approved overrides, private scratch, bounded pipes and
+owned timeout/cancellation cleanup. `ReadOutput` retains scratch until
+`ReleaseOutput` or resource close acknowledges cleanup. Explicit native jail
+requests refuse unavailable enforcement; remote/Docker providers refuse this
+operation. State directory authorization and Windows private parent ACLs belong
+to the caller. See [the native shell contract](../../../docs/specs/native-shell-execution.md).

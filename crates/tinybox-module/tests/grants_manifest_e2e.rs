@@ -59,7 +59,7 @@ async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
         tinybox_bus::INTERFACE,
     )?;
     verify_discovery(&proxy).await?;
-    verify_shell_execution(&proxy).await?;
+    verify_native_shell(&proxy).await?;
     proxy.call::<()>("Shutdown", ()).await?;
     broker_task.abort();
     Ok(())
@@ -149,8 +149,9 @@ async fn verify_discovery(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
-async fn verify_shell_execution(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::error::Error>> {
+async fn verify_native_shell(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::error::Error>> {
     let workspace = tempfile::tempdir()?;
+    let state_dir = tempfile::tempdir()?;
     let resource: tinybox_bus::ResourceId = proxy
         .call("Reserve", (tinybox_bus::ReserveRequest::Resource,))
         .await?;
@@ -161,61 +162,45 @@ async fn verify_shell_execution(proxy: &tinybus::Proxy) -> Result<(), Box<dyn st
                 resource: resource.clone(),
                 backend: "passthrough".into(),
                 workspace: tinybox_bus::Workspace::Directory(
-                    workspace
-                        .path()
-                        .to_str()
-                        .ok_or("workspace is not UTF-8")?
-                        .into(),
+                    workspace.path().to_str().ok_or("non-UTF8 fixture")?.into(),
                 ),
                 ..Default::default()
             },),
         )
         .await?;
-    let process = proxy
+    let process: tinybox_bus::ResourceId = proxy
         .call(
             "Reserve",
             (tinybox_bus::ReserveRequest::Process(resource.clone()),),
         )
         .await?;
-    // Windows runs a quoted executable with a quoted argument and redirects to
-    // a path containing spaces and metacharacters through the actual module.
     #[cfg(windows)]
     let payload = {
-        let tool = workspace.path().join("tool with spaces.exe");
-        std::fs::copy(std::env::current_exe()?, &tool)?;
+        let executable = workspace.path().join("quoted fixture tool.exe");
+        std::fs::copy(std::env::current_exe()?, &executable)?;
         format!(
-            "\"{}\" \"--list\" > \"{}\"",
-            tool.display(),
+            "\"{}\" \"--list\" > \"{}\" & echo native-fixture",
+            executable.display(),
             workspace.path().join("output (fixture).txt").display()
         )
     };
     #[cfg(not(windows))]
-    let payload = "printf fixture > 'output (fixture).txt'".to_owned();
-    let process: tinybox_bus::ProcessRef = proxy
+    let payload = "printf fixture > 'output (fixture).txt'; echo native-fixture";
+    let running: tinybox_bus::ProcessRef = proxy
         .call(
-            "StartShellExec",
-            (
-                tinybox_bus::SpawnRequest {
-                    process,
-                    command: tinybox_bus::ExecRequest {
-                        resource: resource.clone(),
-                        argv: Vec::new(),
-                        cwd: None,
-                        env: std::collections::BTreeMap::default(),
-                        stdin: None,
-                    },
-                },
-                tinybox_bus::SelectShellRequest {
-                    command: payload,
-                    preserve_pipeline_status: false,
-                },
-            ),
+            "StartNativeShellExec",
+            (serde_json::json!({
+                "process":process, "resource":resource,
+                "shell":{"command":payload},
+                "state_dir":state_dir.path().to_str().ok_or("non-UTF8 fixture")?,
+                "timeout_ms":5000
+            }),),
         )
         .await?;
     let batch = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let batch: tinybox_bus::OutputBatch =
-                proxy.call("ReadOutput", (process.clone(), 0_u64)).await?;
+                proxy.call("ReadOutput", (running.clone(), 0_u64)).await?;
             if batch.state != tinybox_bus::ExecutionState::Running {
                 return Ok::<_, tinybus::Error>(batch);
             }
@@ -227,12 +212,20 @@ async fn verify_shell_execution(proxy: &tinybus::Proxy) -> Result<(), Box<dyn st
         batch.state,
         tinybox_bus::ExecutionState::Exited { exit_code: 0 }
     );
-    let output = std::fs::read_to_string(workspace.path().join("output (fixture).txt"))?;
+    let stdout: Vec<u8> = batch
+        .chunks
+        .into_iter()
+        .filter(|chunk| chunk.stream == tinybox_bus::OutputStream::Stdout)
+        .flat_map(|chunk| chunk.bytes)
+        .collect();
+    let stdout = String::from_utf8(stdout)?;
+    assert!(stdout.trim().ends_with("native-fixture"));
+    let redirected = std::fs::read_to_string(workspace.path().join("output (fixture).txt"))?;
     #[cfg(windows)]
-    assert!(output.contains("compiled_manifest_admits_and_executes_grant_and_shell_discovery"));
+    assert!(redirected.contains("compiled_manifest_admits_and_executes_grant_and_shell_discovery"));
     #[cfg(not(windows))]
-    assert_eq!(output, "fixture");
-    proxy.call::<()>("ReleaseOutput", (process,)).await?;
+    assert_eq!(redirected, "fixture");
+    proxy.call::<()>("ReleaseOutput", (running,)).await?;
     proxy.call::<()>("Close", (resource,)).await?;
     Ok(())
 }
