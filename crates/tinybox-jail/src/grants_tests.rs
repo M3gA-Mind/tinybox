@@ -181,6 +181,7 @@ fn cargo_home_with_registry_credentials_is_granted_piecewise()
 fn a_writable_grant_subsumes_the_same_path_read_only() -> Result<(), Box<dyn std::error::Error>> {
     let home = fake_home()?;
     let cfg = LocalGrantConfig {
+        toolchain_homes: false,
         extra_read_only: vec!["~/.npm".into()],
         extra_read_write: vec!["~/.npm".into()],
         ..LocalGrantConfig::default()
@@ -766,7 +767,10 @@ fn writable_extras_cannot_replace_cargo_executables_or_launch_configuration()
         fs::write(home.path().join(".cargo").join(file), "fixture")?;
     }
     let config = LocalGrantConfig {
-        extra_read_write: ["bin", "config.toml", "config", "env"].into_iter().map(|entry| format!("~/.cargo/{entry}")).collect(),
+        extra_read_write: ["bin", "config.toml", "config", "env"]
+            .into_iter()
+            .map(|entry| format!("~/.cargo/{entry}"))
+            .collect(),
         ..LocalGrantConfig::default()
     };
     let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default());
@@ -778,9 +782,32 @@ fn writable_extras_cannot_replace_cargo_executables_or_launch_configuration()
 fn automatic_toolchain_roots_cannot_be_promoted_through_writable_descendants()
 -> Result<(), Box<dyn std::error::Error>> {
     let home = tempfile::tempdir()?;
-    for root in [".rustup", ".nvm", ".npm"] { fs::create_dir_all(home.path().join(root).join("nested"))?; }
+    for root in [".rustup", ".nvm", ".npm"] {
+        fs::create_dir_all(home.path().join(root).join("nested"))?;
+    }
     let config = LocalGrantConfig {
-        extra_read_write: [".rustup", ".nvm", ".npm"].into_iter().map(|root| format!("~/{root}/nested")).collect(),
+        extra_read_write: [".rustup", ".nvm", ".npm"]
+            .into_iter()
+            .map(|root| format!("~/{root}/nested"))
+            .collect(),
+        ..LocalGrantConfig::default()
+    };
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default());
+    assert_eq!(grants.read_write, Vec::<PathBuf>::new());
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn discovered_git_configuration_cannot_be_poisoned_via_its_target_ancestor()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    let dotfiles = home.path().join("dotfiles");
+    fs::create_dir(&dotfiles)?;
+    fs::write(dotfiles.join("gitconfig"), "[core]\n sshCommand = ssh\n")?;
+    std::os::unix::fs::symlink(dotfiles.join("gitconfig"), home.path().join(".gitconfig"))?;
+    let config = LocalGrantConfig {
+        extra_read_write: vec!["~/dotfiles".into()],
         ..LocalGrantConfig::default()
     };
     let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default());

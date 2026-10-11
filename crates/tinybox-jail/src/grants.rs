@@ -44,11 +44,11 @@ pub fn resolve_local_jail_grants(
         if let Some(h) = home.as_deref() {
             b.add_cargo_home(&h.join(".cargo"));
             for dir in HOME_READ_ONLY_DIRS {
-                b.read_only(&h.join(dir), "toolchain");
+                b.fixed_read_only(&h.join(dir), "toolchain");
             }
         }
         for dir in SYSTEM_TOOLCHAIN_DIRS {
-            b.read_only(Path::new(dir), "toolchain");
+            b.fixed_read_only(Path::new(dir), "toolchain");
         }
         if let Some(h) = home.as_deref() {
             b.add_gitconfig(h);
@@ -82,6 +82,7 @@ struct Builder<'a> {
     protected: &'a ProtectedPaths,
     grants: JailGrants,
     seen: HashSet<PathBuf>,
+    fixed_read_only: Vec<PathBuf>,
 }
 
 impl<'a> Builder<'a> {
@@ -91,6 +92,7 @@ impl<'a> Builder<'a> {
             protected,
             grants: JailGrants::default(),
             seen: HashSet::new(),
+            fixed_read_only: Vec::new(),
         }
     }
 
@@ -176,28 +178,43 @@ impl<'a> Builder<'a> {
     }
 
     fn read_only(&mut self, path: &Path, source: &str) {
-        if let Some(p) = self.admit(path, source)
-            && self.seen.insert(p.clone())
-        {
-            self.grants.read_only.push(p);
+        self.add_read_only(path, source, false);
+    }
+
+    fn fixed_read_only(&mut self, path: &Path, source: &str) {
+        self.add_read_only(path, source, true);
+    }
+
+    fn add_read_only(&mut self, path: &Path, source: &str, fixed: bool) {
+        if let Some(p) = self.admit(path, source) {
+            if fixed {
+                self.fixed_read_only.push(path.to_path_buf());
+                self.fixed_read_only.push(p.clone());
+            }
+            if self.seen.insert(p.clone()) {
+                self.grants.read_only.push(p);
+            }
         }
     }
 
     fn read_write(&mut self, path: &Path, source: &str) {
         if let Some(p) = self.admit(path, source) {
             let normalized = normalized_floor_path(&p.to_string_lossy());
-            if self.home.is_some_and(|home| {
-                ["git", "registry"].into_iter().any(|cache| {
-                    let root = home.join(".cargo").join(cache);
-                    root.is_dir()
-                        && root_spellings(&root).any(|root| {
-                            same_or_descendant(&normalized, &root)
-                                || same_or_descendant(&root, &normalized)
-                        })
+            let reaches = |root: &Path| {
+                root_spellings(root).any(|root| {
+                    same_or_descendant(&normalized, &root) || same_or_descendant(&root, &normalized)
                 })
-            }) {
+            };
+            let exposes_fixed = self.fixed_read_only.iter().any(|root| reaches(root));
+            let exposes_cargo = self.home.is_some_and(|home| {
+                ["bin", "git", "registry"]
+                    .into_iter()
+                    .chain(CARGO_READ_ONLY_FILES.iter().copied())
+                    .any(|entry| reaches(&home.join(".cargo").join(entry)))
+            });
+            if exposes_fixed || exposes_cargo {
                 log::warn!(
-                    "refused writable grant reaching shared Cargo sources: {}",
+                    "refused writable grant reaching fixed host toolchain state: {}",
                     p.display()
                 );
                 return;
@@ -221,11 +238,11 @@ impl<'a> Builder<'a> {
             return;
         }
         log::debug!("[sandbox:grants] granting ~/.cargo parts with host code read-only");
-        self.read_only(&cargo.join("bin"), "toolchain");
-        self.read_only(&cargo.join("registry"), "toolchain");
-        self.read_only(&cargo.join("git"), "toolchain");
+        self.fixed_read_only(&cargo.join("bin"), "toolchain");
+        self.fixed_read_only(&cargo.join("registry"), "toolchain");
+        self.fixed_read_only(&cargo.join("git"), "toolchain");
         for f in CARGO_READ_ONLY_FILES {
-            self.read_only(&cargo.join(f), "toolchain");
+            self.fixed_read_only(&cargo.join(f), "toolchain");
         }
     }
 
@@ -237,9 +254,9 @@ impl<'a> Builder<'a> {
         if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
             roots.push(Path::new(&xdg).join("git/config"));
         }
-        self.read_only(&home.join(".config/git/ignore"), "gitignore");
+        self.fixed_read_only(&home.join(".config/git/ignore"), "gitignore");
         if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-            self.read_only(&Path::new(&xdg).join("git/ignore"), "gitignore");
+            self.fixed_read_only(&Path::new(&xdg).join("git/ignore"), "gitignore");
         }
         let mut visited = HashSet::new();
         for root in roots {
@@ -260,7 +277,7 @@ impl<'a> Builder<'a> {
         if !canonical.is_file() || !visited.insert(canonical.clone()) {
             return;
         }
-        self.read_only(&canonical, "gitconfig");
+        self.fixed_read_only(&canonical, "gitconfig");
         if depth >= GITCONFIG_MAX_DEPTH {
             return;
         }
