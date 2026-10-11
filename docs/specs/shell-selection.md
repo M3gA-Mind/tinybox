@@ -23,7 +23,8 @@ non-login -c; Bash also uses -p to ignore imported environment functions. Bash p
 sh never receives that Bash-only prefix. For "false | true", Bash's default
 selection reports the failing stage; preservation retains the last-stage status.
 
-Windows selects cmd with /D /E:ON /V:OFF /S /C. /D suppresses registry AutoRun. /S strips
+Windows selects SystemRoot/System32/cmd.exe from the parent environment,
+independently of payload PATH or COMSPEC overrides, with /D /E:ON /V:OFF /S /C. /D suppresses registry AutoRun. /S strips
 exactly one supplied outer wrapper around the raw payload, leaving inner quoted
 executable paths, argument pairs and redirection paths intact. Native builders
 must use raw_arg for this payload rather than ordinary argument escaping.

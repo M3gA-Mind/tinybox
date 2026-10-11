@@ -59,7 +59,7 @@ fn selection_for(
     match flavor {
         ShellFlavor::Cmd => ShellInvocation {
             flavor,
-            program: "cmd".into(),
+            program: cmd_path(),
             // Disable registry AutoRun and make cmd strip exactly our outer
             // wrapper, preserving quoted executable/argument pairs inside.
             arguments: vec![
@@ -106,6 +106,18 @@ fn selection_for(
             ],
         },
     }
+}
+
+// Resolve before any payload environment overrides are applied. COMSPEC and
+// the child's PATH must not choose a different command processor.
+fn cmd_path() -> String {
+    let root = std::env::var_os("SystemRoot")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
+    root.join("System32")
+        .join("cmd.exe")
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn bash_path() -> Option<&'static str> {

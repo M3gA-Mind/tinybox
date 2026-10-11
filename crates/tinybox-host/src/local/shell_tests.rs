@@ -39,7 +39,7 @@ fn cmd_preserves_quoted_payload_and_lists_bootstrap_names_without_values() {
         ShellFlavor::Cmd,
         None,
     );
-    assert_eq!(selected.program, "cmd");
+    assert_eq!(selected.program, cmd_path());
     assert_eq!(selected.arguments, ["/D", "/E:ON", "/V:OFF", "/S", "/C"]);
     assert_eq!(selected.raw_arguments, Some(format!("\"{payload}\"")));
     assert_eq!(
