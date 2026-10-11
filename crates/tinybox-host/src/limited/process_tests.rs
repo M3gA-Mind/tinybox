@@ -425,3 +425,19 @@ async fn retained_native_cleanup_failure_is_retried_by_managed_stop() -> Result<
     assert!(!std::path::Path::new(&format!("/proc/{pid}/status")).exists());
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn process_table_ignores_zombies_but_keeps_live_group_members() {
+    assert!(!ps_has_live_group(" 42 Z\n 43 S\n", 42));
+    assert!(ps_has_live_group(" 42 Z\n 42 S+\n", 42));
+    assert!(!ps_has_live_group("bad row\n42\n", 42));
+}
+
+#[cfg(unix)]
+#[test]
+fn permission_error_after_group_exit_is_successful_cleanup() -> Result<()> {
+    kill_group_checked(42, |_| Err(nix::errno::Errno::EPERM), |_| Ok(false))?;
+    assert!(kill_group_checked(42, |_| Err(nix::errno::Errno::EPERM), |_| Ok(true)).is_err());
+    Ok(())
+}
