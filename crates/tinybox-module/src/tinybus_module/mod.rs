@@ -58,6 +58,13 @@ impl BoxService {
     ) -> TinyBusResult<tinybox_bus::CommandAnalysis> {
         std::future::ready(Ok(tinybox_core::shell::analysis::analyze_command(&command))).await
     }
+    /// Discover the module machine's shell syntax and invocation plan.
+    async fn select_shell(
+        &self,
+        request: tinybox_bus::SelectShellRequest,
+    ) -> TinyBusResult<tinybox_bus::ShellInvocation> {
+        std::future::ready(Ok(tinybox_host::select_shell(&request))).await
+    }
     /// Discover canonical grants using the caller's protected-path floor.
     async fn resolve_local_grants(
         &self,
@@ -454,7 +461,7 @@ tinybus_module::module_export_optional_static! {
     setup = setup,
     worker_threads = 1,
     provides = ["ai.tinyhumans.tinybox.Box"],
-    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput", "StartJailedExec", "RunDocker", "ResolveLocalGrants"],
+    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput", "StartJailedExec", "RunDocker", "ResolveLocalGrants", "SelectShell"],
     signals = [],
     requires = [],
     optional = [],

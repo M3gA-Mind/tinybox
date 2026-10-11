@@ -274,3 +274,15 @@ Shared Cargo Git and registry dependency caches are read-only because their
 build scripts can execute in later host builds. Commands that fetch dependencies
 need a separately authorized disposable Cargo home. Hosts must supply their complete floor
 and apply authorization before using the returned grants in `StartJailedExec`.
+
+### Platform shell discovery
+
+Contract 1.10 adds `SelectShell`. The request carries command text and an optional
+pipeline-status preservation flag. Unix selects Bash at a standard path with
+`set -o pipefail` by default, or sh without that Bash-only flag when Bash is
+absent. Windows selects cmd `/C` and preserves the payload as a raw command-line
+argument, including quoted redirection paths and percent-variable expansion.
+The result includes Windows bootstrap environment names, never their values.
+Selection does not execute a command, authorize access or provide confinement;
+hosts continue to execute through the module. Native providers can use the
+shared quote-preserving TinyBox command builder.

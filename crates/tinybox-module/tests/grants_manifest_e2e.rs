@@ -85,6 +85,25 @@ async fn compiled_manifest_admits_and_executes_local_grant_discovery()
         ]
     );
     assert_eq!(result.read_write, Vec::<String>::new());
+    let selection: tinybox_bus::ShellInvocation = proxy
+        .call(
+            "SelectShell",
+            (tinybox_bus::SelectShellRequest {
+                command: "false | true".into(),
+                preserve_pipeline_status: false,
+            },),
+        )
+        .await?;
+    if cfg!(windows) {
+        assert_eq!(selection.flavor, tinybox_bus::ShellFlavor::Cmd);
+        assert_eq!(selection.program, "cmd");
+        assert_eq!(selection.arguments, ["/C"]);
+        assert_eq!(selection.raw_arguments.as_deref(), Some("false | true"));
+    } else {
+        assert_eq!(selection.flavor, tinybox_bus::ShellFlavor::Posix);
+        assert_eq!(selection.arguments[0], "-lc");
+        assert_eq!(selection.raw_arguments, None);
+    }
     proxy.call::<()>("Shutdown", ()).await?;
     broker_task.abort();
     Ok(())
