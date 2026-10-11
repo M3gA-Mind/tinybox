@@ -90,13 +90,13 @@ fn absolute_xdg_config_home_replaces_home_config_root() -> Result<(), Box<dyn st
         builder
             .grants
             .read_only
-            .contains(&xdg.path().join("git/ignore"))
+            .contains(&xdg.path().join("git/ignore").canonicalize()?)
     );
     assert!(
         !builder
             .grants
             .read_only
-            .contains(&home.path().join(".config/git/ignore"))
+            .contains(&home.path().join(".config/git/ignore").canonicalize()?)
     );
     Ok(())
 }
