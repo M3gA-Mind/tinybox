@@ -216,6 +216,14 @@ impl BoxService {
         docker::run(request).await
     }
 
+    /// Run one Docker-isolated shell command without mounting a host workspace.
+    async fn run_docker_without_workspace(
+        &self,
+        request: tinybox_bus::DockerRunRequest,
+    ) -> TinyBusResult<tinybox_bus::DockerRunOutput> {
+        docker::run_without_workspace(&tinybox_docker::DockerCli::new(), request).await
+    }
+
     /// Probe the Docker daemon on the module's host with a bounded deadline.
     async fn docker_status(
         &self,
@@ -413,7 +421,7 @@ tinybus_module::module_export_optional_static! {
     setup = setup,
     worker_threads = 1,
     provides = ["ai.tinyhumans.tinybox.Box"],
-    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput", "StartJailedExec", "RunDocker", "DockerStatus", "CleanupDocker"],
+    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput", "StartJailedExec", "RunDocker", "DockerStatus", "CleanupDocker", "RunDockerWithoutWorkspace"],
     signals = [],
     requires = [],
     optional = [],

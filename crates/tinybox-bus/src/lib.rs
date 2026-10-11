@@ -37,8 +37,9 @@ pub use files::{
 /// file transfer for mounted workspaces. 1.6 adds bounded live native output.
 /// 1.7 adds explicitly approved native directory-jail execution. 1.8 adds a
 /// bounded, module-owned one-shot Docker operation. 1.9 adds bounded Docker
-/// daemon status and label-scoped cleanup operations.
-pub const CONTRACT_VERSION: (u32, u32) = (1, 9);
+/// daemon status and label-scoped cleanup operations. 1.10 adds a bounded
+/// Docker command that does not mount a host workspace.
+pub const CONTRACT_VERSION: (u32, u32) = (1, 10);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.
@@ -110,6 +111,7 @@ pub const METHODS: &[&str] = &[
     "RunDocker",
     "DockerStatus",
     "CleanupDocker",
+    "RunDockerWithoutWorkspace",
 ];
 
 /// Facts about the detected native directory-jail backend.
@@ -324,13 +326,17 @@ pub struct CreateRequest {
 /// Run one Docker-isolated shell command and collect bounded output.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DockerRunRequest {
-    /// Host workspace mounted read-write at `/workspace`.
+    /// Host workspace mounted read-write at `/workspace` for `RunDocker`; must
+    /// be empty for `RunDockerWithoutWorkspace`.
     pub workspace: String,
     /// Container image; `None` uses the existing one-shot default.
     #[serde(default)]
     pub image: Option<String>,
-    /// Shell command executed with `sh -c`.
+    /// Shell command executed with `sh -c`, or `sh -lc` when `login_shell` is true.
     pub command: String,
+    /// Start the POSIX shell as a login shell (`sh -lc`) instead of `sh -c`.
+    #[serde(default)]
+    pub login_shell: bool,
     /// Docker network mode; `None` uses the existing isolated default.
     #[serde(default)]
     pub network: Option<String>,
