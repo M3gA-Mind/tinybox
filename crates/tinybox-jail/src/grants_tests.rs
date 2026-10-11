@@ -590,7 +590,13 @@ fn protected_prefixes_also_reject_recursive_ancestor_grants()
     let home = tempfile::tempdir()?;
     fs::create_dir(home.path().join("private"))?;
     let protected = ProtectedPaths {
-        prefixes: vec![home.path().join("private").to_str().ok_or("non-UTF8 fixture")?.into()],
+        prefixes: vec![
+            home.path()
+                .join("private")
+                .to_str()
+                .ok_or("non-UTF8 fixture")?
+                .into(),
+        ],
         ..ProtectedPaths::default()
     };
     let config = LocalGrantConfig {

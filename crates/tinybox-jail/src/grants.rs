@@ -170,11 +170,10 @@ impl<'a> Builder<'a> {
                 pair[0].eq_ignore_ascii_case(&blocked[0])
                     && pair[1].eq_ignore_ascii_case(&blocked[1])
             })
-        }) || self
-            .protected
-            .prefixes
-            .iter()
-            .any(|prefix| same_or_descendant(&normalized, &normalized_floor_path(prefix)))
+        }) || self.protected.prefixes.iter().any(|prefix| {
+            let prefix = normalized_floor_path(prefix);
+            same_or_descendant(&normalized, &prefix) || same_or_descendant(&prefix, &normalized)
+        })
     }
 
     fn read_only(&mut self, path: &Path, source: &str) {
