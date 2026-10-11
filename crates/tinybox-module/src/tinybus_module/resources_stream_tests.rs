@@ -627,16 +627,32 @@ async fn native_shell_execution_preserves_admission_and_request_identity() -> Re
         command: "echo fixture".into(),
         preserve_pipeline_status: false,
     };
-    let process = resources.start_shell_exec(request.clone(), shell.clone()).await?;
-    assert_eq!(process, resources.start_shell_exec(request.clone(), shell.clone()).await?);
+    let process = resources
+        .start_shell_exec(request.clone(), shell.clone())
+        .await?;
+    assert_eq!(
+        process,
+        resources
+            .start_shell_exec(request.clone(), shell.clone())
+            .await?
+    );
     let mut different = shell.clone();
     different.command = "echo different".into();
-    assert!(resources.start_shell_exec(request.clone(), different).await.is_err());
+    assert!(
+        resources
+            .start_shell_exec(request.clone(), different)
+            .await
+            .is_err()
+    );
     assert!(resources.start_exec(request.clone()).await.is_err());
     completed(&resources, &process).await?;
     let batch = resources.read_output(&process, 0).await?;
     assert_eq!(batch.state, ExecutionState::Exited { exit_code: 0 });
-    let bytes: Vec<_> = batch.chunks.iter().flat_map(|chunk| chunk.bytes.iter().copied()).collect();
+    let bytes: Vec<_> = batch
+        .chunks
+        .iter()
+        .flat_map(|chunk| chunk.bytes.iter().copied())
+        .collect();
     assert_eq!(String::from_utf8_lossy(&bytes).trim(), "fixture");
     resources.release_output(&process).await?;
     let mut nonempty = request;

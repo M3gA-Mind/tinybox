@@ -43,8 +43,9 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | AbortFileWrite | AbortFileWriteRequest | unit |
 | ResolveLocalGrants | ResolveLocalGrantsRequest | LocalGrants |
 | SelectShell | SelectShellRequest | ShellInvocation |
+| StartShellExec | SpawnRequest, SelectShellRequest | ProcessRef |
 
-Capabilities advertises contract version 1.10; 1.0 denotes the original
+Capabilities advertises contract version 1.11; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -314,5 +315,14 @@ hosts continue to execute through the module. Native providers can use the
 shared quote-preserving TinyBox command builder.
 
 Windows explicitly enables extensions and disables delayed expansion.
-Unix builders remove BASH_ENV and ENV; ShellInvocation returns those removal
-names. Providers apply them after approved environment overrides.
+Unix builders remove BASH_ENV, ENV, SHELLOPTS and BASHOPTS; ShellInvocation
+returns those removal names. Bash uses -p to ignore exported functions.
+Discovery checks standard Bash paths on every call. Providers apply them after approved environment overrides.
+
+Contract 1.11 adds `StartShellExec(SpawnRequest, SelectShellRequest)`. Supply an
+empty argv in SpawnRequest; its resource, cwd, environment and stdin retain
+their usual meaning. This operation supports local passthrough resources only,
+because selection describes the module machine's shell. It uses the native
+builder, including Windows raw arguments, and the existing supervised bounded
+output, cancellation and cleanup lifecycle. Read and release its journal with
+ReadOutput and ReleaseOutput. Retries must preserve both requests exactly.
