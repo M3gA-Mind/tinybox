@@ -126,6 +126,10 @@ fn select_collector(
         }
     })
 }
+fn validate_execution_ids(request: &SpawnRequest) -> Result<()> {
+    validate_id(&request.process)?;
+    validate_id(&request.command.resource)
+}
 fn require_owned_collector(entry: &super::Resource) -> Result<()> {
     if entry.collector.is_none() {
         return Err(failure(
@@ -293,8 +297,7 @@ impl Resources {
         jail: Option<tinybox_bus::NativeJailConfig>,
         shell: Option<tinybox_bus::ShellExecRequest>,
     ) -> Result<ProcessRef> {
-        validate_id(&request.process)?;
-        validate_id(&request.command.resource)?;
+        validate_execution_ids(&request)?;
         let process = ProcessRef {
             resource: request.command.resource.clone(),
             process: request.process.clone(),
