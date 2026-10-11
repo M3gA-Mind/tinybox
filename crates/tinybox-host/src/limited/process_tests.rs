@@ -395,6 +395,7 @@ async fn retained_native_cleanup_failure_is_retried_by_managed_stop() -> Result<
         .spawn()
         .map_err(|error| Error::io("fixture spawn", &error))?;
     let group = group(&child)?;
+    #[cfg(target_os = "linux")]
     let pid = child.id().ok_or_else(|| Error::Backend {
         sandbox: crate::LOCAL.into(),
         operation: "fixture pid",
