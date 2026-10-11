@@ -1590,7 +1590,7 @@ fn configured_host(config: &HostConfig, local: Arc<dyn Host>) -> Result<Arc<dyn 
     }
 }
 
-fn failure(name: &str, message: &str) -> Error {
+pub(super) fn failure(name: &str, message: &str) -> Error {
     Error::MethodFailed {
         name: name.into(),
         message: message.into(),

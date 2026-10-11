@@ -8,7 +8,7 @@ connection. `tinybox-module::bus` re-exports that vocabulary for compatibility.
 ## Public surface
 
 The interface is `ai.tinyhumans.tinybox.Box` at
-`/ai/tinyhumans/tinybox/Box`. Every argument below is one positional argument;
+`/ai/tinyhumans/tinybox/Box`. Arguments below are positional;
 `Describe` retains its original zero-argument shape and string result.
 
 | Method | Argument | Result |
@@ -181,3 +181,19 @@ methods and the test compares that declaration with the dispatch table.
 analysis, creation, execution, inspection, and close. In-memory bus tests also
 exercise detached cancellation and cleanup. Modules are trusted native code;
 the module itself is not confined by the sandboxes it creates.
+
+## Native directory-jail execution
+
+`StartJailedExec` (wire 1.7) uses the local directory resource as its writable
+root. The module canonicalizes every approved extra grant, rejects missing
+paths and working directories outside the root, and performs the requested
+enforcement preflight before consuming process admission. `Enforced` refuses
+partial constraints; `Declared` requires an explicit host decision using
+`JailStatus`. Neither mode admits the no-op or unavailable backend. A caller
+requiring the process-isolation security floor sets `require_process_isolation`.
+The host retains credential-path exclusions and approval policy.
+
+The jail owns a separate native collector for each execution. Output replay,
+Cancel, ReleaseOutput, Close and Shutdown use the same retained cleanup barriers
+as StartExec. Windows rejects this operation until its native jail has a
+supervised child bridge; explicit ordinary local execution remains available.
