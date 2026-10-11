@@ -49,6 +49,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod detect;
+pub mod grants;
 pub mod jail;
 pub mod noop;
 pub mod registry;

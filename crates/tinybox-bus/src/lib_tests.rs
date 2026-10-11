@@ -47,9 +47,14 @@ fn docker_run_vocabulary_is_typed_bounded_and_additive() -> Result<(), serde_jso
         timeout_ms: 120_000,
     };
     assert!(METHODS.contains(&"RunDocker"));
-    assert_eq!(METHODS.get(METHODS.len() - 2), Some(&"CleanupDocker"));
-    assert_eq!(METHODS.last(), Some(&"RunDockerWithoutWorkspace"));
-    assert_eq!(CONTRACT_VERSION, (1, 10));
+    assert_eq!(METHODS.get(METHODS.len() - 3), Some(&"CleanupDocker"));
+    assert_eq!(
+        METHODS.get(METHODS.len() - 2),
+        Some(&"RunDockerWithoutWorkspace")
+    );
+    assert_eq!(METHODS.last(), Some(&"ResolveLocalGrants"));
+    assert!(METHODS.contains(&"RunDockerWithoutWorkspace"));
+    assert_eq!(CONTRACT_VERSION, (1, 11));
     assert_eq!(MAX_DOCKER_RUN_TIMEOUT_MS, 86_400_000);
     let serialized = serde_json::to_value(&request)?;
     assert_eq!(serialized["read_only_rootfs"], false);
@@ -127,7 +132,7 @@ fn host_gateway_and_docker_facts_are_additive_and_default_safely() -> Result<(),
 #[test]
 fn version_and_capability_wire_snapshot_preserve_contract_compatibility()
 -> Result<(), serde_json::Error> {
-    assert_eq!(CONTRACT_VERSION, (1, 10));
+    assert_eq!(CONTRACT_VERSION, (1, 11));
     assert!(is_compatible(CONTRACT_VERSION));
     assert!(!is_compatible((1, 8)));
     assert!(!is_compatible((1, 7)));
@@ -145,7 +150,7 @@ fn version_and_capability_wire_snapshot_preserve_contract_compatibility()
         exec_backends: Vec::new(),
         spawn_backends: Vec::new(),
     };
-    let snapshot = serde_json::json!({"contract_version":[1,10],"create_backends":["passthrough"],"exec_backends":[],"spawn_backends":[]});
+    let snapshot = serde_json::json!({"contract_version":[1,11],"create_backends":["passthrough"],"exec_backends":[],"spawn_backends":[]});
     assert_eq!(serde_json::to_value(&capabilities)?, snapshot);
     assert_eq!(
         serde_json::from_value::<ModuleCapabilities>(snapshot)?,
@@ -155,8 +160,11 @@ fn version_and_capability_wire_snapshot_preserve_contract_compatibility()
 }
 
 #[test]
-fn no_workspace_docker_operation_is_appended_to_the_contract() {
-    assert_eq!(METHODS.last(), Some(&"RunDockerWithoutWorkspace"));
+fn no_workspace_docker_operation_is_present_in_the_contract() {
+    assert_eq!(
+        METHODS.get(METHODS.len() - 2),
+        Some(&"RunDockerWithoutWorkspace")
+    );
     assert_eq!(
         METHODS
             .iter()
@@ -164,7 +172,7 @@ fn no_workspace_docker_operation_is_appended_to_the_contract() {
             .count(),
         1
     );
-    assert_eq!(CONTRACT_VERSION, (1, 10));
+    assert_eq!(CONTRACT_VERSION, (1, 11));
 }
 
 #[test]
@@ -245,6 +253,28 @@ fn workspace_file_transfers_are_chunked_typed_and_bounded() -> Result<(), serde_
     assert_eq!(
         serde_json::from_value::<WriteFileChunkRequest>(snapshot)?,
         chunk
+    );
+    Ok(())
+}
+
+#[test]
+fn local_grant_configuration_defaults_and_floor_round_trip() -> Result<(), serde_json::Error> {
+    let config: LocalGrantConfig = serde_json::from_str("{}")?;
+    assert!(config.toolchain_homes);
+    assert!(!config.allow_proc);
+    let request = ResolveLocalGrantsRequest {
+        home: Some("/operator".into()),
+        config,
+        protected: ProtectedPaths {
+            components: vec![".ssh".into()],
+            component_pairs: vec![[".cargo".into(), "credentials.toml".into()]],
+            prefixes: vec!["/etc".into()],
+            credential_roots: vec!["/operator/.ssh".into()],
+        },
+    };
+    assert_eq!(
+        serde_json::from_value::<ResolveLocalGrantsRequest>(serde_json::to_value(&request)?)?,
+        request
     );
     Ok(())
 }

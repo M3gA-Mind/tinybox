@@ -44,8 +44,9 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | WriteFileChunk | WriteFileChunkRequest | FileWriteProgress |
 | FinishFileWrite | FinishFileWriteRequest | FileWriteProgress |
 | AbortFileWrite | AbortFileWriteRequest | unit |
+| ResolveLocalGrants | ResolveLocalGrantsRequest | LocalGrants |
 
-Capabilities advertises contract version 1.10; 1.0 denotes the original
+Capabilities advertises contract version 1.11; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -97,6 +98,11 @@ existing callers; when true, the command runs through `sh -lc` rather than
 `sh -c`, preserving login-shell runtime behavior. All other image, network,
 resource, rootfs, read-only mount, capability-drop, environment, label, output,
 and timeout behavior remains shared with `RunDocker`.
+
+Version 1.11 adds `ResolveLocalGrants` for discovering canonical read-only and
+writable local grants under a caller-supplied protected-path floor. Git
+configuration discovery follows Git's XDG config-home selection and supports
+include chains up to Git's ten-level limit.
 
 Create requires an explicit backend and rejects one unavailable on the current
 platform before it creates a resource slot. `passthrough` is record-only on
@@ -278,3 +284,39 @@ alongside the SSH fixture in the command above. It executes the generated
 supervisor shell and verifies stream behavior and scoped cancellation without
 a Docker daemon; it does not establish container isolation. Provider live tests
 cover actual Docker when a local daemon is available.
+
+### Local grant discovery
+
+Contract 1.11 adds `ResolveLocalGrants`. The caller supplies its operator home,
+`LocalGrantConfig`, and `ProtectedPaths` floor. TinyBox resolves existing paths,
+canonicalizes symlinks, discovers toolchain homes and Git include chains, and
+returns read-only and writable grants. Discovery does not start a process or
+make an approval decision. Credential roots exclude both descendants and
+ancestors; a grant on the operator home cannot expose `.ssh`. `/proc` is granted
+only by the explicit `allow_proc` flag. Both requested names and canonical
+targets must clear the floor; configured roots preserve both their alias and
+canonical spellings. Rejected Git config files are never traversed, and ignore
+pattern files are granted directly without parsing configuration includes.
+Shared Cargo Git and registry dependency caches are read-only because their
+build scripts can execute in later host builds; writable extras cannot promote
+those caches or recursively expose them. Automatically discovered read-only
+toolchains and Git configuration also cannot be promoted by writable extras;
+Cargo executables and launch configuration remain protected even if discovery
+is disabled. Mutable toolchain operations need separately authorized disposable
+state. Commands that fetch dependencies
+need a separately authorized disposable Cargo home. Hosts must supply their complete floor
+and apply authorization before using the returned grants in `StartJailedExec`.
+
+Directory grants are inspected recursively for protected component names and
+component pairs before admission. The scan preserves requested alias names,
+does not follow nested symlinks, and rejects symlinks named as a protected
+pair's first component. Inspection errors, more than 1,000,000 entries, or
+more than 128 directory levels refuse the grant. This also applies to automatic
+system toolchain roots, which may therefore be omitted. Discovery is a
+point-in-time snapshot: hosts must prevent concurrent mutation and creation of
+protected entries within a granted tree, or use isolated disposable state.
+It does not install a kernel deny rule for filenames created later.
+
+Git include aliases retain their logical parent. Empty XDG_CONFIG_HOME is
+unset; unsupported ~user/ and %(prefix)/ expansion rejects complete discovery.
+[Contract specification](../../../../docs/specs/local-grants.md).

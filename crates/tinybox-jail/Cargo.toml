@@ -23,6 +23,8 @@ landlock = ["dep:landlock"]
 log = "0.4"
 # Reuse the workspace clock so registry timestamps can be controlled in tests.
 tinybox-core.workspace = true
+# Serialized host-owned grant configuration and protected-path floor.
+tinybox-bus.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

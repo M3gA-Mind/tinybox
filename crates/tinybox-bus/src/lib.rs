@@ -15,6 +15,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod grants;
+pub use grants::{LocalGrantConfig, LocalGrants, ProtectedPaths, ResolveLocalGrantsRequest};
+
 mod jail;
 pub use jail::{JailEnforcement, NativeJailConfig};
 
@@ -38,8 +41,9 @@ pub use files::{
 /// 1.7 adds explicitly approved native directory-jail execution. 1.8 adds a
 /// bounded, module-owned one-shot Docker operation. 1.9 adds bounded Docker
 /// daemon status and label-scoped cleanup operations. 1.10 adds a bounded
-/// Docker command that does not mount a host workspace.
-pub const CONTRACT_VERSION: (u32, u32) = (1, 10);
+/// Docker command that does not mount a host workspace. 1.11 adds local grant
+/// discovery.
+pub const CONTRACT_VERSION: (u32, u32) = (1, 11);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.
@@ -112,6 +116,7 @@ pub const METHODS: &[&str] = &[
     "DockerStatus",
     "CleanupDocker",
     "RunDockerWithoutWorkspace",
+    "ResolveLocalGrants",
 ];
 
 /// Facts about the detected native directory-jail backend.
