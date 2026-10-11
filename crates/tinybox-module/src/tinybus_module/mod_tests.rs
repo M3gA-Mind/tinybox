@@ -215,6 +215,62 @@ async fn capabilities_and_shutdown_report_actual_supported_ownership() -> tinybu
     Ok(())
 }
 
+#[tokio::test]
+async fn new_module_operations_dispatch_and_preserve_validation_errors() -> tinybus::Result<()> {
+    let service = BoxService::default();
+
+    let abort = service
+        .abort_file_write(tinybox_bus::AbortFileWriteRequest {
+            resource: tinybox_bus::ResourceId("missing-resource".into()),
+            transfer: tinybox_bus::ResourceId("missing-transfer".into()),
+        })
+        .await;
+    assert!(abort.is_err());
+
+    let jailed = service
+        .start_jailed_exec(
+            tinybox_bus::SpawnRequest {
+                process: tinybox_bus::ResourceId("process".into()),
+                command: tinybox_bus::ExecRequest {
+                    resource: tinybox_bus::ResourceId("missing-resource".into()),
+                    argv: vec!["true".into()],
+                    cwd: None,
+                    env: std::collections::BTreeMap::new(),
+                    stdin: None,
+                },
+            },
+            tinybox_bus::NativeJailConfig {
+                read_only: Vec::new(),
+                read_write: Vec::new(),
+                allow_net: false,
+                allow_subprocess: false,
+                enforcement: tinybox_bus::JailEnforcement::Declared,
+                require_process_isolation: false,
+            },
+        )
+        .await;
+    assert!(jailed.is_err());
+
+    let docker = service
+        .run_docker(tinybox_bus::DockerRunRequest {
+            workspace: "/workspace".into(),
+            image: None,
+            command: "true".into(),
+            network: None,
+            memory_limit_mb: None,
+            cpus: None,
+            read_only_rootfs: None,
+            read_only_mounts: Vec::new(),
+            extra_cap_drops: Vec::new(),
+            env: std::collections::BTreeMap::new(),
+            label: None,
+            timeout_ms: tinybox_bus::MAX_DOCKER_RUN_TIMEOUT_MS + 1,
+        })
+        .await;
+    assert!(docker.is_err());
+    Ok(())
+}
+
 #[test]
 fn declared_methods_match_the_dispatch_table() {
     let mut methods = BoxService::default()
