@@ -1250,3 +1250,55 @@ async fn rejected_scratch_failure_does_not_prevent_close_from_fencing_and_stoppi
     resources.close(&resource).await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn concurrent_preparations_share_a_bounded_admission_budget()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Arc::new(Resources::default());
+    let resource = local_resource(&resources).await?;
+    let request = request(&resources, &resource, true_command()).await?;
+    let (entered, mut receiver) = tokio::sync::mpsc::channel(1);
+    let release = Arc::new(tokio::sync::Barrier::new(MAX_STREAM_EXECUTIONS + 1));
+    let mut pending = Vec::new();
+    for _ in 0..MAX_STREAM_EXECUTIONS {
+        let owner = resources.clone();
+        let request = request.clone();
+        let entered = entered.clone();
+        let release = release.clone();
+        pending.push(tokio::spawn(async move {
+            owner
+                .start_with_preparation(request, None, None, None, |preparation| async move {
+                    entered
+                        .send(())
+                        .await
+                        .map_err(|error| Error::failed(error.to_string()))?;
+                    release.wait().await;
+                    preparation.finish().await
+                })
+                .await
+        }));
+        receiver.recv().await.ok_or("preparation did not start")?;
+    }
+    let called = std::sync::atomic::AtomicBool::new(false);
+    let rejected = resources
+        .start_with_preparation(request, None, None, None, |preparation| async {
+            called.store(true, std::sync::atomic::Ordering::SeqCst);
+            preparation.finish().await
+        })
+        .await;
+    assert_eq!(
+        rejected.err().map(|error| error.wire_name().to_owned()),
+        Some(tinybox_bus::RESOURCE_LIMIT.to_owned())
+    );
+    assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+    release.wait().await;
+    for task in pending {
+        task.await??;
+    }
+    resources.close(&resource).await?;
+    assert_eq!(
+        resources.preparations.available_permits(),
+        MAX_STREAM_EXECUTIONS
+    );
+    Ok(())
+}
