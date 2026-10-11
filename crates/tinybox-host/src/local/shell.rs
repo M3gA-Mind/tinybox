@@ -54,8 +54,10 @@ fn selection_for(
         ShellFlavor::Cmd => ShellInvocation {
             flavor,
             program: "cmd".into(),
-            arguments: vec!["/C".into()],
-            raw_arguments: Some(request.command.clone()),
+            // Disable registry AutoRun and make cmd strip exactly our outer
+            // wrapper, preserving quoted executable/argument pairs inside.
+            arguments: vec!["/D".into(), "/S".into(), "/C".into()],
+            raw_arguments: Some(format!("\"{}\"", request.command)),
             bootstrap_environment: WINDOWS_BOOTSTRAP_ENVIRONMENT
                 .iter()
                 .map(|name| (*name).into())
@@ -65,7 +67,7 @@ fn selection_for(
             flavor,
             program: bash.unwrap_or("sh").into(),
             arguments: vec![
-                "-lc".into(),
+                "-c".into(),
                 if bash.is_some() && !request.preserve_pipeline_status {
                     format!("set -o pipefail\n{}", request.command)
                 } else {

@@ -54,12 +54,18 @@ fn actual_cmd_raw_payload_keeps_a_quoted_executable_and_argument()
     std::fs::copy(std::env::current_exe()?, &executable)?;
     let output = root.path().join("quoted executable output.txt");
     let requested = SelectShellRequest {
-        command: format!("\"{}\" \"--list\" > \"{}\"", executable.display(), output.display()),
+        command: format!(
+            "\"{}\" \"--list\" > \"{}\"",
+            executable.display(),
+            output.display()
+        ),
         preserve_pipeline_status: false,
     };
     assert!(build_shell_command(&requested).status()?.success());
-    assert!(std::fs::read_to_string(output)?
-        .contains("actual_cmd_raw_payload_keeps_a_quoted_executable_and_argument"));
+    assert!(
+        std::fs::read_to_string(output)?
+            .contains("actual_cmd_raw_payload_keeps_a_quoted_executable_and_argument")
+    );
     Ok(())
 }
 

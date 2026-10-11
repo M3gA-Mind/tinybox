@@ -41,8 +41,10 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | WriteFileChunk | WriteFileChunkRequest | FileWriteProgress |
 | FinishFileWrite | FinishFileWriteRequest | FileWriteProgress |
 | AbortFileWrite | AbortFileWriteRequest | unit |
+| ResolveLocalGrants | ResolveLocalGrantsRequest | LocalGrants |
+| SelectShell | SelectShellRequest | ShellInvocation |
 
-Capabilities advertises contract version 1.9; 1.0 denotes the original
+Capabilities advertises contract version 1.10; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -297,8 +299,11 @@ It does not install a kernel deny rule for filenames created later.
 Contract 1.10 adds `SelectShell`. The request carries command text and an optional
 pipeline-status preservation flag. Unix selects Bash at a standard path with
 `set -o pipefail` by default, or sh without that Bash-only flag when Bash is
-absent. Windows selects cmd `/C` and preserves the payload as a raw command-line
-argument, including quoted redirection paths and percent-variable expansion.
+absent. Unix uses non-login `-c` to avoid loading login profiles before the
+payload. Windows selects cmd `/D /S /C`, disabling registry AutoRun hooks and
+stripping one explicit outer wrapper around the raw command-line payload.
+Quoted executable/argument pairs, redirection paths and percent expansion remain
+inside that wrapper.
 The result includes Windows bootstrap environment names, never their values.
 Selection does not execute a command, authorize access or provide confinement;
 hosts continue to execute through the module. Native providers can use the
