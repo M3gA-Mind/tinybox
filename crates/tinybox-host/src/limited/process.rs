@@ -508,19 +508,18 @@ async fn process_table_output(
     })?;
     let mut bytes = Vec::new();
     let work = async { tokio::try_join!(child.wait(), stdout.read_to_end(&mut bytes)) };
-    let (status, _) = match tokio::time::timeout(deadline, work).await {
-        Ok(result) => result.map_err(|error| Error::io("read process table", &error))?,
-        Err(_) => {
-            child
-                .kill()
-                .await
-                .map_err(|error| Error::io("kill process table probe", &error))?;
-            return Err(Error::Backend {
-                sandbox: crate::LOCAL.into(),
-                operation: "read process table",
-                message: "cleanup deadline exceeded".into(),
-            });
-        }
+    let (status, _) = if let Ok(result) = tokio::time::timeout(deadline, work).await {
+        result.map_err(|error| Error::io("read process table", &error))?
+    } else {
+        child
+            .kill()
+            .await
+            .map_err(|error| Error::io("kill process table probe", &error))?;
+        return Err(Error::Backend {
+            sandbox: crate::LOCAL.into(),
+            operation: "read process table",
+            message: "cleanup deadline exceeded".into(),
+        });
     };
     Ok(std::process::Output {
         status,
