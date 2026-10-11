@@ -199,14 +199,16 @@ impl<'a> Builder<'a> {
     /// Grant only the parts of `~/.cargo` that jailed Cargo needs. The root is
     /// never writable: `bin` and Cargo configuration run later outside the
     /// jail, so writable access there would persist an escape for host tools.
+    /// Shared dependency sources are also read-only: a cached build script can
+    /// execute during a later host build. Fetches need a disposable Cargo home.
     fn add_cargo_home(&mut self, cargo: &Path) {
         if !cargo.is_dir() {
             return;
         }
         log::debug!("[sandbox:grants] granting ~/.cargo parts with host code read-only");
         self.read_only(&cargo.join("bin"), "toolchain");
-        self.read_write(&cargo.join("registry"), "toolchain");
-        self.read_write(&cargo.join("git"), "toolchain");
+        self.read_only(&cargo.join("registry"), "toolchain");
+        self.read_only(&cargo.join("git"), "toolchain");
         for f in CARGO_READ_ONLY_FILES {
             self.read_only(&cargo.join(f), "toolchain");
         }
@@ -233,7 +235,7 @@ impl<'a> Builder<'a> {
         depth: usize,
         visited: &mut HashSet<PathBuf>,
     ) {
-        let Ok(canonical) = file.canonicalize() else {
+        let Some(canonical) = self.admit(file, "gitconfig") else {
             return;
         };
         if !canonical.is_file() || !visited.insert(canonical.clone()) {

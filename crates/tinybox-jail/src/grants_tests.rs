@@ -102,8 +102,8 @@ fn toolchain_homes_are_granted_when_they_exist() -> Result<(), Box<dyn std::erro
         "Cargo home must never be writable"
     );
     assert!(has(&g.read_only, &cargo.join("bin")));
-    assert!(has(&g.read_write, &cargo.join("registry")));
-    assert!(has(&g.read_write, &cargo.join("git")));
+    assert!(has(&g.read_only, &cargo.join("registry")));
+    assert!(has(&g.read_only, &cargo.join("git")));
     for file in ["config.toml", "config", "env"] {
         assert!(
             has(&g.read_only, &cargo.join(file)),
@@ -170,8 +170,8 @@ fn cargo_home_with_registry_credentials_is_granted_piecewise()
         "whole ~/.cargo would expose credentials.toml"
     );
     assert!(!all(&g).iter().any(|p| p.ends_with("credentials.toml")));
-    assert!(has(&g.read_write, &c.join("registry")));
-    assert!(has(&g.read_write, &c.join("git")));
+    assert!(has(&g.read_only, &c.join("registry")));
+    assert!(has(&g.read_only, &c.join("git")));
     assert!(has(&g.read_only, &c.join("bin")));
     assert!(has(&g.read_only, &c.join("config.toml")));
     Ok(())
@@ -530,4 +530,56 @@ fn procfs_toggle_grants_read_only_access_even_when_extras_ask_for_writes() {
     let grants = resolve_local_jail_grants(None, &config, &ProtectedPaths::default());
     assert_eq!(grants.read_only, vec![PathBuf::from("/proc")]);
     assert_eq!(grants.read_write, Vec::<PathBuf>::new());
+}
+
+#[test]
+fn discovered_cargo_dependency_sources_cannot_be_poisoned_for_later_host_builds()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    for cache in ["git/checkouts/dependency", "registry/src/dependency"] {
+        let source = home.path().join(".cargo").join(cache);
+        fs::create_dir_all(&source)?;
+        fs::write(source.join("build.rs"), "fn main() {}")?;
+    }
+    let grants = resolve_local_jail_grants(
+        Some(home.path()),
+        &LocalGrantConfig::default(),
+        &ProtectedPaths::default(),
+    );
+    for cache in ["git", "registry"] {
+        let source = home.path().join(".cargo").join(cache).canonicalize()?;
+        assert!(has(&grants.read_only, &source), "{grants:?}");
+        assert!(!has(&grants.read_write, &source), "{grants:?}");
+    }
+    Ok(())
+}
+
+#[test]
+fn rejected_git_config_cannot_grant_its_nested_includes() -> Result<(), Box<dyn std::error::Error>>
+{
+    let home = tempfile::tempdir()?;
+    fs::create_dir(home.path().join(".ssh"))?;
+    fs::write(
+        home.path().join(".gitconfig"),
+        "[include]\n path = ~/.ssh/private-config\n",
+    )?;
+    fs::write(
+        home.path().join(".ssh/private-config"),
+        "[include]\n path = ~/neutral-secret\n",
+    )?;
+    fs::write(home.path().join("neutral-secret"), "fixture")?;
+    let protected = ProtectedPaths {
+        components: vec![".ssh".into()],
+        ..ProtectedPaths::default()
+    };
+    let grants =
+        resolve_local_jail_grants(Some(home.path()), &LocalGrantConfig::default(), &protected);
+    assert!(
+        !has(
+            &grants.read_only,
+            &home.path().join("neutral-secret").canonicalize()?
+        ),
+        "{grants:?}"
+    );
+    Ok(())
 }
