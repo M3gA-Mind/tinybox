@@ -336,6 +336,11 @@ impl DockerCli {
     /// and kill completion. Use this when a lifecycle API reports success.
     /// The historical [`Self::kill_labelled`] method retains its best-effort
     /// behavior for existing callers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when Docker cannot be started, the container
+    /// listing fails, or any requested container kill is not confirmed.
     pub async fn kill_labelled_checked(&self, label: &str) -> io::Result<u32> {
         self.kill_labelled_inner(label, true).await
     }
