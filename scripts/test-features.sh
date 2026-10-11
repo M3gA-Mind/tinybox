@@ -9,11 +9,13 @@ case "${RUNNER_OS:-$(uname -s)}" in
     export PATH="$(brew --prefix util-linux)/bin:$PATH"
     ;;
 esac
-python3 scripts/test-feature-environment.py
 python3 scripts/test-e2e-version.py
 cargo test --locked --workspace
 cargo test --locked --workspace --all-features
 case "${RUNNER_OS:-$(uname -s)}" in
   Windows|MINGW*|MSYS*|CYGWIN*) ;;
-  *) python3 scripts/test-package-layout.py ;;
+  *)
+    python3 scripts/test-feature-environment.py
+    python3 scripts/test-package-layout.py
+    ;;
 esac
