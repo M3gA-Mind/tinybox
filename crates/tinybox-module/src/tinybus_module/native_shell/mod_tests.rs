@@ -193,3 +193,31 @@ async fn scratch_deletion_runs_outside_the_async_worker()
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn scratch_preparation_runs_outside_the_async_worker()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let state = tempfile::tempdir()?;
+    let root = state.path().to_path_buf();
+    let request = request(&root);
+    let resolved = tinybox_core::ExecRequest::new(["unused"]);
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    let recorded = observed.clone();
+    let worker = std::thread::current().id();
+    let shell = ShellContext::prepare_owned_with(move || {
+        *recorded
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::thread::current().id());
+        ShellContext::prepare(request, &root, &resolved)
+    })
+    .await?;
+    assert_ne!(
+        *observed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        Some(worker),
+        "filesystem preparation must not run on the sole async worker"
+    );
+    shell.dispose_scratch().await?;
+    Ok(())
+}

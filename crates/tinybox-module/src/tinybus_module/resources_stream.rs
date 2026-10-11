@@ -16,6 +16,7 @@ pub(super) struct StreamExecution {
     journal: Arc<OutputJournal>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     collector: Collector,
+    timed_out: Arc<std::sync::atomic::AtomicBool>,
 }
 #[derive(Clone)]
 enum Collector {
@@ -149,7 +150,7 @@ fn require_owned_collector(entry: &super::Resource) -> Result<()> {
     }
     Ok(())
 }
-fn select_execution_collector(
+async fn select_execution_collector(
     entry: &super::Resource,
     jail: Option<&tinybox_bus::NativeJailConfig>,
     shell: Option<&tinybox_bus::ShellExecRequest>,
@@ -168,22 +169,33 @@ fn select_execution_collector(
                 "native shell requires directory resource",
             )
         })?;
-        Collector::Shell(super::super::native_shell::ShellContext::prepare(
-            shell.clone(),
-            root,
-            resolved,
-        )?)
+        Collector::Shell(
+            super::super::native_shell::ShellContext::prepare_owned(
+                shell.clone(),
+                root.clone(),
+                resolved.clone(),
+            )
+            .await?,
+        )
     } else {
         select_collector(entry, jail, resolved)?
     })
 }
-fn prepare_execution(
+async fn prepare_execution(
     entry: &super::Resource,
     request: &SpawnRequest,
     jail: Option<&tinybox_bus::NativeJailConfig>,
     shell: Option<&tinybox_bus::ShellExecRequest>,
     platform_shell: Option<&tinybox_bus::SelectShellRequest>,
 ) -> Result<(tinybox_core::ExecRequest, Collector)> {
+    if !entry.execution_supported
+        || (entry.local_sandbox.is_none() && entry.docker_sandbox.is_none())
+    {
+        return Err(failure(
+            tinybox_bus::UNSUPPORTED_OPERATION,
+            "live output is unavailable for this provider",
+        ));
+    }
     require_owned_collector(entry)?;
     // Each execution owns its cleanup collector. Cancelling one stream must
     // not drain an unrelated running supervisor or inherit its failure.
@@ -218,7 +230,7 @@ fn prepare_execution(
             shell.clone(),
         )
     } else {
-        select_execution_collector(entry, jail, shell, &resolved)?
+        select_execution_collector(entry, jail, shell, &resolved).await?
     };
     Ok((resolved, collector))
 }
@@ -235,6 +247,8 @@ impl StreamExecution {
         let observer = journal.clone();
         let runner = collector.clone();
         let timeout = shell.as_ref().map(|request| request.timeout_ms);
+        let timed_out = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let timeout_outcome = timed_out.clone();
         let task = tokio::spawn(async move {
             let _completion = CompletionGuard(observer.clone());
             let result = if let Some(timeout) = timeout {
@@ -246,6 +260,7 @@ impl StreamExecution {
                 {
                     Some(result)
                 } else {
+                    timeout_outcome.store(true, std::sync::atomic::Ordering::SeqCst);
                     let _cleanup = runner.drain().await;
                     None
                 }
@@ -276,6 +291,7 @@ impl StreamExecution {
             journal,
             task: Mutex::new(Some(task)),
             collector,
+            timed_out,
         }
     }
     pub(super) fn running(&self) -> bool {
@@ -300,7 +316,12 @@ impl StreamExecution {
             )
         })?;
         if !self.journal.cleanup_acknowledged() {
-            self.journal.finish_failed(ExecutionFailure::BackendFailed);
+            let failure = if self.timed_out.load(std::sync::atomic::Ordering::SeqCst) {
+                ExecutionFailure::TimedOut
+            } else {
+                ExecutionFailure::BackendFailed
+            };
+            self.journal.finish_failed(failure);
         }
         Ok(())
     }
@@ -405,21 +426,14 @@ impl Resources {
         let entry = slot
             .as_ref()
             .ok_or_else(|| failure(tinybox_bus::UNKNOWN_RESOURCE, "closed resource"))?;
-        if !entry.execution_supported
-            || (entry.local_sandbox.is_none() && entry.docker_sandbox.is_none())
-        {
-            return Err(failure(
-                tinybox_bus::UNSUPPORTED_OPERATION,
-                "live output is unavailable for this provider",
-            ));
-        }
         let (resolved, collector) = prepare_execution(
             entry,
             &request,
             jail.as_ref(),
             shell.as_ref(),
             platform_shell.as_ref(),
-        )?;
+        )
+        .await?;
         let mut state = self.state.lock().await;
         let executions = self
             .executions
