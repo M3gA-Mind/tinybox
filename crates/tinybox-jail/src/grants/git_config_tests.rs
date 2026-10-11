@@ -32,6 +32,12 @@ fn empty_xdg_config_home_is_unset_in_git_root_selection() {
     assert_eq!(xdg_root(None), None);
     assert_eq!(
         xdg_root(Some(std::ffi::OsStr::new("config-root"))),
-        Some(Path::new("config-root"))
+        None
     );
+}
+
+#[test]
+fn git_include_values_join_continuation_lines() {
+    let config = format!("[include]\npath = ~/work.{}\nconf\n", char::from(92));
+    assert_eq!(include_paths(&config), ["~/work.conf"]);
 }

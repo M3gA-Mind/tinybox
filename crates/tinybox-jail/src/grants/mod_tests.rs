@@ -1087,3 +1087,16 @@ fn empty_xdg_config_home_does_not_grant_relative_git_configuration()
     assert_eq!(builder.grants, JailGrants::default());
     Ok(())
 }
+
+#[test]
+fn missing_git_include_locations_cannot_be_created_from_writable_grants()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir(home.path().join("future"))?;
+    fs::write(home.path().join(".gitconfig"), "[include]\npath = future/config\n")?;
+    let config = LocalGrantConfig { extra_read_write: vec!["~/future".into()], ..Default::default() };
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default())?;
+    assert_eq!(grants.read_write, Vec::<PathBuf>::new());
+    assert!(!has(&grants.read_only, &home.path().join("future/config")));
+    Ok(())
+}
