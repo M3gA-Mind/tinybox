@@ -1146,15 +1146,15 @@ async fn rejected_shell_scratch_cleanup_is_retained_for_close_and_shutdown_retry
             },
         };
         let scratch = state.path().join("artifacts/sandbox-scratch");
-        let moved = state.path().join("saved-scratch");
         let result = resources
             .start_with_preparation(request, None, Some(shell), None, |preparation| async {
                 let collector = preparation.finish().await?;
                 resources.close(&resource).await?;
-                std::fs::rename(&scratch, &moved)
-                    .map_err(|error| Error::failed(error.to_string()))?;
-                std::fs::write(&scratch, "blocks deletion")
-                    .map_err(|error| Error::failed(error.to_string()))?;
+                if let Collector::Shell(shell) = &collector {
+                    shell
+                        .scratch_deletion_blocked
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                }
                 Ok(collector)
             })
             .await;
@@ -1163,8 +1163,10 @@ async fn rejected_shell_scratch_cleanup_is_retained_for_close_and_shutdown_retry
             Some(tinybox_bus::BACKEND_ERROR.to_owned())
         );
         assert_eq!(resources.rejected_shells.lock().await.len(), 1);
-        std::fs::remove_file(&scratch)?;
-        std::fs::rename(&moved, &scratch)?;
+        resources.rejected_shells.lock().await[0]
+            .1
+            .scratch_deletion_blocked
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         if shutdown {
             resources.shutdown().await?;
         } else {

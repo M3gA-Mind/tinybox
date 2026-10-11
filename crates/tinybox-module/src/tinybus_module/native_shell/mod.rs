@@ -40,12 +40,7 @@ impl ShellContext {
         resolved: &tinybox_core::ExecRequest,
         backend: Arc<dyn tinybox_jail::JailBackend>,
     ) -> Result<Arc<Self>> {
-        if request.timeout_ms == 0
-            || request.timeout_ms > 86_400_000
-            || request.shell.command.contains('\0')
-        {
-            return Err(invalid());
-        }
+        validate_runtime(&request)?;
         let state = Path::new(&request.state_dir);
         if request.state_dir.len() > tinybox_bus::MAX_FILE_PATH_BYTES
             || request.state_dir.contains('\0')
@@ -230,6 +225,15 @@ impl ShellContext {
             tinybox_core::Error::io("join shell scratch cleanup", &std::io::Error::other(error))
         })?
     }
+}
+fn validate_runtime(request: &ShellExecRequest) -> Result<()> {
+    if request.timeout_ms == 0
+        || request.timeout_ms > 86_400_000
+        || request.shell.command.contains('\0')
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 fn invalid() -> tinybus::Error {
     super::resources::failure(
