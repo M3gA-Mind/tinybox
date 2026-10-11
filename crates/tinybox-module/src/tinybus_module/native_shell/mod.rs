@@ -163,3 +163,7 @@ fn invalid() -> tinybus::Error {
         "invalid native shell environment, state directory or runtime budget",
     )
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
