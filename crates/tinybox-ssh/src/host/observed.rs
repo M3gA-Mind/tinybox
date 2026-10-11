@@ -1,17 +1,14 @@
 //! Remote process-group ownership for live SSH execution.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use tinybox_core::{Error, ExecRequest, ExecutionObserver, OutputStream, Result};
 use tokio::sync::Notify;
+use uuid::Uuid;
 
 use super::SshTarget;
-
-static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 pub(super) struct RemoteCleanupState(Arc<Mutex<BTreeMap<String, Entry>>>);
@@ -30,12 +27,7 @@ impl Default for RemoteCleanupState {
 
 impl RemoteCleanupState {
     pub(super) fn reserve(&self) -> (String, String) {
-        let ordinal = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let id = format!("{}-{nanos}-{ordinal}", std::process::id());
+        let id = Uuid::new_v4().simple().to_string();
         let directory = format!("/tmp/.tinybox-observed-{id}");
         self.entries().insert(
             id.clone(),
@@ -45,6 +37,13 @@ impl RemoteCleanupState {
             },
         );
         (id, directory)
+    }
+
+    pub(super) fn reserve_guard(&self, id: String) -> ReservationGuard {
+        ReservationGuard {
+            state: self.clone(),
+            id,
+        }
     }
 
     pub(super) fn pending(&self) -> Vec<(String, String)> {
@@ -75,6 +74,19 @@ impl RemoteCleanupState {
 
     fn entries(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Entry>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Marks an unfinished reservation as pending if observed execution unwinds.
+#[derive(Debug)]
+pub(super) struct ReservationGuard {
+    state: RemoteCleanupState,
+    id: String,
+}
+
+impl Drop for ReservationGuard {
+    fn drop(&mut self) {
+        self.state.mark_pending(&self.id);
     }
 }
 
@@ -112,15 +124,25 @@ pub(super) fn request(
         tinybox_core::shell::quote(&script)
     );
     let wrapper = format!(
-        "dir={dir}; pid_file={pid}; owner={owner}; \
+        "exec 3<&0; dir={dir}; pid_file={pid}; owner={owner}; \
          if [ ! -d \"$dir\" ] || [ \"$(cat \"$owner\" 2>/dev/null)\" != {id} ]; then exit 125; fi; \
-         ( exec setsid /bin/sh -c {child} ) & launcher=$!; \
+         ( exec setsid /bin/sh -c {child} <&3 ) & launcher=$!; \
          count=0; while [ ! -f \"$pid_file\" ]; do \
            if ! kill -0 \"$launcher\" 2>/dev/null; then wait \"$launcher\"; code=$?; exit \"$code\"; fi; \
            count=$((count + 1)); if [ \"$count\" -ge 1000 ]; then kill -KILL \"$launcher\" 2>/dev/null || true; wait \"$launcher\" 2>/dev/null || true; exit 125; fi; \
            sleep 0.01; \
          done; \
-         wait \"$launcher\"; code=$?; printf 'done\\n' > \"$dir/done\"; rm -rf \"$dir\"; exit \"$code\"",
+         wait \"$launcher\"; code=$?; \
+         group=$(cat \"$pid_file\" 2>/dev/null); case \"$group\" in ''|*[!0-9]*) exit 125;; esac; \
+         kill -TERM -\"$group\" 2>/dev/null || true; \
+         count=0; while kill -0 -\"$group\" 2>/dev/null; do \
+           count=$((count + 1)); if [ \"$count\" -ge 100 ]; then break; fi; sleep 0.01; \
+         done; \
+         if kill -0 -\"$group\" 2>/dev/null; then kill -KILL -\"$group\" 2>/dev/null || true; fi; \
+         count=0; while kill -0 -\"$group\" 2>/dev/null; do \
+           count=$((count + 1)); if [ \"$count\" -ge 1000 ]; then exit 124; fi; sleep 0.01; \
+         done; \
+         printf 'done\\n' > \"$dir/done\" && rm -rf \"$dir\" || exit 125; exit \"$code\"",
         dir = tinybox_core::shell::quote(directory),
         pid = tinybox_core::shell::quote(&pid_file),
         owner = tinybox_core::shell::quote(&owner_file),
