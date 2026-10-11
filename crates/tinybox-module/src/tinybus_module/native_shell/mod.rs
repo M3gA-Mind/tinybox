@@ -6,16 +6,9 @@ use std::{
 use tinybox_bus::ShellExecRequest;
 use tinybus::Result;
 
-pub(super) struct ShellContext {
-    request: ShellExecRequest,
-    environment: std::collections::BTreeMap<String, String>,
-    _scratch: tempfile::TempDir,
-    host: ShellHost,
-}
-enum ShellHost {
-    Local(tinybox_host::LimitedLocalHost),
-    Jailed(tinybox_host::JailLocalHost),
-}
+mod types;
+pub(super) use types::ShellContext;
+use types::ShellHost;
 impl ShellContext {
     pub(super) fn prepare(
         request: ShellExecRequest,
