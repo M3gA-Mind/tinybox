@@ -44,6 +44,9 @@ impl Builder<'_> {
         depth: usize,
         visited: &mut HashSet<(PathBuf, PathBuf)>,
     ) -> tinybox_core::Result<()> {
+        // Missing include targets still affect future host Git execution.
+        // Reserve their logical locations without granting absent files.
+        self.fixed_read_only.push(file.to_path_buf());
         let Some(canonical) = self.admit(file, "gitconfig") else {
             return Ok(());
         };
@@ -83,7 +86,7 @@ impl Builder<'_> {
 pub(super) fn include_paths(config: &str) -> Vec<String> {
     let mut in_include = false;
     let mut out = Vec::new();
-    for line in config.lines() {
+    for line in logical_lines(config) {
         let line = line.trim();
         if let Some(section) = line.strip_prefix('[') {
             let name = section.split([']', ' ', '"']).next().unwrap_or("");
@@ -99,6 +102,40 @@ pub(super) fn include_paths(config: &str) -> Vec<String> {
             && let Some(value) = include_value(value)
         {
             out.push(value);
+        }
+    }
+    out
+}
+
+// Git removes a backslash immediately before a newline, including in quoted
+// values. Comments and escaped backslashes do not continue the next line.
+fn logical_lines(config: &str) -> Vec<String> {
+    let mut lines = config.lines().peekable();
+    let mut out = Vec::new();
+    let mut logical = String::new();
+    while let Some(line) = lines.next() {
+        logical.push_str(line);
+        let mut quoted = false;
+        let mut escaped = false;
+        for ch in logical.chars() {
+            if escaped {
+                escaped = false;
+            } else {
+                match ch {
+                    '\\' => escaped = true,
+                    '"' => quoted = !quoted,
+                    '#' | ';' if !quoted => {
+                        escaped = false;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if escaped && lines.peek().is_some() {
+            logical.pop();
+        } else {
+            out.push(std::mem::take(&mut logical));
         }
     }
     out
@@ -147,5 +184,5 @@ fn include_value(value: &str) -> Option<String> {
 mod tests;
 
 fn xdg_root(value: Option<&std::ffi::OsStr>) -> Option<&Path> {
-    value.filter(|value| !value.is_empty()).map(Path::new)
+    value.map(Path::new).filter(|path| path.is_absolute())
 }

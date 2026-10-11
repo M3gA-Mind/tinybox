@@ -30,14 +30,34 @@ fn malformed_or_empty_include_values_are_not_granted() {
 fn empty_xdg_config_home_is_unset_in_git_root_selection() {
     assert_eq!(xdg_root(Some(std::ffi::OsStr::new(""))), None);
     assert_eq!(xdg_root(None), None);
-    assert_eq!(
-        xdg_root(Some(std::ffi::OsStr::new("config-root"))),
-        None
-    );
+    assert_eq!(xdg_root(Some(std::ffi::OsStr::new("config-root"))), None);
 }
 
 #[test]
 fn git_include_values_join_continuation_lines() {
     let config = format!("[include]\npath = ~/work.{}\nconf\n", char::from(92));
     assert_eq!(include_paths(&config), ["~/work.conf"]);
+    assert_eq!(
+        include_paths("[include]\npath = \"~/work.\\\nconf\"\n"),
+        ["~/work.conf"]
+    );
+    assert_eq!(
+        include_paths("[include]\npath = first # comment\\\npath = second\n"),
+        ["first", "second"]
+    );
+    assert_eq!(
+        include_paths("[include]\npath = first\\\\\npath = second\n"),
+        ["first\\", "second"]
+    );
+    assert_eq!(
+        include_paths("[include]\npath = dangling\\"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn absolute_xdg_config_home_is_used() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    assert_eq!(xdg_root(Some(root.path().as_os_str())), Some(root.path()));
+    Ok(())
 }
