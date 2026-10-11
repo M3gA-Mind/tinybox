@@ -1711,7 +1711,16 @@ fn generated_supervisor_keeps_grace_period_when_group_inspection_fails() -> Resu
     let fake_ps = format!("{fake_bin}/ps");
     std::fs::write(
         &fake_ps,
-        "#!/bin/sh\nprintf 'called\\n' >> \"$TINYBOX_TEST_PS_CALLS\"\nexit 1\n",
+        r#"#!/bin/sh
+group=$(cat "$TINYBOX_TEST_GROUP_FILE") || exit 2
+caller_group=$(awk '{print $5}' "/proc/$$/stat") || exit 2
+if [ "$caller_group" = "$group" ]; then
+  printf '%s\n' "$PPID" >> "$TINYBOX_TEST_PS_CALLS.child"
+else
+  printf '%s\n' "$PPID" >> "$TINYBOX_TEST_PS_CALLS"
+fi
+exit 1
+"#,
     )
     .map_err(|error| Error::io("write failing ps command", &error))?;
     let fake_sleep = format!("{fake_bin}/sleep");
