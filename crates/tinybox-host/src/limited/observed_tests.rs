@@ -232,3 +232,43 @@ async fn a_panicking_receiver_retains_native_cleanup_ownership() -> Result<()> {
     assert_eq!(host.state.active.load(Ordering::SeqCst), 0);
     Ok(())
 }
+
+/// Exercise the public retry while an observed native child is still running.
+pub(super) async fn retry_during_active_execution(host: Arc<dyn Host>) -> Result<(bool, bool)> {
+    use std::future::Future;
+    use std::task::Poll;
+    let (observer, started) = Observer::with_first();
+    let runner = host.clone();
+    let running = tokio::spawn(async move {
+        runner
+            .run_observed(
+                &ExecRequest::new(["/bin/sh", "-c", "printf ready; exec /bin/sleep 600"]),
+                observer,
+            )
+            .await
+    });
+    started
+        .await
+        .map_err(|error| Error::io("fixture readiness", &std::io::Error::other(error)))?;
+    let mut retry = Box::pin(host.retry_observed_cleanup());
+    let completion =
+        std::future::poll_fn(|context| Poll::Ready(retry.as_mut().poll(context))).await;
+    let still_running = !running.is_finished();
+    drop(retry);
+    running.abort();
+    let _ = running.await;
+    Ok((matches!(completion, Poll::Ready(Ok(()))), still_running))
+}
+
+#[tokio::test]
+async fn cleanup_retry_does_not_wait_for_or_cancel_an_active_local_execution() -> Result<()> {
+    let host = LimitedLocalHost::new(64);
+    let (completed, still_running) = retry_during_active_execution(Arc::new(host.clone())).await?;
+    host.drain_checked().await?;
+    assert!(completed, "cleanup retry must not join active executions");
+    assert!(
+        still_running,
+        "cleanup retry must leave the active execution alone"
+    );
+    Ok(())
+}
