@@ -993,3 +993,42 @@ fn git_include_with_a_trailing_comment_grants_the_actual_file()
     ));
     Ok(())
 }
+
+#[test]
+#[cfg(unix)]
+fn discovered_git_config_links_cannot_be_replaced_through_writable_parents()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir_all(home.path().join(".config/git"))?;
+    fs::create_dir(home.path().join("dotfiles"))?;
+    let target = home.path().join("dotfiles/gitconfig");
+    fs::write(&target, "[core]\n")?;
+    std::os::unix::fs::symlink(&target, home.path().join(".config/git/config"))?;
+    let config = LocalGrantConfig {
+        extra_read_write: vec!["~/.config".into(), "~/.config/git".into()],
+        ..LocalGrantConfig::default()
+    };
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default());
+    assert_eq!(grants.read_write, Vec::<PathBuf>::new());
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn duplicate_git_config_targets_keep_each_discovered_alias_read_only()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir_all(home.path().join(".config/git"))?;
+    fs::create_dir(home.path().join("dotfiles"))?;
+    let target = home.path().join("dotfiles/gitconfig");
+    fs::write(&target, "[core]\n")?;
+    std::os::unix::fs::symlink(&target, home.path().join(".gitconfig"))?;
+    std::os::unix::fs::symlink(&target, home.path().join(".config/git/config"))?;
+    let config = LocalGrantConfig {
+        extra_read_write: vec!["~/.config/git".into()],
+        ..LocalGrantConfig::default()
+    };
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default());
+    assert_eq!(grants.read_write, Vec::<PathBuf>::new());
+    Ok(())
+}
