@@ -103,7 +103,10 @@ async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
         assert_eq!(selection.flavor, tinybox_bus::ShellFlavor::Posix);
         assert_eq!(selection.arguments[0], "-c");
         assert_eq!(selection.raw_arguments, None);
-        assert_eq!(selection.remove_environment, ["BASH_ENV", "ENV"]);
+        assert_eq!(
+            selection.remove_environment,
+            ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS"]
+        );
     }
     for include in ["~other/shared.conf", "%(prefix)/shared.conf"] {
         std::fs::write(

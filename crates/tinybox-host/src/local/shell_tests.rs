@@ -143,18 +143,32 @@ fn bash_startup_environment_cannot_replace_the_requested_payload()
 
 #[test]
 #[cfg(unix)]
-fn inherited_bash_options_cannot_abort_the_requested_payload() -> Result<(), Box<dyn std::error::Error>> {
+fn inherited_bash_options_cannot_abort_the_requested_payload()
+-> Result<(), Box<dyn std::error::Error>> {
     const CHILD: &str = "TINYBOX_SHELL_OPTIONS_REGRESSION_CHILD";
     if std::env::var_os(CHILD).is_some() {
-        let request = SelectShellRequest { command: "false; echo reached".into(), preserve_pipeline_status: false };
+        let request = SelectShellRequest {
+            command: "false; echo reached".into(),
+            preserve_pipeline_status: false,
+        };
         let output = build_shell_command(&request).output()?;
         assert!(output.status.success());
         assert_eq!(output.stdout, b"reached\n");
         return Ok(());
     }
     let status = std::process::Command::new(std::env::current_exe()?)
-        .args(["--exact", "local::shell::tests::inherited_bash_options_cannot_abort_the_requested_payload", "--nocapture"])
-        .env(CHILD, "1").env("SHELLOPTS", "errexit:nounset").env("BASHOPTS", "failglob").status()?;
-    assert!(status.success(), "inherited Bash options changed payload semantics");
+        .args([
+            "--exact",
+            "local::shell::tests::inherited_bash_options_cannot_abort_the_requested_payload",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .env("SHELLOPTS", "errexit:nounset")
+        .env("BASHOPTS", "failglob")
+        .status()?;
+    assert!(
+        status.success(),
+        "inherited Bash options changed payload semantics"
+    );
     Ok(())
 }

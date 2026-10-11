@@ -86,7 +86,12 @@ fn selection_for(
             ],
             raw_arguments: None,
             bootstrap_environment: Vec::new(),
-            remove_environment: vec!["BASH_ENV".into(), "ENV".into()],
+            remove_environment: vec![
+                "BASH_ENV".into(),
+                "ENV".into(),
+                "SHELLOPTS".into(),
+                "BASHOPTS".into(),
+            ],
         },
     }
 }
