@@ -13,10 +13,9 @@ impl Builder<'_> {
     /// Read-only grants for the user's git config files and everything they
     /// `include`, each canonicalized (a config is often a symlink into a
     /// dotfiles repo, and the jail needs the target).
-    pub(super) fn add_gitconfig(&mut self, home: &Path) -> tinybox_core::Result<()> {
-        self.add_gitconfig_at(home, std::env::var_os("XDG_CONFIG_HOME").as_deref())
-    }
-
+    ///
+    /// `xdg` is the caller's `XDG_CONFIG_HOME`; Git uses `$HOME/.config` only
+    /// when it is unset, empty or relative.
     pub(super) fn add_gitconfig_at(
         &mut self,
         home: &Path,
