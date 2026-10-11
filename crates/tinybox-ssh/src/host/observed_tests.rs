@@ -22,6 +22,13 @@ fn last_arg<'a>(request: &'a ExecRequest, operation: &'static str) -> Result<&'a
         .ok_or_else(|| fixture_error(operation))
 }
 
+fn is_cleanup_request(request: &ExecRequest) -> bool {
+    request
+        .argv
+        .last()
+        .is_some_and(|value| value.contains("kill -TERM -") && !value.contains("exec 3<&0"))
+}
+
 #[derive(Debug, Default)]
 struct MockHost {
     requests: Mutex<Vec<ExecRequest>>,
@@ -29,6 +36,7 @@ struct MockHost {
     fail_cleanup: AtomicUsize,
     no_process_groups: AtomicBool,
     fail_prepare: AtomicBool,
+    panic_observed: AtomicBool,
     observed_started: Notify,
 }
 
@@ -91,6 +99,9 @@ impl Host for MockHost {
         observer: Arc<dyn ExecutionObserver>,
     ) -> Result<ExecOutput> {
         self.record(request);
+        if self.panic_observed.load(Ordering::SeqCst) {
+            std::panic::resume_unwind(Box::new("injected observed-provider panic"));
+        }
         self.observed_started.notify_waiters();
         let stdout = [0, 255, 1, 2];
         observer.output(OutputStream::Stdout, &stdout)?;
@@ -194,12 +205,7 @@ async fn observed_ssh_preserves_binary_pipes_and_execution_inputs() -> Result<()
     assert!(script.contains("TOKEN=opaque"));
     let cleanup = requests
         .iter()
-        .find(|request| {
-            request
-                .argv
-                .last()
-                .is_some_and(|value| value.contains("kill -TERM -"))
-        })
+        .find(|request| is_cleanup_request(request))
         .ok_or_else(|| fixture_error("find remote process group cleanup"))?;
     let cleanup = last_arg(cleanup, "read remote cleanup script")?;
     assert!(cleanup.contains("kill -TERM -"));
@@ -239,12 +245,7 @@ async fn cancellation_waits_for_remote_group_cleanup_acknowledgement() -> Result
     let requests = inner.requests();
     let cleanup_index = requests
         .iter()
-        .position(|request| {
-            request
-                .argv
-                .last()
-                .is_some_and(|value| value.contains("kill -TERM -"))
-        })
+        .position(is_cleanup_request)
         .ok_or_else(|| fixture_error("find cleanup SSH invocation"))?;
     let execution_index = requests
         .iter()
@@ -296,10 +297,7 @@ async fn failed_remote_kill_keeps_a_retryable_cleanup_handle() -> Result<()> {
         inner
             .requests()
             .iter()
-            .filter(|request| request
-                .argv
-                .last()
-                .is_some_and(|value| value.contains("kill -TERM -")))
+            .filter(|request| is_cleanup_request(request))
             .count(),
         3,
         "two failed attempts are followed by one explicit retained-handle retry"
@@ -385,12 +383,7 @@ async fn output_refusal_triggers_remote_cleanup_before_returning_the_error() -> 
         })
     ));
     assert!(!host.has_pending_observed_cleanup());
-    assert!(inner.requests().iter().any(|request| {
-        request
-            .argv
-            .last()
-            .is_some_and(|value| value.contains("kill -TERM -"))
-    }));
+    assert!(inner.requests().iter().any(is_cleanup_request));
     Ok(())
 }
 
@@ -516,14 +509,35 @@ async fn failed_reservation_acknowledgement_retains_cleanup_for_retry() -> Resul
         inner
             .requests()
             .iter()
-            .filter(|request| request
-                .argv
-                .last()
-                .is_some_and(|value| value.contains("kill -TERM -")))
+            .filter(|request| is_cleanup_request(request))
             .count(),
         2,
         "one failed reservation cleanup is followed by one explicit retry"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_provider_panic_retains_the_remote_cleanup_reservation() -> Result<()> {
+    let inner = Arc::new(MockHost {
+        panic_observed: AtomicBool::new(true),
+        ..MockHost::default()
+    });
+    let host = SshHost::new(inner, SshTarget::new("builder")?);
+
+    assert!(matches!(
+        host.run_observed(
+            &ExecRequest::new(["sleep", "600"]),
+            Arc::new(CollectingObserver::default())
+        )
+        .await,
+        Err(Error::Backend { .. })
+    ));
+    assert!(host.has_pending_observed_cleanup());
+
+    host.retry_observed_cleanup().await?;
+
+    assert!(!host.has_pending_observed_cleanup());
     Ok(())
 }
 
@@ -612,5 +626,158 @@ fn generated_remote_supervisor_kills_and_waits_for_its_process_group() -> Result
         "cleanup acknowledgement follows group exit and wait"
     );
     state.remove(&id);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn generated_remote_supervisor_reaps_background_descendants_before_acknowledging() -> Result<()> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let target = SshTarget::new("builder")?;
+    let state = observed::RemoteCleanupState::default();
+    let (id, directory) = state.reserve();
+    let prepare = observed::prepare_request(&target, &id, &directory);
+    let prepare_script = last_arg(&prepare, "read remote setup script")?;
+    let prepared = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(prepare_script)
+        .output()
+        .map_err(|error| Error::io("reserve local descendant fixture", &error))?;
+    assert!(prepared.status.success());
+
+    let launch = observed::request(
+        &target,
+        &ExecRequest::new(["/bin/sh", "-c", "sleep 600 & sleep 0.05; exit 0"]),
+        &id,
+        &directory,
+    )?;
+    let pid_file = format!("{directory}/pid");
+    let remote_script = last_arg(&launch, "read remote launch script")?;
+    let mut process = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(remote_script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| Error::io("start descendant protocol fixture", &error))?;
+    let mut stdout = process
+        .stdout
+        .take()
+        .ok_or_else(|| fixture_error("take descendant fixture stdout"))?;
+    let (sender, receiver) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let read = stdout.read_to_end(&mut output);
+        let _ = sender.send((read, output));
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !std::path::Path::new(&pid_file).exists() && Instant::now() < deadline {
+        if let Some(status) = process
+            .try_wait()
+            .map_err(|error| Error::io("check descendant protocol fixture", &error))?
+        {
+            return Err(Error::Backend {
+                sandbox: "ssh test".to_owned(),
+                operation: "start descendant supervisor fixture",
+                message: format!("wrapper exited before recording its pid: {status}"),
+            });
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let pid_text = std::fs::read_to_string(&pid_file)
+        .map_err(|error| Error::io("read descendant supervisor pid", &error))?;
+    let pid = pid_text.trim();
+    assert!(!pid.is_empty() && pid.bytes().all(|byte| byte.is_ascii_digit()));
+
+    let status = process
+        .wait()
+        .map_err(|error| Error::io("wait for descendant supervisor", &error))?;
+    assert!(
+        status.success(),
+        "the foreground command exits successfully"
+    );
+    let pipe_released = receiver.recv_timeout(Duration::from_secs(1)).ok();
+    let group_alive = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("kill -0 -{pid} 2>/dev/null"))
+        .status()
+        .map_err(|error| Error::io("check descendant process group", &error))?
+        .success();
+    if group_alive {
+        let _ = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("kill -KILL -{pid} 2>/dev/null || true"))
+            .status();
+    }
+    let _ = reader.join();
+    assert!(
+        pipe_released.is_some(),
+        "background descendants must not retain the remote output pipe after acknowledgement"
+    );
+    if let Some((read, _)) = pipe_released {
+        read.map_err(|error| Error::io("read descendant fixture output", &error))?;
+    }
+    assert!(
+        !group_alive,
+        "supervisor must terminate group descendants before its completion acknowledgement"
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn generated_remote_supervisor_forwards_binary_stdin_to_the_foreground_command() -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let target = SshTarget::new("builder")?;
+    let state = observed::RemoteCleanupState::default();
+    let (id, directory) = state.reserve();
+    let prepare = observed::prepare_request(&target, &id, &directory);
+    let prepare_script = last_arg(&prepare, "read remote setup script")?;
+    let prepared = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(prepare_script)
+        .output()
+        .map_err(|error| Error::io("reserve local stdin fixture", &error))?;
+    assert!(prepared.status.success());
+
+    let payload = [0, 1, 255, 0, 42];
+    let launch = observed::request(&target, &ExecRequest::new(["/bin/cat"]), &id, &directory)?;
+    let remote_script = last_arg(&launch, "read remote launch script")?;
+    let mut process = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(remote_script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| Error::io("start local stdin protocol fixture", &error))?;
+    process
+        .stdin
+        .take()
+        .ok_or_else(|| fixture_error("take local stdin fixture"))?
+        .write_all(&payload)
+        .map_err(|error| Error::io("write local binary stdin fixture", &error))?;
+    let output = process
+        .wait_with_output()
+        .map_err(|error| Error::io("wait for local stdin protocol fixture", &error))?;
+    assert!(output.status.success());
+    assert_eq!(output.stdout, payload);
+
+    let cleanup = observed::cleanup_request(&target, &id, &directory, true);
+    let cleanup_script = last_arg(&cleanup, "read local stdin fixture cleanup")?;
+    let cleaned = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(cleanup_script)
+        .output()
+        .map_err(|error| Error::io("clean local stdin protocol fixture", &error))?;
+    assert!(cleaned.status.success());
     Ok(())
 }

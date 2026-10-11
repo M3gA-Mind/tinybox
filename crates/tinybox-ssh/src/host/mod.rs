@@ -105,6 +105,7 @@ impl SshHost {
         }
 
         let (id, directory) = self.observed_cleanup.reserve();
+        let _reservation_guard = self.observed_cleanup.reserve_guard(id.clone());
         let prepared = observed::prepare_request(&self.target, &id, &directory);
         let prepared_output = match self.inner.run(&prepared).await {
             Ok(output) => output,
