@@ -967,3 +967,527 @@ fn generated_remote_supervisor_forwards_binary_stdin_to_the_foreground_command()
     assert!(cleaned.status.success());
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cleanup_reclaims_an_abandoned_directory_after_its_process_group_is_gone() -> Result<()> {
+    use std::process::Command;
+
+    let target = SshTarget::new("builder")?;
+    let state = observed::RemoteCleanupState::default();
+    let (id, directory) = state.reserve();
+    std::fs::create_dir(&directory)
+        .map_err(|error| Error::io("create abandoned SSH directory fixture", &error))?;
+    std::fs::write(format!("{directory}/owner"), format!("{id}\n"))
+        .map_err(|error| Error::io("write abandoned SSH owner fixture", &error))?;
+    let mut exited = Command::new("/bin/sh")
+        .arg("-c")
+        .arg("exit 0")
+        .spawn()
+        .map_err(|error| Error::io("start exited SSH process fixture", &error))?;
+    let dead_pid = exited.id();
+    let status = exited
+        .wait()
+        .map_err(|error| Error::io("reap exited SSH process fixture", &error))?;
+    assert!(status.success());
+    std::fs::write(format!("{directory}/pid"), format!("{dead_pid}\n"))
+        .map_err(|error| Error::io("write abandoned SSH group fixture", &error))?;
+    std::fs::write(format!("{directory}/wrapper"), format!("{dead_pid}\n"))
+        .map_err(|error| Error::io("write abandoned SSH wrapper fixture", &error))?;
+
+    let cleanup = observed::cleanup_request(&target, &id, &directory, false);
+    let cleanup_script = last_arg(&cleanup, "read abandoned SSH cleanup script")?;
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(cleanup_script)
+        .output()
+        .map_err(|error| Error::io("run abandoned SSH cleanup fixture", &error))?;
+
+    assert!(
+        output.status.success(),
+        "cleanup should recover an owner-marked directory after both wrapper and group exit: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(output.stdout, b"clean\n");
+    assert!(!std::path::Path::new(&directory).exists());
+    state.remove(&id);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cleanup_keeps_non_directory_claim_conflicts_pending() -> Result<()> {
+    use std::process::Command;
+
+    let target = SshTarget::new("builder")?;
+    let state = observed::RemoteCleanupState::default();
+    let (id, directory) = state.reserve();
+    std::fs::create_dir(&directory)
+        .map_err(|error| Error::io("create claim-conflict SSH directory", &error))?;
+    std::fs::write(format!("{directory}/owner"), format!("{id}\n"))
+        .map_err(|error| Error::io("write claim-conflict SSH owner", &error))?;
+    let claim = format!("{directory}.cleanup");
+    std::fs::write(&claim, b"unowned conflicting claim")
+        .map_err(|error| Error::io("create conflicting SSH claim", &error))?;
+
+    let cleanup = observed::cleanup_request(&target, &id, &directory, false);
+    let cleanup_script = last_arg(&cleanup, "read claim-conflict cleanup script")?;
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(cleanup_script)
+        .output()
+        .map_err(|error| Error::io("run claim-conflict cleanup fixture", &error))?;
+
+    assert!(!output.status.success());
+    assert_eq!(output.stdout, b"pending\n");
+    assert!(std::path::Path::new(&directory).is_dir());
+    assert!(std::path::Path::new(&claim).is_file());
+    std::fs::remove_file(&claim)
+        .map_err(|error| Error::io("remove conflicting SSH claim", &error))?;
+    state.remove(&id);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cleanup_preserves_a_live_wrapper_and_retries_an_interrupted_claim() -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let target = SshTarget::new("builder")?;
+    let state = observed::RemoteCleanupState::default();
+    let (id, directory) = state.reserve();
+    std::fs::create_dir(&directory)
+        .map_err(|error| Error::io("create live SSH wrapper fixture", &error))?;
+    std::fs::write(format!("{directory}/owner"), format!("{id}\n"))
+        .map_err(|error| Error::io("write live SSH owner fixture", &error))?;
+    let mut exited = Command::new("/bin/sh")
+        .arg("-c")
+        .arg("exit 0")
+        .spawn()
+        .map_err(|error| Error::io("start exited SSH group fixture", &error))?;
+    let dead_group = exited.id();
+    exited
+        .wait()
+        .map_err(|error| Error::io("reap exited SSH group fixture", &error))?;
+    std::fs::write(format!("{directory}/pid"), format!("{dead_group}\n"))
+        .map_err(|error| Error::io("write exited SSH group fixture", &error))?;
+
+    let wrapper_file = format!("{directory}/wrapper");
+    let mut live_wrapper = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!(
+            "printf '%s\\n' \"$$\" > {}; read input; printf done > {}; : {id}",
+            tinybox_core::shell::quote(&wrapper_file),
+            tinybox_core::shell::quote(&format!("{directory}/after-cleanup"))
+        ))
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|error| Error::io("start live SSH wrapper fixture", &error))?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !std::path::Path::new(&wrapper_file).exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(std::path::Path::new(&wrapper_file).exists());
+
+    let cleanup = observed::cleanup_request(&target, &id, &directory, false);
+    let cleanup_script = last_arg(&cleanup, "read live-wrapper cleanup script")?;
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(cleanup_script)
+        .output()
+        .map_err(|error| Error::io("run live-wrapper cleanup fixture", &error))?;
+    assert!(!output.status.success());
+    assert_eq!(output.stdout, b"pending\n");
+    assert!(std::path::Path::new(&directory).exists());
+    assert!(!std::path::Path::new(&format!("{directory}.cleanup")).exists());
+
+    live_wrapper
+        .stdin
+        .take()
+        .ok_or_else(|| fixture_error("take live wrapper input"))?
+        .write_all(b"continue\n")
+        .map_err(|error| Error::io("continue live wrapper fixture", &error))?;
+    let status = live_wrapper
+        .wait()
+        .map_err(|error| Error::io("wait for preserved live wrapper", &error))?;
+    assert!(status.success());
+    assert!(std::path::Path::new(&format!("{directory}/after-cleanup")).exists());
+
+    std::fs::rename(&directory, format!("{directory}.cleanup"))
+        .map_err(|error| Error::io("simulate interrupted SSH cleanup claim", &error))?;
+
+    let cleanup = observed::cleanup_request(&target, &id, &directory, false);
+    let cleanup_script = last_arg(&cleanup, "read retry cleanup script")?;
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(cleanup_script)
+        .output()
+        .map_err(|error| Error::io("retry interrupted SSH cleanup fixture", &error))?;
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"clean\n");
+    assert!(!std::path::Path::new(&directory).exists());
+    assert!(!std::path::Path::new(&format!("{directory}.cleanup")).exists());
+    state.remove(&id);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cleanup_rechecks_wrapper_identity_after_claiming_an_unpublished_request() -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+
+    let target = SshTarget::new("builder")?;
+    let state = observed::RemoteCleanupState::default();
+    let (id, directory) = state.reserve();
+    std::fs::create_dir(&directory)
+        .map_err(|error| Error::io("create unpublished SSH directory", &error))?;
+    std::fs::write(format!("{directory}/owner"), format!("{id}\n"))
+        .map_err(|error| Error::io("write unpublished SSH owner", &error))?;
+    let exited = Command::new("/bin/sh")
+        .arg("-c")
+        .arg("exit 0")
+        .status()
+        .map_err(|error| Error::io("start exited unpublished-group fixture", &error))?;
+    assert!(exited.success());
+    std::fs::write(format!("{directory}/pid"), "2147483647\n")
+        .map_err(|error| Error::io("write unpublished SSH group fixture", &error))?;
+
+    let mut late_wrapper = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("read input; : {id}"))
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|error| Error::io("start unpublished SSH wrapper", &error))?;
+    let wrapper_pid = late_wrapper.id();
+    let helper = format!("{directory}.helpers");
+    std::fs::create_dir(&helper)
+        .map_err(|error| Error::io("create SSH cleanup helper directory", &error))?;
+    let moved_marker = format!("{helper}/moved");
+    let fake_mv = format!("{helper}/mv");
+    std::fs::write(
+        &fake_mv,
+        format!(
+            "#!/bin/sh\n/bin/mv \"$1\" \"$2\" || exit $?\nprintf '%s\\n' {wrapper_pid} > \"$2/wrapper\"\nprintf moved > {}\n",
+            tinybox_core::shell::quote(&moved_marker)
+        ),
+    )
+    .map_err(|error| Error::io("write late-wrapper mv fixture", &error))?;
+    let mut permissions = std::fs::metadata(&fake_mv)
+        .map_err(|error| Error::io("inspect late-wrapper mv fixture", &error))?
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&fake_mv, permissions)
+        .map_err(|error| Error::io("make late-wrapper mv fixture executable", &error))?;
+
+    let cleanup = observed::cleanup_request(&target, &id, &directory, false);
+    let cleanup_script = last_arg(&cleanup, "read unpublished-request cleanup script")?;
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(cleanup_script)
+        .env(
+            "PATH",
+            format!("{helper}:{}", std::env::var("PATH").unwrap_or_default()),
+        )
+        .output()
+        .map_err(|error| Error::io("claim unpublished SSH directory", &error))?;
+
+    assert!(!output.status.success());
+    assert_eq!(output.stdout, b"pending\n");
+    assert!(std::path::Path::new(&moved_marker).exists());
+    assert!(std::path::Path::new(&directory).is_dir());
+    assert!(!std::path::Path::new(&format!("{directory}.cleanup")).exists());
+
+    late_wrapper
+        .stdin
+        .take()
+        .ok_or_else(|| fixture_error("take unpublished wrapper stdin"))?
+        .write_all(b"continue\n")
+        .map_err(|error| Error::io("continue unpublished SSH wrapper", &error))?;
+    assert!(
+        late_wrapper
+            .wait()
+            .map_err(|error| Error::io("wait for unpublished SSH wrapper", &error))?
+            .success()
+    );
+
+    let cleanup = observed::cleanup_request(&target, &id, &directory, false);
+    let cleanup_script = last_arg(&cleanup, "read retry unpublished cleanup script")?;
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(cleanup_script)
+        .output()
+        .map_err(|error| Error::io("retry unpublished SSH cleanup", &error))?;
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"clean\n");
+    state.remove(&id);
+    let _ = std::fs::remove_dir_all(helper);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cleanup_stops_the_owned_group_after_its_wrapper_dies() -> Result<()> {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let target = SshTarget::new("builder")?;
+    let state = observed::RemoteCleanupState::default();
+    let (id, directory) = state.reserve();
+    let prepare = observed::prepare_request(&target, &id, &directory);
+    let prepare_script = last_arg(&prepare, "read orphaned-group setup")?;
+    let prepared = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(prepare_script)
+        .output()
+        .map_err(|error| Error::io("reserve orphaned-group fixture", &error))?;
+    assert!(prepared.status.success());
+
+    let launch = observed::request(
+        &target,
+        &ExecRequest::new(["/bin/sh", "-c", "sleep 600"]),
+        &id,
+        &directory,
+    )?;
+    let launch_script = last_arg(&launch, "read orphaned-group launcher")?;
+    let mut wrapper = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(launch_script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| Error::io("start orphaned-group wrapper", &error))?;
+    let pid_file = format!("{directory}/pid");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !std::path::Path::new(&pid_file).exists() && Instant::now() < deadline {
+        if let Some(status) = wrapper
+            .try_wait()
+            .map_err(|error| Error::io("check orphaned-group wrapper", &error))?
+        {
+            return Err(Error::Backend {
+                sandbox: "ssh test".to_owned(),
+                operation: "start orphaned-group fixture",
+                message: format!("wrapper exited before writing its group id: {status}"),
+            });
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let group = std::fs::read_to_string(&pid_file)
+        .map_err(|error| Error::io("read orphaned process group", &error))?;
+    let group = group.trim();
+    assert!(!group.is_empty() && group.bytes().all(|byte| byte.is_ascii_digit()));
+
+    wrapper
+        .kill()
+        .map_err(|error| Error::io("kill orphaned-group wrapper", &error))?;
+    wrapper
+        .wait()
+        .map_err(|error| Error::io("reap orphaned-group wrapper", &error))?;
+
+    let cleanup = observed::cleanup_request(&target, &id, &directory, false);
+    let cleanup_script = last_arg(&cleanup, "read orphaned-group cleanup")?;
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(cleanup_script)
+        .output()
+        .map_err(|error| Error::io("run orphaned-group cleanup", &error))?;
+    assert!(
+        output.status.success(),
+        "owned process group should be stopped before cleanup is acknowledged: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(output.stdout, b"clean\n");
+    assert!(!std::path::Path::new(&directory).exists());
+    let group_alive = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("kill -0 -{group} 2>/dev/null"))
+        .status()
+        .map_err(|error| Error::io("verify orphaned process group stopped", &error))?
+        .success();
+    assert!(!group_alive, "cleanup must stop the orphaned group");
+    state.remove(&id);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cleanup_keeps_a_reused_group_id_without_its_owner_marker() -> Result<()> {
+    use std::process::{Command, Stdio};
+
+    let target = SshTarget::new("builder")?;
+    let state = observed::RemoteCleanupState::default();
+    let (id, directory) = state.reserve();
+    std::fs::create_dir(&directory)
+        .map_err(|error| Error::io("create reused-group fixture", &error))?;
+    std::fs::write(format!("{directory}/owner"), format!("{id}\n"))
+        .map_err(|error| Error::io("write reused-group owner", &error))?;
+    let mut exited = Command::new("/bin/sh")
+        .arg("-c")
+        .arg("exit 0")
+        .spawn()
+        .map_err(|error| Error::io("start exited wrapper identity fixture", &error))?;
+    let dead_wrapper = exited.id();
+    exited
+        .wait()
+        .map_err(|error| Error::io("reap exited wrapper identity fixture", &error))?;
+    std::fs::write(format!("{directory}/wrapper"), format!("{dead_wrapper}\n"))
+        .map_err(|error| Error::io("write stale wrapper identity", &error))?;
+
+    let mut unrelated = Command::new("setsid")
+        .arg("sleep")
+        .arg("600")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| Error::io("start unrelated process group", &error))?;
+    let group_output = Command::new("ps")
+        .args(["-o", "pgid=", "-p", &unrelated.id().to_string()])
+        .output()
+        .map_err(|error| Error::io("inspect unrelated process group", &error))?;
+    let unrelated_group = String::from_utf8_lossy(&group_output.stdout)
+        .trim()
+        .to_owned();
+    assert!(!unrelated_group.is_empty());
+    let group_alive = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("kill -0 -{unrelated_group} 2>/dev/null"))
+        .status()
+        .map_err(|error| Error::io("verify unrelated group exists", &error))?
+        .success();
+    assert!(group_alive, "fixture group {unrelated_group} must be live");
+    std::fs::write(format!("{directory}/pid"), format!("{unrelated_group}\n"))
+        .map_err(|error| Error::io("write reused group id", &error))?;
+
+    let cleanup = observed::cleanup_request(&target, &id, &directory, false);
+    let cleanup_script = last_arg(&cleanup, "read reused-group cleanup")?;
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(cleanup_script)
+        .output()
+        .map_err(|error| Error::io("run reused-group cleanup", &error))?;
+    assert!(!output.status.success());
+    assert_eq!(output.stdout, b"pending\n");
+    assert!(std::path::Path::new(&directory).exists());
+    assert!(
+        unrelated
+            .try_wait()
+            .map_err(|error| Error::io("check unrelated group", &error))?
+            .is_none()
+    );
+
+    unrelated
+        .kill()
+        .map_err(|error| Error::io("stop unrelated process group", &error))?;
+    unrelated
+        .wait()
+        .map_err(|error| Error::io("reap unrelated process group", &error))?;
+    let _ = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("kill -KILL -{unrelated_group} 2>/dev/null || true"))
+        .status();
+    let cleanup = observed::cleanup_request(&target, &id, &directory, false);
+    let cleanup_script = last_arg(&cleanup, "read reused-group retry cleanup")?;
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(cleanup_script)
+        .output()
+        .map_err(|error| Error::io("retry reused-group cleanup", &error))?;
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"clean\n");
+    assert!(!std::path::Path::new(&directory).exists());
+    state.remove(&id);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_live_foreground_command_has_no_fixed_completion_poll_limit() -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let target = SshTarget::new("builder")?;
+    let state = observed::RemoteCleanupState::default();
+    let (id, directory) = state.reserve();
+    let prepare = observed::prepare_request(&target, &id, &directory);
+    let prepare_script = last_arg(&prepare, "read long-command setup")?;
+    let prepared = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(prepare_script)
+        .output()
+        .map_err(|error| Error::io("reserve long-command fixture", &error))?;
+    assert!(prepared.status.success());
+
+    let poll_directory = format!("/tmp/.tinybox-observed-polls-{id}");
+    std::fs::create_dir(&poll_directory)
+        .map_err(|error| Error::io("create poll counter directory", &error))?;
+    let poll_file = format!("{poll_directory}/count");
+    let sleep_program = format!(
+        "#!/bin/sh\nprintf x >> {}\n",
+        tinybox_core::shell::quote(&poll_file)
+    );
+    let sleep_path = format!("{poll_directory}/sleep");
+    std::fs::write(&sleep_path, sleep_program)
+        .map_err(|error| Error::io("write poll counter command", &error))?;
+    std::fs::set_permissions(&sleep_path, std::fs::Permissions::from_mode(0o755))
+        .map_err(|error| Error::io("make poll counter executable", &error))?;
+
+    let launch = observed::request(&target, &ExecRequest::new(["/bin/cat"]), &id, &directory)?;
+    let launch_script = last_arg(&launch, "read long-command launcher")?;
+    let mut wrapper = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(launch_script)
+        .env("PATH", format!("{poll_directory}:/usr/bin:/bin"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| Error::io("start long-command wrapper", &error))?;
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while std::fs::metadata(&poll_file).map_or(true, |metadata| metadata.len() < 1_100)
+        && Instant::now() < deadline
+    {
+        if let Some(status) = wrapper
+            .try_wait()
+            .map_err(|error| Error::io("check long-command wrapper", &error))?
+        {
+            return Err(Error::Backend {
+                sandbox: "ssh test".to_owned(),
+                operation: "await long-command poll budget",
+                message: format!("wrapper exited before controlled completion: {status}"),
+            });
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let polls = std::fs::metadata(&poll_file)
+        .map_err(|error| Error::io("read poll counter", &error))?
+        .len();
+    assert!(polls > 1_000, "observed {polls} completion polls");
+
+    wrapper
+        .stdin
+        .take()
+        .ok_or_else(|| fixture_error("take long-command stdin"))?
+        .write_all(b"complete\n")
+        .map_err(|error| Error::io("write long-command completion", &error))?;
+    drop(wrapper.stdin.take());
+    let status = wrapper
+        .wait()
+        .map_err(|error| Error::io("wait for long-command wrapper", &error))?;
+    assert!(status.success());
+    assert!(!std::path::Path::new(&directory).exists());
+    std::fs::remove_file(&sleep_path)
+        .map_err(|error| Error::io("remove poll counter command", &error))?;
+    std::fs::remove_file(&poll_file).map_err(|error| Error::io("remove poll counter", &error))?;
+    std::fs::remove_dir(&poll_directory)
+        .map_err(|error| Error::io("remove poll counter directory", &error))?;
+    state.remove(&id);
+    Ok(())
+}
