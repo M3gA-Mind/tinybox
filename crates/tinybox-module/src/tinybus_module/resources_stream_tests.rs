@@ -690,13 +690,12 @@ async fn native_shell_timeout_acknowledges_child_cleanup_before_output_release()
     let resources = Resources::default();
     let resource = local_resource(&resources).await?;
     let state = tempfile::tempdir()?;
-    let mut request = shell_request(
-        &resources,
-        &resource,
-        state.path(),
-        "echo partial; sleep 60",
-    )
-    .await?;
+    #[cfg(unix)]
+    let payload = "echo partial; sleep 60";
+    #[cfg(windows)]
+    let payload =
+        "echo partial & powershell -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 60\"";
+    let mut request = shell_request(&resources, &resource, state.path(), payload).await?;
     request.timeout_ms = 100;
     let process = resources.start_shell_exec(request).await?;
     completed(&resources, &process).await?;
@@ -754,6 +753,28 @@ async fn native_shell_clears_startup_hooks_after_approved_overrides_and_captures
         .flat_map(|c| c.bytes.clone())
         .collect();
     assert_eq!(stderr, [255]);
+    resources.release_output(&process).await?;
+    resources.close(&resource).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn native_shell_output_limit_terminates_and_reaps_before_release()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    let request = shell_request(&resources, &resource, state.path(), "yes output").await?;
+    let process = resources.start_shell_exec(request).await?;
+    completed(&resources, &process).await?;
+    let output = resources.read_output(&process, 0).await?;
+    assert_eq!(
+        output.state,
+        ExecutionState::Failed {
+            code: ExecutionFailure::OutputLimit
+        }
+    );
     resources.release_output(&process).await?;
     resources.close(&resource).await?;
     Ok(())
