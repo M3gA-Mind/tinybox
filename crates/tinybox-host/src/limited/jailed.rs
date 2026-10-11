@@ -126,6 +126,10 @@ impl JailLocalHost {
                 break;
             }
         }
+        self.retry_retained_cleanup().await
+    }
+
+    async fn retry_retained_cleanup(&self) -> Result<()> {
         let _guard = self.state.cleanup.lock().await;
         let slots: Vec<_> = self
             .state
@@ -284,7 +288,7 @@ impl Host for JailLocalHost {
     }
 
     async fn retry_observed_cleanup(&self) -> Result<()> {
-        self.drain_checked().await
+        self.retry_retained_cleanup().await
     }
 }
 fn retain_cleanup(
