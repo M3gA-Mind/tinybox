@@ -1,3 +1,4 @@
+//! Git include decoding and malformed-value rejection coverage.
 use super::*;
 
 #[test]

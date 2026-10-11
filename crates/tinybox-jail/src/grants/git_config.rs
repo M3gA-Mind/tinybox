@@ -38,11 +38,13 @@ impl Builder<'_> {
         let Some(canonical) = self.admit(file, "gitconfig") else {
             return;
         };
-        if !canonical.is_file() || !visited.insert(canonical.clone()) {
+        if !canonical.is_file() {
             return;
         }
-        self.fixed_read_only(&canonical, "gitconfig");
-        if depth >= GITCONFIG_MAX_DEPTH {
+        // Protect each requested link location, even when multiple configs
+        // resolve to one target. A writable parent could replace that link.
+        self.fixed_read_only(file, "gitconfig");
+        if !visited.insert(canonical.clone()) || depth >= GITCONFIG_MAX_DEPTH {
             return;
         }
         let Ok(text) = std::fs::read_to_string(&canonical) else {
