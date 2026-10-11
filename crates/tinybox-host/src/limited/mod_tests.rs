@@ -188,7 +188,9 @@ async fn cleanup_failure_retains_the_native_child_and_checked_drain_retries_it()
     });
     assert!(retain_cleanup(&host.state, child, group, injected).is_err());
     assert!(host.has_pending_cleanup());
-    host.drain_checked().await?;
+    assert!(host.has_pending_observed_cleanup());
+    host.retry_observed_cleanup().await?;
+    assert!(!host.has_pending_observed_cleanup());
     assert!(!host.has_pending_cleanup());
     host.drain_checked().await?;
     #[cfg(target_os = "linux")]

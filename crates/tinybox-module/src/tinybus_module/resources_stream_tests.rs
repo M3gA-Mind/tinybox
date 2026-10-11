@@ -205,9 +205,10 @@ async fn a_panicked_job_is_joined_and_cleanup_failure_stays_owned_until_retry() 
                 stdin: None,
             },
         },
+        jail: None,
         journal,
         task: Mutex::new(Some(task)),
-        collector: Arc::new(tinybox_host::LimitedLocalHost::new(64)),
+        collector: Collector::Local(Arc::new(tinybox_host::LimitedLocalHost::new(64))),
     };
     assert!(stream.running());
     stream.stop().await?;
@@ -269,4 +270,28 @@ async fn concurrent_lost_reply_retries_reuse_the_same_execution_instead_of_consu
     resources.release_output(&first).await?;
     resources.close(&resource).await?;
     Ok(())
+}
+
+#[tokio::test]
+async fn jailed_start_rejects_missing_grants_without_consuming_reservation() -> Result<()> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let pending = request(&resources, &resource, true_command()).await?;
+    let config = tinybox_bus::NativeJailConfig {
+        read_only: vec!["/tinybox-nonexistent-grant-fixture".into()],
+        read_write: vec![],
+        allow_net: true,
+        allow_subprocess: true,
+        enforcement: tinybox_bus::JailEnforcement::Declared,
+        require_process_isolation: false,
+    };
+    assert!(
+        resources
+            .start_jailed_exec(pending.clone(), config)
+            .await
+            .is_err()
+    );
+    let process = resources.start_exec(pending).await?;
+    completed(&resources, &process).await?;
+    resources.close(&resource).await
 }

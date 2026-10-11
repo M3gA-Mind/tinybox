@@ -31,7 +31,33 @@ async fn sandboxes_without_observed_cleanup_report_no_pending_work() -> Result<(
 
     assert!(!sandbox.has_pending_observed_cleanup());
     sandbox.retry_observed_cleanup().await?;
+    Ok(())
+}
 
+#[tokio::test]
+async fn a_sandbox_without_observed_execution_refuses_without_collected_fallback() -> Result<()> {
+    #[derive(Debug)]
+    struct Observer;
+    #[async_trait]
+    impl super::ExecutionObserver for Observer {
+        fn output(&self, _stream: super::OutputStream, _bytes: &[u8]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    let sandbox = FakeSandbox::new(CONTAINER);
+    let info = sandbox.create(&spec()?).await?;
+    let result = sandbox
+        .exec_observed(
+            &info.id,
+            &ExecRequest::new(["true"]),
+            std::sync::Arc::new(Observer),
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(Error::UnsupportedStreaming { provider }) if provider == "fake"
+    ));
     Ok(())
 }
 
