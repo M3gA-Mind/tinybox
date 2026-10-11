@@ -34,7 +34,10 @@ pub fn select_shell(request: &SelectShellRequest) -> ShellInvocation {
 /// provider remains responsible for environment, confinement, pipes and lifecycle.
 #[must_use]
 pub fn build_shell_command(request: &SelectShellRequest) -> std::process::Command {
-    let selection = select_shell(request);
+    command_for(select_shell(request))
+}
+
+fn command_for(selection: ShellInvocation) -> std::process::Command {
     let mut command = std::process::Command::new(selection.program);
     command.args(selection.arguments);
     for name in selection.remove_environment {
@@ -75,15 +78,24 @@ fn selection_for(
         },
         ShellFlavor::Posix => ShellInvocation {
             flavor,
-            program: bash.unwrap_or("sh").into(),
-            arguments: vec![
-                "-c".into(),
-                if bash.is_some() && !request.preserve_pipeline_status {
-                    format!("set -o pipefail\n{}", request.command)
-                } else {
-                    request.command.clone()
-                },
-            ],
+            program: bash.unwrap_or("/bin/sh").into(),
+            arguments: {
+                let mut arguments = Vec::new();
+                if bash.is_some() {
+                    // Privileged startup ignores exported functions even when
+                    // environment overrides are applied after command construction.
+                    arguments.push("-p".into());
+                }
+                arguments.extend([
+                    "-c".into(),
+                    if bash.is_some() && !request.preserve_pipeline_status {
+                        format!("set -o pipefail\n{}", request.command)
+                    } else {
+                        request.command.clone()
+                    },
+                ]);
+                arguments
+            },
             raw_arguments: None,
             bootstrap_environment: Vec::new(),
             remove_environment: vec![
@@ -97,12 +109,14 @@ fn selection_for(
 }
 
 fn bash_path() -> Option<&'static str> {
-    static BASH: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
-    *BASH.get_or_init(|| {
-        ["/usr/bin/bash", "/bin/bash"]
-            .into_iter()
-            .find(|path| std::path::Path::new(path).is_file())
-    })
+    bash_path_in(&["/usr/bin/bash", "/bin/bash"])
+}
+
+fn bash_path_in<'a>(paths: &[&'a str]) -> Option<&'a str> {
+    paths
+        .iter()
+        .copied()
+        .find(|path| std::path::Path::new(path).is_file())
 }
 
 #[cfg(test)]

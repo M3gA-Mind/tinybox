@@ -109,7 +109,10 @@ async fn verify_discovery(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::err
         assert_eq!(selection.raw_arguments.as_deref(), Some("\"false | true\""));
     } else {
         assert_eq!(selection.flavor, tinybox_bus::ShellFlavor::Posix);
-        assert_eq!(selection.arguments[0], "-c");
+        assert!(selection.arguments.iter().any(|argument| argument == "-c"));
+        if selection.program.ends_with("bash") {
+            assert_eq!(selection.arguments[0], "-p");
+        }
         assert_eq!(selection.raw_arguments, None);
         assert_eq!(
             selection.remove_environment,
@@ -169,12 +172,13 @@ async fn verify_native_shell(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::
         let executable = workspace.path().join("quoted fixture tool.exe");
         std::fs::copy(std::env::current_exe()?, &executable)?;
         format!(
-            "\"{}\" \"--list\" & echo native-fixture",
-            executable.display()
+            "\"{}\" \"--list\" > \"{}\" & echo native-fixture",
+            executable.display(),
+            workspace.path().join("output (fixture).txt").display()
         )
     };
     #[cfg(not(windows))]
-    let payload = "echo native-fixture";
+    let payload = "printf fixture > 'output (fixture).txt'; echo native-fixture";
     let running: tinybox_bus::ProcessRef = proxy
         .call(
             "StartShellExec",
@@ -209,31 +213,27 @@ async fn verify_native_shell(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::
         .collect();
     let stdout = String::from_utf8(stdout)?;
     assert!(stdout.trim().ends_with("native-fixture"));
+    let redirected = std::fs::read_to_string(workspace.path().join("output (fixture).txt"))?;
     #[cfg(windows)]
-    assert!(stdout.contains("compiled_manifest_admits_and_executes_grant_and_shell_discovery"));
+    assert!(redirected.contains("compiled_manifest_admits_and_executes_grant_and_shell_discovery"));
+    #[cfg(not(windows))]
+    assert_eq!(redirected, "fixture");
     proxy.call::<()>("ReleaseOutput", (running,)).await?;
     proxy.call::<()>("Close", (resource,)).await?;
     Ok(())
 }
 
 fn compiled_artifact() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
-    let executable = std::env::current_exe()?;
-    let dependencies = executable
-        .parent()
-        .ok_or("integration test has no parent directory")?;
     let filename = format!(
         "{}tinybox{}",
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX
     );
-    // All-feature/static-link builds omit the dynamic ABI. Always build the
-    // dynamic variant separately: another validation command may replace the
-    // ordinary dependency artifact after Cargo releases its compilation lock.
-    let target = dependencies
-        .parent()
-        .and_then(std::path::Path::parent)
-        .ok_or("integration test has no target directory")?
-        .join("module-dynamic-proof");
+    // All-feature/static-link builds omit the dynamic ABI. Build a dynamic
+    // variant under this checkout: other PRs share ordinary Cargo artifacts
+    // and must not replace the module between its build and admission.
+    let target =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/module-dynamic-proof");
     let status = std::process::Command::new(env!("CARGO"))
         .args([
             "build",

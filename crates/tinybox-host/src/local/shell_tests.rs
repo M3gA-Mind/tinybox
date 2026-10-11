@@ -11,15 +11,18 @@ fn request(preserve_pipeline_status: bool) -> SelectShellRequest {
 #[test]
 fn bash_surfaces_pipe_failures_and_preservation_keeps_the_original_payload() {
     let selected = selection_for(&request(false), ShellFlavor::Posix, Some("/bin/bash"));
-    assert_eq!(selected.arguments, ["-c", "set -o pipefail\nfalse | true"]);
+    assert_eq!(
+        selected.arguments,
+        ["-p", "-c", "set -o pipefail\nfalse | true"]
+    );
     let preserved = selection_for(&request(true), ShellFlavor::Posix, Some("/bin/bash"));
-    assert_eq!(preserved.arguments, ["-c", "false | true"]);
+    assert_eq!(preserved.arguments, ["-p", "-c", "false | true"]);
 }
 
 #[test]
 fn sh_fallback_never_receives_bash_only_flags() {
     let selected = selection_for(&request(false), ShellFlavor::Posix, None);
-    assert_eq!(selected.program, "sh");
+    assert_eq!(selected.program, "/bin/sh");
     assert_eq!(selected.arguments, ["-c", "false | true"]);
     assert_eq!(selected.raw_arguments, None);
     assert_eq!(selected.bootstrap_environment, Vec::<String>::new());
@@ -170,5 +173,66 @@ fn inherited_bash_options_cannot_abort_the_requested_payload()
         status.success(),
         "inherited Bash options changed payload semantics"
     );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn exported_bash_functions_cannot_hide_pipeline_failures() -> Result<(), Box<dyn std::error::Error>>
+{
+    const CHILD: &str = "TINYBOX_SHELL_FUNCTION_REGRESSION_CHILD";
+    if bash_path().is_none() {
+        return Ok(());
+    }
+    if std::env::var_os(CHILD).is_some() {
+        assert!(!build_shell_command(&request(false)).status()?.success());
+        return Ok(());
+    }
+    let status = std::process::Command::new(std::env::current_exe()?)
+        .args([
+            "--exact",
+            "local::shell::tests::exported_bash_functions_cannot_hide_pipeline_failures",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .env("BASH_FUNC_false%%", "() { return 0; }")
+        .status()?;
+    assert!(
+        status.success(),
+        "exported function hid the failing pipeline stage"
+    );
+    Ok(())
+}
+
+#[test]
+fn bash_discovery_rechecks_availability() -> Result<(), Box<dyn std::error::Error>> {
+    // A changing candidate list represents installation/removal without altering
+    // global system paths or relying on the machine's installed shell.
+    let fixture = tempfile::NamedTempFile::new()?;
+    let candidate_string = fixture.path().to_string_lossy().into_owned();
+    let candidate = candidate_string.as_str();
+    assert_eq!(bash_path_in(&[candidate]), Some(candidate));
+    fixture.close()?;
+    assert_eq!(bash_path_in(&[candidate]), None);
+    std::fs::write(candidate, "fixture")?;
+    let discovered = bash_path_in(&[candidate]);
+    std::fs::remove_file(candidate)?;
+    assert_eq!(discovered, Some(candidate));
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn fallback_shell_survives_an_overridden_payload_path() -> Result<(), Box<dyn std::error::Error>> {
+    let selected = selection_for(
+        &SelectShellRequest {
+            command: "exit 0".into(),
+            preserve_pipeline_status: false,
+        },
+        ShellFlavor::Posix,
+        None,
+    );
+    let status = command_for(selected).env("PATH", "").status()?;
+    assert!(status.success());
     Ok(())
 }

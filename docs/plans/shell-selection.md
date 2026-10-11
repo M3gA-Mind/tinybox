@@ -1,8 +1,7 @@
 # Shell selection implementation sequence
 
 [Specification](../specs/shell-selection.md).
-This records the implemented discovery slice and its verification order; native
-shell execution is tracked separately and remains unfinished.
+This records the discovery and native execution slices and their verification order.
 
 1. Add SelectShellRequest, ShellFlavor and ShellInvocation in
    crates/tinybox-bus/src/shell_selection.rs. Re-export from src/lib.rs,
@@ -31,12 +30,18 @@ Local verification:
 - cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 - cargo build --locked --workspace --all-targets --all-features
 
-Discovery implementation and compiled-artifact admission/invocation are complete.
-Hosted validation is reported on the pull request. The native consumer remains
-open: add a supervised module operation that accepts shell text directly,
-preserves raw Windows quoting and uses existing output/cancellation ownership.
-Do not mark that consumer objection resolved on discovery-only evidence.
+6. Contract 1.11 appends StartShellExec(ShellExecRequest).
+   Reuse the live supervisor with a native-shell collector, keep shell text in
+   the idempotency identity, resolve resource cwd/environment, and reject
+   non-local or non-passthrough resources. The request owns scratch, timeout
+   and optional native jail configuration. Cover identity/admission in stream tests
+   and execute through the compiled artifact on Unix and Windows.
+
+Discovery and supervised native execution are implemented. Hosted validation
+is reported on the pull request; Windows behavior requires its native matrix.
 
 Windows explicitly enables extensions and disables delayed expansion.
-Unix builders remove BASH_ENV and ENV; ShellInvocation returns those removal
-names. Providers apply them after approved environment overrides.
+Unix builders remove BASH_ENV, ENV, SHELLOPTS and BASHOPTS; ShellInvocation
+returns those removal names. Bash uses -p to ignore imported environment
+functions. Each discovery probes the standard paths again so shell installation
+or removal is reflected immediately. Providers apply them after approved environment overrides.

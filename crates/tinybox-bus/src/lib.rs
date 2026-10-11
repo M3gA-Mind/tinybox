@@ -46,6 +46,7 @@ pub use files::{
 /// 1.7 adds explicitly approved native directory-jail execution. 1.8 adds a
 /// bounded, module-owned one-shot Docker operation. 1.9 adds local grant discovery.
 /// 1.10 adds platform shell selection.
+/// 1.11 adds supervised native shell execution on local passthrough resources.
 pub const CONTRACT_VERSION: (u32, u32) = (1, 11);
 
 /// Whether this host vocabulary can bind to a module's advertised version.

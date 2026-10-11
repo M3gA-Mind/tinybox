@@ -1,6 +1,6 @@
 # Platform shell selection
 
-Status: implemented discovery contract, under review. Owner: TinyBox.
+Status: implemented discovery and supervised native execution, under review. Owner: TinyBox.
 Implementation sequence: [shell selection plan](../plans/shell-selection.md).
 
 ## Problem and boundary
@@ -8,7 +8,7 @@ Implementation sequence: [shell selection plan](../plans/shell-selection.md).
 A host must discover the module machine's shell syntax without linking TinyBox
 implementation crates or returning environment values. Shell selection does
 not execute code, approve access, or claim confinement. Native shell execution
-through the module remains a separate required integration slice.
+uses the module-owned output and cleanup supervisor.
 
 ## Contract
 
@@ -17,8 +17,9 @@ The request carries command text and preserve_pipeline_status, default false.
 The result carries flavor, program, ordinary arguments, optional Windows raw
 arguments, and bootstrap environment variable names.
 
-Unix selects /usr/bin/bash or /bin/bash when present, otherwise sh. Both use
-non-login -c. Bash prepends "set -o pipefail" unless preservation is requested;
+Unix selects /usr/bin/bash or /bin/bash when present, otherwise /bin/sh. The fallback path is absolute so approved
+PATH overrides affect payload tools without preventing shell startup. Both use
+non-login -c; Bash also uses -p to ignore imported environment functions. Bash prepends "set -o pipefail" unless preservation is requested;
 sh never receives that Bash-only prefix. For "false | true", Bash's default
 selection reports the failing stage; preservation retains the last-stage status.
 
@@ -42,13 +43,22 @@ approved environment, working directory, pipes and lifecycle.
   with a quoted argument.
 - The actual compiled dynamic module passes production manifest admission and
   executes SelectShell, including when the surrounding test build is static.
-- Hosts execute behavior through the compiled module. Existing argv-only
-  execution cannot carry cmd raw payloads; its native-shell consumer remains
-  an open review requirement, not an implemented capability here.
-
-There are no open decisions for discovery. The pending execution slice must
-retain process supervision and prove actual module execution on Windows.
+- Hosts execute behavior through the compiled module. Contract 1.11 appends
+  StartShellExec(ShellExecRequest) -> ProcessRef. The request supplies the
+  resource, shell text, cwd, approved environment overrides, stdin, state
+  directory, timeout and optional native jail configuration. See
+  [native shell execution](native-shell-execution.md).
+- StartShellExec supports local passthrough resources only and rejects other
+  providers before consuming the process reservation. Selection describes the
+  module machine, so its plan cannot be applied to remote hosts or containers.
+- It shares StartExec's bounded output journals, request-identity checks,
+  cancellation and cleanup barriers. The native builder preserves cmd raw
+  arguments through to the supervised child.
+- Compiled-module fixtures execute shell text on Unix and quoted executable,
+  argument and redirection paths on Windows.
 
 Windows explicitly enables extensions and disables delayed expansion.
-Unix builders remove BASH_ENV and ENV; ShellInvocation returns those removal
-names. Providers apply them after approved environment overrides.
+Unix builders remove BASH_ENV, ENV, SHELLOPTS and BASHOPTS; ShellInvocation
+returns those removal names. Bash uses -p to ignore imported environment
+functions. Each discovery probes the standard paths again so shell installation
+or removal is reflected immediately. Providers apply them after approved environment overrides.
