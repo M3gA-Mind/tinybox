@@ -21,7 +21,7 @@ class FeatureEnvironmentTests(unittest.TestCase):
             fixtures = {
                 "brew": '#!/bin/sh\ncase "$1" in\ninstall) exit 0 ;;\n--prefix) printf "%s\\n" "$FIXTURE_PREFIX" ;;\n*) exit 1 ;;\nesac\n',
                 "python3": "#!/bin/sh\nexit 0\n",
-                "cargo": '#!/bin/sh\ncommand -v setsid >/dev/null || exit 1\nprintf "%s\\n" "$*" >> "$FIXTURE_CALLS"\n',
+                "cargo": '#!/bin/sh\n[ "$(command -v setsid)" = "$FIXTURE_PREFIX/bin/setsid" ] || exit 1\nprintf "%s\\n" "$*" >> "$FIXTURE_CALLS"\n',
             }
             for name, source in fixtures.items():
                 path = tools / name
