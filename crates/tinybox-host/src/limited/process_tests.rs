@@ -42,23 +42,23 @@ async fn cleanup_failures_are_retained_and_never_acknowledged_as_success() -> Re
             .is_err()
     );
     assert!(
-        wait_group(1, std::time::Duration::ZERO, |_| Ok(true))
+        wait_group(1, std::time::Duration::ZERO, |_| async { Ok(true) })
             .await
             .is_err()
     );
     assert!(
-        wait_group(1, std::time::Duration::from_secs(5), |_| Err(
-            Error::Backend {
+        wait_group(1, std::time::Duration::from_secs(5), |_| async {
+            Err(Error::Backend {
                 sandbox: crate::LOCAL.into(),
                 operation: "observe group",
-                message: "injected failure".into()
-            }
-        ))
+                message: "injected failure".into(),
+            })
+        })
         .await
         .is_err()
     );
     #[cfg(target_os = "linux")]
-    assert!(group_alive(nix::unistd::getpgrp().as_raw())?);
+    assert!(group_alive(nix::unistd::getpgrp().as_raw()).await?);
     Ok(())
 }
 
@@ -254,7 +254,7 @@ async fn cleanup_accepts_an_already_reaped_empty_process_group() -> Result<()> {
         .wait()
         .await
         .map_err(|error| Error::io("wait", &error))?;
-    assert!(!group_alive(process_group)?);
+    assert!(!group_alive(process_group).await?);
     terminate(&mut child, process_group).await?;
     Ok(())
 }
@@ -273,7 +273,7 @@ async fn terminate_kills_and_reaps_its_child_process_group() -> Result<()> {
     terminate(&mut child, process_group).await?;
 
     assert!(child.id().is_none());
-    assert!(!group_alive(process_group)?);
+    assert!(!group_alive(process_group).await?);
     Ok(())
 }
 
@@ -395,6 +395,7 @@ async fn retained_native_cleanup_failure_is_retried_by_managed_stop() -> Result<
         .spawn()
         .map_err(|error| Error::io("fixture spawn", &error))?;
     let group = group(&child)?;
+    #[cfg(target_os = "linux")]
     let pid = child.id().ok_or_else(|| Error::Backend {
         sandbox: crate::LOCAL.into(),
         operation: "fixture pid",
@@ -423,5 +424,88 @@ async fn retained_native_cleanup_failure_is_retried_by_managed_stop() -> Result<
     process.stop().await?;
     #[cfg(target_os = "linux")]
     assert!(!std::path::Path::new(&format!("/proc/{pid}/status")).exists());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn process_table_ignores_zombies_but_keeps_live_group_members() {
+    assert!(!ps_has_live_group(" 42 Z\n 43 S\n", 42));
+    assert!(ps_has_live_group(" 42 Z\n 42 S+\n", 42));
+    assert!(!ps_has_live_group("bad row\n42\n", 42));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn permission_error_after_group_exit_is_successful_cleanup() -> Result<()> {
+    kill_group_checked(
+        42,
+        |_| Err(nix::errno::Errno::EPERM),
+        |_| async { Ok(false) },
+    )
+    .await?;
+    assert!(
+        kill_group_checked(
+            42,
+            |_| Err(nix::errno::Errno::EPERM),
+            |_| async { Ok(true) }
+        )
+        .await
+        .is_err()
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stalled_process_table_probe_is_killed_and_reaped_at_its_deadline() -> Result<()> {
+    let mut child = Command::new("sleep")
+        .arg("600")
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| Error::io("spawn probe fixture", &error))?;
+    let result = process_table_output(&mut child, std::time::Duration::from_millis(1)).await;
+    assert!(matches!(
+        result.err(),
+        Some(Error::Backend {
+            operation: "read process table",
+            ..
+        })
+    ));
+    assert!(
+        child.id().is_none(),
+        "expired probe must be killed and reaped"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn process_table_probe_collects_output_and_rejects_missing_pipe() -> Result<()> {
+    let mut child = Command::new("sh")
+        .args(["-c", "printf '42 S\\n'"])
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| Error::io("spawn probe fixture", &error))?;
+    let output = process_table_output(&mut child, std::time::Duration::from_secs(5)).await?;
+    assert!(output.status.success());
+    assert!(ps_has_live_group(
+        &String::from_utf8_lossy(&output.stdout),
+        42
+    ));
+    let mut child = Command::new("true")
+        .spawn()
+        .map_err(|error| Error::io("spawn probe fixture", &error))?;
+    assert!(
+        process_table_output(&mut child, std::time::Duration::from_secs(5))
+            .await
+            .is_err()
+    );
+    child
+        .wait()
+        .await
+        .map_err(|error| Error::io("reap probe fixture", &error))?;
     Ok(())
 }

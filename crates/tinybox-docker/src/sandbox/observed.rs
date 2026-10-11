@@ -5,6 +5,8 @@
 //! behind, and writes an acknowledgement only after its wait and group cleanup
 //! finish. A separate `docker exec` can request cancellation without treating
 //! the Docker CLI's local exit as proof that the container workload stopped.
+//! After launching the workload, the supervisor silences its own stderr so
+//! shell job notifications cannot contaminate the workload's byte stream.
 
 use tinybox_core::{BoxId, Error, ExecRequest, Result};
 
@@ -69,6 +71,10 @@ fi
 setsid sh -c 'printf "%s\n" "$$" > "$1/pid" || exit 125; shift; exec "$@"' \
   tinybox-observed-child "$dir" "$@" <&3 &
 leader=$!
+
+# The workload inherited stderr above. Silence only the supervisor now: some
+# shells report a terminated background job outside the wait redirection.
+exec 2>/dev/null
 
 # The watcher has no output handles and remains outside the workload group.
 # It sends the cancellation signal; this shell owns wait/reap and the final

@@ -954,29 +954,18 @@ async fn local_grant_discovery_rejects_excessive_requested_grants() {
     assert!(result.is_err());
 }
 
-#[tokio::test]
+#[test]
 #[cfg(unix)]
-async fn local_grant_discovery_rejects_non_utf8_canonical_targets()
+fn local_grant_discovery_rejects_non_utf8_canonical_targets()
 -> Result<(), Box<dyn std::error::Error>> {
     use std::os::unix::ffi::OsStringExt;
-    let home = tempfile::tempdir()?;
-    let target = home
-        .path()
-        .join(std::ffi::OsString::from_vec(vec![b'd', 0xff]));
-    std::fs::create_dir(&target)?;
-    std::os::unix::fs::symlink(&target, home.path().join("data"))?;
-    let result = BoxService::default()
-        .resolve_local_grants(tinybox_bus::ResolveLocalGrantsRequest {
-            home: Some(home.path().to_str().ok_or("home is not UTF-8")?.into()),
-            config: tinybox_bus::LocalGrantConfig {
-                toolchain_homes: false,
-                extra_read_only: vec!["~/data".into()],
-                ..tinybox_bus::LocalGrantConfig::default()
-            },
-            protected: tinybox_bus::ProtectedPaths::default(),
-        })
-        .await;
-    assert!(result.is_err());
+    // APFS refuses invalid UTF-8 filenames. Supply the canonical path directly
+    // at the serialization boundary instead of depending on filesystem encoding.
+    let target = std::path::PathBuf::from(std::ffi::OsString::from_vec(vec![b'/', b'd', 0xff]));
+    let error = super::grant_paths_to_wire(vec!["/valid".into(), target])
+        .err()
+        .ok_or("non-UTF8 grant must be rejected")?;
+    assert_eq!(error.wire_name(), tinybox_bus::INVALID_FILE_PATH);
     Ok(())
 }
 

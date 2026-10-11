@@ -19,7 +19,11 @@ separate process group for every collected or managed command. Cleanup sends
 SIGKILL to that group, waits for the direct child to be reaped, and then waits up
 to five seconds for the group to stop executing. Linux checks live group members
 through /proc, excluding exited zombies; their parent or operating-system init
-reaps them. Other Unix systems wait until the kernel no longer reports the group.
+reaps them. Other Unix systems inspect process group IDs and states with /bin/ps,
+also excluding zombies. The probe runs asynchronously within the cleanup deadline
+and is killed on cancellation; an expired probe is killed and reaped. Solaris and
+illumos use the s state field; Darwin and BSD systems use stat. A permission error from SIGKILL is accepted only when a fresh process
+table confirms there are no live members; otherwise cleanup remains failed.
 On Windows, every command starts in a Job Object and cleanup terminates and waits
 for the whole job. Cleanup failure is explicit and never acknowledged as success.
 An escaped Unix process group is outside this trusted passthrough ownership
