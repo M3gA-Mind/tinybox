@@ -16,5 +16,5 @@
    Validate formatting, affected/full tests, Clippy, build, coverage and
    cross-platform CI through the workflow runner.
 
-Implementation remains in progress. No host gitlink or availability claim is
+Implementation is complete; upstream review and cross-platform CI remain. No host gitlink or availability claim is
 part of this upstream slice.

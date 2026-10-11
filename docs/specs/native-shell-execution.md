@@ -1,6 +1,6 @@
 # Native shell execution
 
-Status: accepted scope, implementation in progress. Owner: TinyBox.
+Status: implemented upstream; review and cross-platform CI pending. Owner: TinyBox.
 Sequence: [native shell plan](../plans/native-shell-execution.md).
 
 Contract 1.11 appends StartShellExec(ShellExecRequest) -> ProcessRef.
