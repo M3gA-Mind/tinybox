@@ -269,8 +269,11 @@ returns read-only and writable grants. Discovery does not start a process or
 make an approval decision. Credential roots exclude both descendants and
 ancestors; a grant on the operator home cannot expose `.ssh`. `/proc` is granted
 only by the explicit `allow_proc` flag. Both requested names and canonical
-targets must clear the floor; rejected Git config files are never traversed.
+targets must clear the floor; configured roots preserve both their alias and
+canonical spellings. Rejected Git config files are never traversed, and ignore
+pattern files are granted directly without parsing configuration includes.
 Shared Cargo Git and registry dependency caches are read-only because their
-build scripts can execute in later host builds. Commands that fetch dependencies
+build scripts can execute in later host builds; writable extras cannot promote
+those caches or recursively expose them. Commands that fetch dependencies
 need a separately authorized disposable Cargo home. Hosts must supply their complete floor
 and apply authorization before using the returned grants in `StartJailedExec`.
