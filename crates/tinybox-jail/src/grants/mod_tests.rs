@@ -1083,7 +1083,32 @@ fn empty_xdg_config_home_does_not_grant_relative_git_configuration()
     builder.add_gitconfig_at(home.path(), Some(std::ffi::OsStr::new("")))?;
     // No HOME config exists. In particular, the empty value must not make
     // ambient git/config or git/ignore into candidate protected state.
-    assert_eq!(builder.fixed_read_only, Vec::<PathBuf>::new());
+    assert_eq!(
+        builder.fixed_read_only,
+        [
+            home.path().join(".gitconfig"),
+            home.path().join(".config/git/config")
+        ]
+    );
     assert_eq!(builder.grants, JailGrants::default());
+    Ok(())
+}
+
+#[test]
+fn missing_git_include_locations_cannot_be_created_from_writable_grants()
+-> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    fs::create_dir(home.path().join("future"))?;
+    fs::write(
+        home.path().join(".gitconfig"),
+        "[include]\npath = future/config\n",
+    )?;
+    let config = LocalGrantConfig {
+        extra_read_write: vec!["~/future".into()],
+        ..Default::default()
+    };
+    let grants = resolve_local_jail_grants(Some(home.path()), &config, &ProtectedPaths::default())?;
+    assert_eq!(grants.read_write, Vec::<PathBuf>::new());
+    assert!(!has(&grants.read_only, &home.path().join("future/config")));
     Ok(())
 }
