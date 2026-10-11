@@ -19,6 +19,7 @@ pub(super) struct StreamExecution {
 enum Collector {
     Host(Arc<dyn tinybox_core::Host>),
     Jailed(Arc<tinybox_host::JailLocalHost>),
+    Sandbox(Arc<dyn tinybox_core::Sandbox>, tinybox_core::BoxId),
 }
 impl Collector {
     async fn run(
@@ -29,18 +30,28 @@ impl Collector {
         match self {
             Self::Host(host) => host.run_observed(command, observer).await,
             Self::Jailed(host) => host.run_observed(command, observer).await,
+            Self::Sandbox(sandbox, id) => sandbox.exec_observed(id, command, observer).await,
         }
     }
     fn pending(&self) -> bool {
         match self {
             Self::Host(host) => host.has_pending_observed_cleanup(),
             Self::Jailed(host) => host.has_pending_cleanup(),
+            Self::Sandbox(sandbox, _) => sandbox.has_pending_observed_cleanup(),
+        }
+    }
+    fn acknowledge_destroyed_box(&self, id: &tinybox_core::BoxId) {
+        if let Self::Sandbox(sandbox, owned_id) = self
+            && owned_id == id
+        {
+            sandbox.acknowledge_observed_cleanup_for_destroyed_box(id);
         }
     }
     async fn drain(&self) -> tinybox_core::Result<()> {
         match self {
             Self::Host(host) => host.retry_observed_cleanup().await,
             Self::Jailed(host) => host.drain_checked().await,
+            Self::Sandbox(sandbox, _) => sandbox.retry_observed_cleanup().await,
         }
     }
 }
@@ -50,10 +61,10 @@ fn select_collector(
     resolved: &tinybox_core::ExecRequest,
 ) -> Result<Collector> {
     Ok(if let Some(config) = jail {
-        if !entry.native_host {
+        if !entry.native_host || entry.local_sandbox.is_none() {
             return Err(failure(
                 tinybox_bus::UNSUPPORTED_OPERATION,
-                "native jail requires local execution",
+                "native jail requires local passthrough execution",
             ));
         }
         let root = entry.workspace_root.as_ref().ok_or_else(|| {
@@ -66,12 +77,17 @@ fn select_collector(
             root, config, resolved,
         )?)
     } else {
-        Collector::Host(super::configured_host(
+        let host = super::configured_host(
             &entry.host_config,
             Arc::new(tinybox_host::LimitedLocalHost::new(
                 tinybox_bus::MAX_OUTPUT_BYTES,
             )),
-        )?)
+        )?;
+        if let Some(sandbox) = &entry.docker_sandbox {
+            Collector::Sandbox(Arc::new(sandbox.for_observed_host(host)), entry.id.clone())
+        } else {
+            Collector::Host(host)
+        }
     })
 }
 impl StreamExecution {
@@ -188,7 +204,9 @@ impl Resources {
         let entry = slot
             .as_ref()
             .ok_or_else(|| failure(tinybox_bus::UNKNOWN_RESOURCE, "closed resource"))?;
-        if !entry.execution_supported || entry.local_sandbox.is_none() {
+        if !entry.execution_supported
+            || (entry.local_sandbox.is_none() && entry.docker_sandbox.is_none())
+        {
             return Err(failure(
                 tinybox_bus::UNSUPPORTED_OPERATION,
                 "live output is unavailable for this provider",
@@ -203,17 +221,17 @@ impl Resources {
         // Each execution owns its cleanup collector. Cancelling one stream must
         // not drain an unrelated running supervisor or inherit its failure.
         // Resolve before consuming admission, and fence native start against Close.
-        let resolved = entry
-            .local_sandbox
-            .as_ref()
-            .ok_or_else(|| {
-                failure(
-                    tinybox_bus::UNSUPPORTED_OPERATION,
-                    "local sandbox unavailable",
-                )
-            })?
-            .resolve_command(&entry.id, &command(request.command.clone()))
-            .map_err(|error| backend_error(&error))?;
+        let resolved = if let Some(sandbox) = &entry.local_sandbox {
+            sandbox
+                .resolve_command(&entry.id, &command(request.command.clone()))
+                .map_err(|error| backend_error(&error))?
+        } else {
+            let command = command(request.command.clone());
+            if command.argv.is_empty() {
+                return Err(failure(tinybox_bus::INVALID_ID, "empty execution command"));
+            }
+            command
+        };
         let collector = select_collector(entry, jail.as_ref(), &resolved)?;
         let mut state = self.state.lock().await;
         let executions = self
@@ -314,6 +332,19 @@ impl Resources {
         }
         self.retire_streams(resource);
         failure.map_or(Ok(()), Err)
+    }
+    pub(super) async fn close_destroyed_box_streams(
+        &self,
+        resource: &ResourceId,
+        id: &tinybox_core::BoxId,
+    ) -> Result<()> {
+        // Only the caller that has just acknowledged resource-wide destruction
+        // may retire a remote waiter's receipt. Individual Cancel never enters
+        // this path; each native CLI owner must still join and drain normally.
+        for stream in self.streams_for(resource) {
+            stream.collector.acknowledge_destroyed_box(id);
+        }
+        self.close_streams(resource).await
     }
     pub(super) fn retire_streams(&self, resource: &ResourceId) {
         self.streams
