@@ -255,6 +255,14 @@ impl Host for LimitedLocalHost {
         self.collect(request, Some(observer)).await
     }
 
+    fn has_pending_observed_cleanup(&self) -> bool {
+        self.has_pending_cleanup()
+    }
+
+    async fn retry_observed_cleanup(&self) -> Result<()> {
+        self.drain_checked().await
+    }
+
     async fn forward(&self, remote: std::net::SocketAddr) -> Result<Forward> {
         LocalHost::new().forward(remote).await
     }

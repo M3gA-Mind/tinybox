@@ -32,6 +32,24 @@ async fn an_unimplemented_stream_does_not_execute_a_collected_fallback() {
         .await;
     assert!(matches!(result, Err(Error::UnsupportedStreaming { .. })));
     assert_eq!(host.0.load(Ordering::SeqCst), 0);
+    assert!(!host.has_pending_observed_cleanup());
+    assert_eq!(host.retry_observed_cleanup().await, Ok(()));
+}
+
+#[tokio::test]
+async fn a_host_without_workspace_writes_refuses_them_explicitly() {
+    let host = CountingHost::default();
+    let result = host
+        .begin_workspace_file_write(
+            std::path::Path::new("/workspace"),
+            std::path::Path::new("file"),
+            "transfer",
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(Error::UnsupportedHostFileTransfer { host }) if host == "fixture"
+    ));
 }
 
 #[test]

@@ -224,7 +224,9 @@ async fn retained_jail_cleanup_retries_and_releases_native_child()
     );
     assert!(retained.is_err());
     assert!(host.has_pending_cleanup());
-    host.drain_checked().await?;
+    assert!(host.has_pending_observed_cleanup());
+    host.retry_observed_cleanup().await?;
+    assert!(!host.has_pending_observed_cleanup());
     assert!(!host.has_pending_cleanup());
     #[cfg(target_os = "linux")]
     assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
