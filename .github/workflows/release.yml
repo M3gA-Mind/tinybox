@@ -276,7 +276,7 @@ jobs:
             *) echo "unsupported Unix runner: ${RUNNER_OS}" >&2; exit 1 ;;
           esac
           fixture_dir="$GITHUB_WORKSPACE/crates/tinybox-module/tests/fixtures"
-          PATH="$fixture_dir:$PATH" TINYBOX_TEST_MODULE="$module" \
+          PATH="$fixture_dir:$PATH" TINYBOX_TEST_MODULE="$GITHUB_WORKSPACE/$module" \
             cargo test --locked -p tinybox-module --test module_e2e \
               compiled_module_runs_one_shot_docker_through_a_broker \
               -- --ignored --exact
