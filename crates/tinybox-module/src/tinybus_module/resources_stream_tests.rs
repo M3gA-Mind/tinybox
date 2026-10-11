@@ -206,6 +206,7 @@ async fn a_panicked_job_is_joined_and_cleanup_failure_stays_owned_until_retry() 
             },
         },
         jail: None,
+        shell: None,
         journal,
         task: Mutex::new(Some(task)),
         collector: Collector::Host(Arc::new(tinybox_host::LimitedLocalHost::new(64)), None),
@@ -366,6 +367,7 @@ async fn remote_cleanup_failure_keeps_binary_output_and_owner_until_retry_ack() 
         },
         command,
         Collector::Host(host.clone(), None),
+        None,
         None,
     );
     assert!(stream.stop().await.is_err());
@@ -555,6 +557,7 @@ async fn confirmed_container_destroy_keeps_native_cleanup_retryable_without_dest
             request,
             tinybox_core::ExecRequest::new(["fixture"]),
             Collector::Sandbox(Arc::new(sandbox), entry.id.clone(), None),
+            None,
             None,
         ));
         resources
