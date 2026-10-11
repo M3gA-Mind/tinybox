@@ -46,7 +46,7 @@ class WindowsFeatureEnvironmentTests(unittest.TestCase):
             ready = root / "ready"
             fixtures = {
                 "cygpath": "#!/bin/sh\n[ \"$*\" = \"-w /usr/bin\" ] || exit 1\nprintf \"%s\\n\" \"$FIXTURE_BIN\"\n",
-                "pwsh": "#!/bin/sh\n[ \"$*\" = \"-NoProfile -File scripts/prepare-windows-fixtures.ps1 -PosixBin $FIXTURE_BIN\" ] || exit 1\ntouch \"$FIXTURE_READY\"\n",
+                "pwsh": "#!/bin/sh\n[ \"$*\" = \"-NoProfile -File scripts/test-windows-fixtures.ps1\" ] && exit 0\n[ \"$*\" = \"-NoProfile -File scripts/prepare-windows-fixtures.ps1 -PosixBin $FIXTURE_BIN\" ] || exit 1\ntouch \"$FIXTURE_READY\"\n",
                 "python3": "#!/bin/sh\nexit 0\n",
                 "cargo": "#!/bin/sh\n[ -f \"$FIXTURE_READY\" ] || exit 1\nprintf \"%s\\n\" \"$*\" >> \"$FIXTURE_CALLS\"\n",
             }

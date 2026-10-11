@@ -11,6 +11,7 @@ case "${RUNNER_OS:-$(uname -s)}" in
   Windows|MINGW*|MSYS*|CYGWIN*)
     # Native Rust commands resolve /bin/sh at the current drive root, while
     # Git Bash resolves it inside its installation. Supply that same shell.
+    pwsh -NoProfile -File scripts/test-windows-fixtures.ps1
     pwsh -NoProfile -File scripts/prepare-windows-fixtures.ps1 -PosixBin "$(cygpath -w /usr/bin)"
     export PATH="/usr/bin:$PATH"
     ;;
