@@ -90,13 +90,7 @@ impl ShellContext {
                 .env
                 .keys()
                 .chain(request.extra_env.keys())
-                .any(|key| {
-                    if cfg!(windows) {
-                        key.eq_ignore_ascii_case(name)
-                    } else {
-                        key == name
-                    }
-                })
+                .any(|key| environment_name_matches(key, name))
             {
                 environment.insert(
                     name.into(),
@@ -229,6 +223,13 @@ impl ShellContext {
         .map_err(|error| {
             tinybox_core::Error::io("join shell scratch cleanup", &std::io::Error::other(error))
         })?
+    }
+}
+fn environment_name_matches(left: &str, right: &str) -> bool {
+    if cfg!(windows) {
+        left.eq_ignore_ascii_case(right)
+    } else {
+        left == right
     }
 }
 fn validate_runtime(request: &ShellExecRequest) -> Result<()> {
