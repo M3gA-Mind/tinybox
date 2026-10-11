@@ -44,7 +44,7 @@ async fn cleanup_with_cli(
     validate_label(&request.label)?;
     let containers_stopped = tokio::time::timeout(
         Duration::from_millis(request.timeout_ms),
-        cli.kill_labelled(&request.label),
+        cli.kill_labelled_checked(&request.label),
     )
     .await
     .map_err(|_| control_failure("Docker cleanup exceeded its deadline"))?
