@@ -261,7 +261,10 @@ impl StreamExecution {
         shell: Option<&tinybox_bus::ShellExecRequest>,
         platform_shell: Option<&tinybox_bus::SelectShellRequest>,
     ) -> Result<()> {
-        if self.request == *request
+        // Native shell identity is its original wire request; synthesized argv
+        // can change when platform discovery changes between delivery retries.
+        let same_request = shell.is_some() || self.request == *request;
+        if same_request
             && self.jail.as_ref() == jail
             && self.shell.as_ref() == shell
             && self.platform_shell.as_ref() == platform_shell
