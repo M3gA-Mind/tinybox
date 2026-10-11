@@ -14,7 +14,7 @@ impl Builder<'_> {
     }
 
     /// True when `path` is, contains, or sits inside a credential directory.
-    fn exposes_credentials(&self, path: &Path) -> bool {
+    pub(super) fn exposes_credentials(&self, path: &Path) -> bool {
         let path = normalized_floor_path(&path.to_string_lossy());
         self.protected.credential_roots.iter().any(|root| {
             root_spellings(Path::new(root))
@@ -41,7 +41,7 @@ impl Builder<'_> {
         })
     }
 
-    fn is_protected(&self, path: &Path) -> bool {
+    pub(super) fn is_protected(&self, path: &Path) -> bool {
         let normalized = normalized_floor_path(&path.to_string_lossy());
         self.has_protected_components(path)
             || self.protected.prefixes.iter().any(|prefix| {

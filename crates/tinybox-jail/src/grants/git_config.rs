@@ -127,3 +127,7 @@ fn include_value(value: &str) -> Option<String> {
     out.truncate(significant);
     (!out.is_empty()).then_some(out)
 }
+
+#[cfg(test)]
+#[path = "git_config_tests.rs"]
+mod tests;
