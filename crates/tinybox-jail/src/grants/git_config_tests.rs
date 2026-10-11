@@ -12,7 +12,15 @@ fn include_values_decode_git_escapes_and_preserve_quoted_whitespace() {
 
 #[test]
 fn malformed_or_empty_include_values_are_not_granted() {
-    for value in ["", " # comment", "; comment", "\"\"", "\"unterminated", "\\", r"\q"] {
+    for value in [
+        "",
+        " # comment",
+        "; comment",
+        "\"\"",
+        "\"unterminated",
+        "\\",
+        r"\q",
+    ] {
         assert_eq!(include_value(value), None, "{value}");
     }
 }
