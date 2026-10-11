@@ -1033,3 +1033,61 @@ async fn timeout_status_survives_failed_cleanup_until_retry_acknowledges_it()
     resources.close(&resource).await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn close_during_shell_preparation_fences_admission_without_waiting_for_filesystem()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resources = Arc::new(Resources::default());
+    let resource = local_resource(&resources).await?;
+    let state = tempfile::tempdir()?;
+    let shell = shell_request(&resources, &resource, state.path(), "echo must-not-run").await?;
+    let request = SpawnRequest {
+        process: shell.process.clone(),
+        command: ExecRequest {
+            resource: resource.clone(),
+            argv: vec!["shell".into()],
+            cwd: None,
+            env: Default::default(),
+            stdin: None,
+        },
+    };
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let started = entered.clone();
+    let resume = release.clone();
+    let owner = resources.clone();
+    let pending = tokio::spawn(async move {
+        owner
+            .start_with_preparation(request, None, Some(shell), None, |preparation| async move {
+                started.notify_one();
+                resume.notified().await;
+                preparation.finish().await
+            })
+            .await
+    });
+    entered.notified().await;
+    let closed = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        resources.close(&resource),
+    )
+    .await;
+    release.notify_one();
+    let result = pending.await?;
+    assert!(
+        closed.is_ok(),
+        "Close waited for shell filesystem preparation"
+    );
+    closed??;
+    assert!(
+        result.is_err(),
+        "late preparation admitted execution after Close"
+    );
+    assert!(
+        resources
+            .streams
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+    );
+    Ok(())
+}

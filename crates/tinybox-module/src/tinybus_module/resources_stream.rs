@@ -36,6 +36,25 @@ enum Collector {
         Option<Arc<tinybox_host::LimitedLocalHost>>,
     ),
 }
+enum CollectorPreparation {
+    Ready(Collector),
+    Shell(
+        tinybox_bus::ShellExecRequest,
+        std::path::PathBuf,
+        tinybox_core::ExecRequest,
+    ),
+}
+impl CollectorPreparation {
+    async fn finish(self) -> Result<Collector> {
+        match self {
+            Self::Ready(collector) => Ok(collector),
+            Self::Shell(request, root, resolved) => Ok(Collector::Shell(
+                super::super::native_shell::ShellContext::prepare_owned(request, root, resolved)
+                    .await?,
+            )),
+        }
+    }
+}
 impl Collector {
     async fn run(
         &self,
@@ -150,12 +169,12 @@ fn require_owned_collector(entry: &super::Resource) -> Result<()> {
     }
     Ok(())
 }
-async fn select_execution_collector(
+fn select_execution_collector(
     entry: &super::Resource,
     jail: Option<&tinybox_bus::NativeJailConfig>,
     shell: Option<&tinybox_bus::ShellExecRequest>,
     resolved: &tinybox_core::ExecRequest,
-) -> Result<Collector> {
+) -> Result<CollectorPreparation> {
     Ok(if let Some(shell) = shell {
         if !entry.native_host || entry.local_sandbox.is_none() {
             return Err(failure(
@@ -169,25 +188,18 @@ async fn select_execution_collector(
                 "native shell requires directory resource",
             )
         })?;
-        Collector::Shell(
-            super::super::native_shell::ShellContext::prepare_owned(
-                shell.clone(),
-                root.clone(),
-                resolved.clone(),
-            )
-            .await?,
-        )
+        CollectorPreparation::Shell(shell.clone(), root.clone(), resolved.clone())
     } else {
-        select_collector(entry, jail, resolved)?
+        CollectorPreparation::Ready(select_collector(entry, jail, resolved)?)
     })
 }
-async fn prepare_execution(
+fn prepare_execution(
     entry: &super::Resource,
     request: &SpawnRequest,
     jail: Option<&tinybox_bus::NativeJailConfig>,
     shell: Option<&tinybox_bus::ShellExecRequest>,
     platform_shell: Option<&tinybox_bus::SelectShellRequest>,
-) -> Result<(tinybox_core::ExecRequest, Collector)> {
+) -> Result<(tinybox_core::ExecRequest, CollectorPreparation)> {
     if !entry.execution_supported
         || (entry.local_sandbox.is_none() && entry.docker_sandbox.is_none())
     {
@@ -223,14 +235,14 @@ async fn prepare_execution(
         command
     };
     let collector = if let Some(shell) = platform_shell {
-        Collector::PlatformShell(
+        CollectorPreparation::Ready(Collector::PlatformShell(
             Arc::new(tinybox_host::LimitedLocalHost::new(
                 tinybox_bus::MAX_OUTPUT_BYTES,
             )),
             shell.clone(),
-        )
+        ))
     } else {
-        select_execution_collector(entry, jail, shell, &resolved).await?
+        select_execution_collector(entry, jail, shell, &resolved)?
     };
     Ok((resolved, collector))
 }
@@ -402,6 +414,26 @@ impl Resources {
         shell: Option<tinybox_bus::ShellExecRequest>,
         platform_shell: Option<tinybox_bus::SelectShellRequest>,
     ) -> Result<ProcessRef> {
+        self.start_with_preparation(
+            request,
+            jail,
+            shell,
+            platform_shell,
+            CollectorPreparation::finish,
+        )
+        .await
+    }
+    async fn start_with_preparation<Fut>(
+        &self,
+        request: SpawnRequest,
+        jail: Option<tinybox_bus::NativeJailConfig>,
+        shell: Option<tinybox_bus::ShellExecRequest>,
+        platform_shell: Option<tinybox_bus::SelectShellRequest>,
+        prepare: impl FnOnce(CollectorPreparation) -> Fut,
+    ) -> Result<ProcessRef>
+    where
+        Fut: std::future::Future<Output = Result<Collector>>,
+    {
         validate_execution_ids(&request)?;
         let process = ProcessRef {
             resource: request.command.resource.clone(),
@@ -432,8 +464,8 @@ impl Resources {
             jail.as_ref(),
             shell.as_ref(),
             platform_shell.as_ref(),
-        )
-        .await?;
+        )?;
+        let collector = prepare(collector).await?;
         let mut state = self.state.lock().await;
         let executions = self
             .executions
