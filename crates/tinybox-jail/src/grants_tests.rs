@@ -729,13 +729,28 @@ fn credential_floor_preserves_alias_locations_under_aliased_parent_directories()
     let root = tempfile::tempdir()?;
     let outside = tempfile::tempdir()?;
     fs::create_dir(root.path().join("physical"))?;
-    std::os::unix::fs::symlink(root.path().join("physical"), root.path().join("parent-alias"))?;
+    std::os::unix::fs::symlink(
+        root.path().join("physical"),
+        root.path().join("parent-alias"),
+    )?;
     let home = root.path().join("parent-alias/home");
     fs::create_dir(&home)?;
     std::os::unix::fs::symlink(outside.path(), home.join(".ssh"))?;
     for credential in [".ssh", "missing/.ssh"] {
-        let protected = ProtectedPaths { credential_roots: vec![home.join(credential).to_str().ok_or("non-UTF8 fixture")?.into()], ..ProtectedPaths::default() };
-        let config = LocalGrantConfig { toolchain_homes: false, extra_read_only: vec!["~".into()], ..LocalGrantConfig::default() };
+        let protected = ProtectedPaths {
+            credential_roots: vec![
+                home.join(credential)
+                    .to_str()
+                    .ok_or("non-UTF8 fixture")?
+                    .into(),
+            ],
+            ..ProtectedPaths::default()
+        };
+        let config = LocalGrantConfig {
+            toolchain_homes: false,
+            extra_read_only: vec!["~".into()],
+            ..LocalGrantConfig::default()
+        };
         let grants = resolve_local_jail_grants(Some(&home), &config, &protected);
         assert_eq!(grants.read_only, Vec::<PathBuf>::new(), "{credential}");
     }
