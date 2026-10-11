@@ -194,7 +194,7 @@ async fn verify_shell_execution(proxy: &tinybus::Proxy) -> Result<(), Box<dyn st
                         resource: resource.clone(),
                         argv: Vec::new(),
                         cwd: None,
-                        env: Default::default(),
+                        env: std::collections::BTreeMap::default(),
                         stdin: None,
                     },
                 },
