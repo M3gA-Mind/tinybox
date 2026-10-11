@@ -303,7 +303,7 @@ unset; unsupported ~user/ and %(prefix)/ expansion rejects complete discovery.
 
 Contract 1.10 adds `SelectShell`. The request carries command text and an optional
 pipeline-status preservation flag. Unix selects Bash at a standard path with
-`set -o pipefail` by default, or sh without that Bash-only flag when Bash is
+`set -o pipefail` by default, or /bin/sh without that Bash-only flag when Bash is
 absent. Unix uses non-login `-c` to avoid loading login profiles before the
 payload. Windows selects cmd `/D /E:ON /V:OFF /S /C`, disabling registry AutoRun hooks and
 stripping one explicit outer wrapper around the raw command-line payload.

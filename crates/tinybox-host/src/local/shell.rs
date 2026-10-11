@@ -78,7 +78,7 @@ fn selection_for(
         },
         ShellFlavor::Posix => ShellInvocation {
             flavor,
-            program: bash.unwrap_or("sh").into(),
+            program: bash.unwrap_or("/bin/sh").into(),
             arguments: {
                 let mut arguments = Vec::new();
                 if bash.is_some() {

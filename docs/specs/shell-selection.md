@@ -17,7 +17,8 @@ The request carries command text and preserve_pipeline_status, default false.
 The result carries flavor, program, ordinary arguments, optional Windows raw
 arguments, and bootstrap environment variable names.
 
-Unix selects /usr/bin/bash or /bin/bash when present, otherwise sh. Both use
+Unix selects /usr/bin/bash or /bin/bash when present, otherwise /bin/sh. The fallback path is absolute so approved
+PATH overrides affect payload tools without preventing shell startup. Both use
 non-login -c; Bash also uses -p to ignore imported environment functions. Bash prepends "set -o pipefail" unless preservation is requested;
 sh never receives that Bash-only prefix. For "false | true", Bash's default
 selection reports the failing stage; preservation retains the last-stage status.

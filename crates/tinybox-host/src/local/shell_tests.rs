@@ -22,7 +22,7 @@ fn bash_surfaces_pipe_failures_and_preservation_keeps_the_original_payload() {
 #[test]
 fn sh_fallback_never_receives_bash_only_flags() {
     let selected = selection_for(&request(false), ShellFlavor::Posix, None);
-    assert_eq!(selected.program, "sh");
+    assert_eq!(selected.program, "/bin/sh");
     assert_eq!(selected.arguments, ["-c", "false | true"]);
     assert_eq!(selected.raw_arguments, None);
     assert_eq!(selected.bootstrap_environment, Vec::<String>::new());
@@ -224,9 +224,14 @@ fn bash_discovery_rechecks_availability() -> Result<(), Box<dyn std::error::Erro
 #[test]
 #[cfg(unix)]
 fn fallback_shell_survives_an_overridden_payload_path() -> Result<(), Box<dyn std::error::Error>> {
-    let selected = selection_for(&SelectShellRequest {
-        command: "exit 0".into(), preserve_pipeline_status: false,
-    }, ShellFlavor::Posix, None);
+    let selected = selection_for(
+        &SelectShellRequest {
+            command: "exit 0".into(),
+            preserve_pipeline_status: false,
+        },
+        ShellFlavor::Posix,
+        None,
+    );
     let status = command_for(selected).env("PATH", "").status()?;
     assert!(status.success());
     Ok(())
