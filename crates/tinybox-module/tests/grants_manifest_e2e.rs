@@ -108,7 +108,10 @@ async fn verify_discovery(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::err
         assert_eq!(selection.raw_arguments.as_deref(), Some("\"false | true\""));
     } else {
         assert_eq!(selection.flavor, tinybox_bus::ShellFlavor::Posix);
-        assert_eq!(selection.arguments[0], "-c");
+        assert!(selection.arguments.iter().any(|argument| argument == "-c"));
+        if selection.program.ends_with("bash") {
+            assert_eq!(selection.arguments[0], "-p");
+        }
         assert_eq!(selection.raw_arguments, None);
         assert_eq!(
             selection.remove_environment,
