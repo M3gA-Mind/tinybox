@@ -1,9 +1,9 @@
 //! Platform auto-detection. Picks the strongest available backend.
 
+use std::process::{Child, Command};
 use std::sync::Arc;
 
 use super::jail::{Jail, JailBackend};
-use std::process::{Child, Command};
 
 /// Name reported by the backend returned when no OS sandbox is usable.
 pub const UNSUPPORTED_BACKEND_NAME: &str = "unsupported";
