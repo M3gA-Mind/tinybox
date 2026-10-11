@@ -274,7 +274,11 @@ canonical spellings. Rejected Git config files are never traversed, and ignore
 pattern files are granted directly without parsing configuration includes.
 Shared Cargo Git and registry dependency caches are read-only because their
 build scripts can execute in later host builds; writable extras cannot promote
-those caches or recursively expose them. Commands that fetch dependencies
+those caches or recursively expose them. Automatically discovered read-only
+toolchains and Git configuration also cannot be promoted by writable extras;
+Cargo executables and launch configuration remain protected even if discovery
+is disabled. Mutable toolchain operations need separately authorized disposable
+state. Commands that fetch dependencies
 need a separately authorized disposable Cargo home. Hosts must supply their complete floor
 and apply authorization before using the returned grants in `StartJailedExec`.
 
