@@ -1320,9 +1320,35 @@ fn cleanup_stops_the_owned_group_after_its_wrapper_dies() -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
+fn wait_for_nonempty_marker(
+    path: &str,
+    wrapper: &mut std::process::Child,
+    operation: &'static str,
+) -> Result<bool> {
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while std::fs::metadata(path).map_or(true, |metadata| metadata.len() == 0)
+        && Instant::now() < deadline
+    {
+        if let Some(status) = wrapper
+            .try_wait()
+            .map_err(|error| Error::io("poll generated SSH wrapper", &error))?
+        {
+            return Err(Error::Backend {
+                sandbox: "SSH test fixture".to_owned(),
+                operation,
+                message: format!("wrapper exited before publishing the marker: {status}"),
+            });
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    Ok(std::fs::metadata(path).is_ok_and(|metadata| metadata.len() > 0))
+}
+
+#[cfg(target_os = "linux")]
 fn start_term_ignoring_group(directory: &str, id: &str) -> Result<(String, String)> {
     use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
 
     let target = SshTarget::new("builder")?;
     let prepare = observed::prepare_request(&target, id, directory);
@@ -1336,7 +1362,7 @@ fn start_term_ignoring_group(directory: &str, id: &str) -> Result<(String, Strin
     let term_marker = format!("/tmp/tinybox-observed-term-{id}");
     let ready_marker = format!("{directory}/command-ready");
     let workload = format!(
-        "trap 'printf term > {}; exit 0' TERM; printf ready > {}; /bin/sh -c 'trap \"\" TERM; exec sleep 600' & wait",
+        "trap 'printf term > {}; exit 0' TERM; /bin/sh -c 'trap \"\" TERM; printf ready > {}; exec sleep 600' & wait",
         tinybox_core::shell::quote(&term_marker),
         tinybox_core::shell::quote(&ready_marker)
     );
@@ -1355,34 +1381,32 @@ fn start_term_ignoring_group(directory: &str, id: &str) -> Result<(String, Strin
         .spawn()
         .map_err(|error| Error::io("start generated cleanup request", &error))?;
     let pid_file = format!("{directory}/pid");
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while std::fs::metadata(&pid_file).map_or(true, |metadata| metadata.len() == 0)
-        && Instant::now() < deadline
-    {
-        if let Some(status) = wrapper
-            .try_wait()
-            .map_err(|error| Error::io("poll generated cleanup wrapper", &error))?
-        {
-            return Err(Error::Backend {
-                sandbox: "SSH test fixture".to_owned(),
-                operation: "start generated cleanup request",
-                message: format!("wrapper exited before publishing its process group: {status}"),
-            });
-        }
-        std::thread::sleep(Duration::from_millis(5));
+    if !wait_for_nonempty_marker(&pid_file, &mut wrapper, "start generated cleanup request")? {
+        let _ = wrapper.kill();
+        let _ = wrapper.wait();
+        return Err(Error::Backend {
+            sandbox: "SSH test fixture".to_owned(),
+            operation: "start generated cleanup request",
+            message: "generated request did not publish its group id".to_owned(),
+        });
     }
-    while !std::path::Path::new(&ready_marker).exists() && Instant::now() < deadline {
-        if let Some(status) = wrapper
-            .try_wait()
-            .map_err(|error| Error::io("poll generated user command", &error))?
-        {
-            return Err(Error::Backend {
-                sandbox: "SSH test fixture".to_owned(),
-                operation: "start generated user command",
-                message: format!("wrapper exited before command readiness: {status}"),
-            });
+    if !wait_for_nonempty_marker(&ready_marker, &mut wrapper, "start generated user command")? {
+        if let Ok(group) = std::fs::read_to_string(&pid_file) {
+            let group = group.trim();
+            if !group.is_empty() && group.bytes().all(|byte| byte.is_ascii_digit()) {
+                let _ = Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(format!("kill -KILL -{group} 2>/dev/null || true"))
+                    .status();
+            }
         }
-        std::thread::sleep(Duration::from_millis(5));
+        let _ = wrapper.kill();
+        let _ = wrapper.wait();
+        return Err(Error::Backend {
+            sandbox: "SSH test fixture".to_owned(),
+            operation: "start generated user command",
+            message: "TERM-ignoring child did not publish readiness".to_owned(),
+        });
     }
     let group = std::fs::read_to_string(&pid_file)
         .map_err(|error| Error::io("read generated cleanup group id", &error))?
