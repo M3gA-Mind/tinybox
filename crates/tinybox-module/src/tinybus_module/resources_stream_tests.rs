@@ -1126,3 +1126,52 @@ async fn native_shell_replay_ignores_rediscovered_program()
     resources.close(&resource).await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn rejected_shell_scratch_cleanup_is_retained_for_close_and_shutdown_retry()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    for shutdown in [false, true] {
+        let resources = Resources::default();
+        let resource = local_resource(&resources).await?;
+        let state = tempfile::tempdir()?;
+        let shell = shell_request(&resources, &resource, state.path(), "echo must-not-run").await?;
+        let request = SpawnRequest {
+            process: shell.process.clone(),
+            command: ExecRequest {
+                resource: resource.clone(),
+                argv: vec!["shell".into()],
+                cwd: None,
+                env: std::collections::BTreeMap::default(),
+                stdin: None,
+            },
+        };
+        let scratch = state.path().join("artifacts/sandbox-scratch");
+        let moved = state.path().join("saved-scratch");
+        let result = resources
+            .start_with_preparation(request, None, Some(shell), None, |preparation| async {
+                let collector = preparation.finish().await?;
+                resources.close(&resource).await?;
+                std::fs::rename(&scratch, &moved)
+                    .map_err(|error| Error::failed(error.to_string()))?;
+                std::fs::write(&scratch, "blocks deletion")
+                    .map_err(|error| Error::failed(error.to_string()))?;
+                Ok(collector)
+            })
+            .await;
+        assert_eq!(
+            result.err().map(|error| error.wire_name().to_owned()),
+            Some(tinybox_bus::BACKEND_ERROR.to_owned())
+        );
+        assert_eq!(resources.rejected_shells.lock().await.len(), 1);
+        std::fs::remove_file(&scratch)?;
+        std::fs::rename(&moved, &scratch)?;
+        if shutdown {
+            resources.shutdown().await?;
+        } else {
+            resources.close(&resource).await?;
+        }
+        assert!(resources.rejected_shells.lock().await.is_empty());
+        assert_eq!(std::fs::read_dir(&scratch)?.count(), 0);
+    }
+    Ok(())
+}
