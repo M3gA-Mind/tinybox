@@ -324,7 +324,6 @@ async fn terminate(child: &mut std::process::Child, group: i32) -> Result<()> {
     #[cfg(unix)]
     {
         use nix::{
-            errno::Errno,
             sys::signal::{Signal, killpg},
             unistd::Pid,
         };
@@ -334,10 +333,12 @@ async fn terminate(child: &mut std::process::Child, group: i32) -> Result<()> {
             .is_none()
             || super::process::group_alive(group).await?
         {
-            match killpg(Pid::from_raw(group), Signal::SIGKILL) {
-                Ok(()) | Err(Errno::ESRCH) => {}
-                Err(error) => return Err(failure("kill jail group", error.to_string())),
-            }
+            kill_jail_group(
+                group,
+                |group| killpg(Pid::from_raw(group), Signal::SIGKILL),
+                super::process::group_alive,
+            )
+            .await?;
         }
     }
     let completion = async {
@@ -366,3 +367,18 @@ fn failure(operation: &'static str, message: String) -> Error {
 #[cfg(all(test, unix))]
 #[path = "jailed_tests.rs"]
 mod tests;
+
+#[cfg(unix)]
+async fn kill_jail_group<F>(
+    group: i32,
+    kill: impl FnOnce(i32) -> std::result::Result<(), nix::errno::Errno>,
+    _alive: impl FnOnce(i32) -> F,
+) -> Result<()>
+where
+    F: std::future::Future<Output = Result<bool>>,
+{
+    match kill(group) {
+        Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
+        Err(error) => Err(failure("kill jail group", error.to_string())),
+    }
+}
