@@ -9,7 +9,7 @@ use tinybox_docker::DockerCli;
 
 use super::*;
 
-/// Publish a fake CLI and wait out write handles inherited by concurrent forks.
+/// Publish a fake CLI through an immutable launcher and confirm execution.
 fn write_cli_fixture(path: &Path, script: impl AsRef<str>) -> std::io::Result<std::path::PathBuf> {
     let script = script.as_ref().replacen(
         "#!/bin/sh\n",
@@ -36,8 +36,8 @@ fn write_cli_fixture(path: &Path, script: impl AsRef<str>) -> std::io::Result<st
 fn probe_cli_fixture(
     mut probe: impl FnMut() -> std::io::Result<std::process::ExitStatus>,
 ) -> std::io::Result<()> {
-    // Forked children can retain a writer until exec. Successful execution
-    // proves the writer is gone; ETXTBSY alone is retryable, without a deadline.
+    // Confirm launch before the test starts. Preserve the existing probe
+    // contract: ETXTBSY alone is retryable, without a deadline.
     loop {
         match probe() {
             Err(error) if error.raw_os_error() == Some(26) => {
