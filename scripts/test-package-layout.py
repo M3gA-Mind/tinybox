@@ -61,6 +61,9 @@ class PackageTests(unittest.TestCase):
                 "while [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n"
             )
             setpriv.chmod(0o755)
+            cargo = bin_dir / "cargo"
+            cargo.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CARGO_ARGS\"\nexit 0\n")
+            cargo.chmod(0o755)
             uname = bin_dir / "uname"
             uname.write_text("#!/bin/sh\necho Linux\n")
             uname.chmod(0o755)
@@ -87,6 +90,7 @@ class PackageTests(unittest.TestCase):
             expected_library = root / "expected.so"
             expected_library.write_bytes(library_data)
             observed_args = root / "setpriv-args"
+            cargo_args = root / "cargo-args"
             host_uid = os.getuid() + 1
             host_gid = os.getgid() + 1
             env = dict(
@@ -95,6 +99,7 @@ class PackageTests(unittest.TestCase):
                 HOST_GID=str(host_gid),
                 EXPECTED_LIBRARY=str(expected_library),
                 SET_PRIV_ARGS=str(observed_args),
+                CARGO_ARGS=str(cargo_args),
                 PATH=str(bin_dir) + os.pathsep + os.environ["PATH"],
             )
             result = subprocess.run(
@@ -108,6 +113,8 @@ class PackageTests(unittest.TestCase):
                 cwd=ROOT, env=env, text=True, capture_output=True, check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(observed_args.exists(), "admission verifier did not run via setpriv")
+            self.assertFalse(cargo_args.exists(), "prebuilt verifier unexpectedly invoked Cargo")
             actual_args = observed_args.read_text().splitlines()
             self.assertEqual(
                 actual_args[:7],
