@@ -14,6 +14,39 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 
 class PackageTests(unittest.TestCase):
+    def test_arch_package_install_disables_only_landlock_filesystem_sandbox(self):
+        """Pacman gets the filesystem-only sandbox exception in nested Arch builds."""
+        target = ROOT / "target"; target.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=target) as directory:
+            root = Path(directory)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            bash = shutil.which("bash")
+            self.assertIsNotNone(bash)
+            (bin_dir / "bash").symlink_to(bash)
+            capture = root / "pacman-args"
+            pacman = bin_dir / "pacman"
+            pacman.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$PACMAN_ARGS\"\n")
+            pacman.chmod(0o755)
+            env = {"PATH": str(bin_dir), "PACMAN_ARGS": str(capture)}
+            result = subprocess.run(
+                [str(ROOT / "scripts/install-distro-packages.sh")],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            args = capture.read_text().splitlines()
+            self.assertIn("--disable-sandbox-filesystem", args)
+            self.assertNotIn("--disable-sandbox", args)
+            self.assertEqual(
+                args,
+                ["-Syu", "--disable-sandbox-filesystem", "--noconfirm", "base-devel", "cmake",
+                 "curl", "git", "gzip", "jq", "openssl", "perl", "util-linux"],
+            )
+
     def test_archive_accepts_dotted_release_host_key_and_attests_library(self):
         """Package a dotted release host key and preserve the archive attestation."""
         target = ROOT / "target"; target.mkdir(exist_ok=True)
