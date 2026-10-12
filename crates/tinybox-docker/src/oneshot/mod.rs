@@ -329,7 +329,7 @@ impl DockerCli {
                     timed_out: false,
                 })
             }
-            Ok(Err(e)) => { eprintln!("PR60 Docker startup: {e:?}"); Err(e) },
+            Ok(Err(e)) => Err(e),
             Err(_) => Ok(OneShotOutcome {
                 exit_code: -1,
                 stdout: String::new(),
@@ -372,7 +372,7 @@ impl DockerCli {
             .stderr(Stdio::null())
             .kill_on_drop(true)
             .output()
-            .await.map_err(|e| { eprintln!("PR60 Docker listing: {e:?}"); e })?;
+            .await?;
 
         if checked && !output.status.success() {
             return Err(io::Error::other("Docker container listing failed"));
