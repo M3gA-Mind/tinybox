@@ -49,6 +49,18 @@ struct BoxService {
     resources: std::sync::Arc<resources::Resources>,
 }
 
+/// Serialize resolved grant paths without replacing invalid UTF-8 bytes.
+fn grant_paths_to_wire(paths: Vec<std::path::PathBuf>) -> TinyBusResult<Vec<String>> {
+    paths
+        .into_iter()
+        .map(|path| {
+            path.into_os_string().into_string().map_err(|_| {
+                resources::failure(tinybox_bus::INVALID_FILE_PATH, "grant path is not UTF-8")
+            })
+        })
+        .collect()
+}
+
 #[tinybus::interface(name = "ai.tinyhumans.tinybox.Box")]
 impl BoxService {
     /// Return detailed generic shell facts for caller-owned execution policy.
@@ -95,30 +107,8 @@ impl BoxService {
             ));
         }
         Ok(tinybox_bus::LocalGrants {
-            read_only: grants
-                .read_only
-                .into_iter()
-                .map(|path| {
-                    path.into_os_string().into_string().map_err(|_| {
-                        resources::failure(
-                            tinybox_bus::INVALID_FILE_PATH,
-                            "grant path is not UTF-8",
-                        )
-                    })
-                })
-                .collect::<TinyBusResult<Vec<_>>>()?,
-            read_write: grants
-                .read_write
-                .into_iter()
-                .map(|path| {
-                    path.into_os_string().into_string().map_err(|_| {
-                        resources::failure(
-                            tinybox_bus::INVALID_FILE_PATH,
-                            "grant path is not UTF-8",
-                        )
-                    })
-                })
-                .collect::<TinyBusResult<Vec<_>>>()?,
+            read_only: grant_paths_to_wire(grants.read_only)?,
+            read_write: grant_paths_to_wire(grants.read_write)?,
         })
     }
     /// Report native jail enforcement facts without starting a workload.
