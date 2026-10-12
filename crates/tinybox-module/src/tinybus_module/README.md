@@ -45,8 +45,11 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | FinishFileWrite | FinishFileWriteRequest | FileWriteProgress |
 | AbortFileWrite | AbortFileWriteRequest | unit |
 | ResolveLocalGrants | ResolveLocalGrantsRequest | LocalGrants |
+| SelectShell | SelectShellRequest | ShellInvocation |
+| StartShellExec | SpawnRequest, SelectShellRequest | ProcessRef |
+| StartNativeShellExec | ShellExecRequest | ProcessRef |
 
-Capabilities advertises contract version 1.11; 1.0 denotes the original
+Capabilities advertises contract version 1.14; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -320,3 +323,45 @@ It does not install a kernel deny rule for filenames created later.
 Git include aliases retain their logical parent. Empty XDG_CONFIG_HOME is
 unset; unsupported ~user/ and %(prefix)/ expansion rejects complete discovery.
 [Contract specification](../../../../docs/specs/local-grants.md).
+
+### Platform shell discovery
+
+Contract 1.12 adds `SelectShell`. The request carries command text and an optional
+pipeline-status preservation flag. Unix selects Bash at a standard path with
+`set -o pipefail` by default, or /bin/sh without that Bash-only flag when Bash is
+absent. Unix uses non-login `-c` to avoid loading login profiles before the
+payload. Windows selects `SystemRoot/System32/cmd.exe` from the parent
+environment independently of payload PATH and COMSPEC overrides. Its
+`/D /E:ON /V:OFF /S /C` switches disable registry AutoRun hooks and strip one
+explicit outer wrapper around the raw command-line payload.
+Quoted executable/argument pairs, redirection paths and percent expansion remain
+inside that wrapper.
+The result includes Windows bootstrap environment names, never their values.
+Selection does not execute a command, authorize access or provide confinement;
+hosts continue to execute through the module. Native providers can use the
+shared quote-preserving TinyBox command builder.
+
+Windows explicitly enables extensions and disables delayed expansion.
+Unix builders remove BASH_ENV, ENV, SHELLOPTS, BASHOPTS and POSIXLY_CORRECT;
+ShellInvocation returns those removal names. Bash uses -p to ignore exported functions.
+Discovery checks standard Bash paths on every call. Providers apply the
+removals after approved environment overrides.
+
+Contract 1.13 adds `StartShellExec(SpawnRequest, SelectShellRequest)`. Supply an
+empty argv in SpawnRequest; its resource, cwd, environment and stdin retain
+their usual meaning. This operation supports local passthrough resources only,
+because selection describes the module machine's shell. It uses the native
+builder, including Windows raw arguments, and the existing supervised bounded
+output, cancellation and cleanup lifecycle. Read and release its journal with
+ReadOutput and ReleaseOutput. Retries must preserve both requests exactly.
+
+## Native shell execution
+
+Contract 1.14 adds `StartNativeShellExec(ShellExecRequest) -> ProcessRef` for local
+passthrough resources. It composes platform shell selection with safe parent
+environment snapshots, approved overrides, private scratch, bounded pipes and
+owned timeout/cancellation cleanup. `ReadOutput` retains scratch until
+`ReleaseOutput` or resource close acknowledges cleanup. Explicit native jail
+requests refuse unavailable enforcement; remote/Docker providers refuse this
+operation. State directory authorization and Windows private parent ACLs belong
+to the caller. See [the native shell contract](../../../docs/specs/native-shell-execution.md).

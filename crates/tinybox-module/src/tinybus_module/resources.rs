@@ -129,6 +129,8 @@ pub(super) struct Resources {
     state: Mutex<State>,
     executions: std::sync::Mutex<Executions>,
     streams: std::sync::Mutex<BTreeMap<ResourceId, Arc<stream::StreamExecution>>>,
+    rejected_shells: Mutex<Vec<(ResourceId, Arc<super::native_shell::ShellContext>)>>,
+    preparations: tokio::sync::Semaphore,
 }
 
 #[derive(Default)]
@@ -155,6 +157,8 @@ impl Default for Resources {
             state: Mutex::default(),
             executions: std::sync::Mutex::default(),
             streams: std::sync::Mutex::default(),
+            rejected_shells: Mutex::default(),
+            preparations: tokio::sync::Semaphore::new(stream::MAX_STREAM_EXECUTIONS),
         }
     }
 }
@@ -1192,7 +1196,7 @@ impl Resources {
     pub(super) async fn close(&self, resource: &ResourceId) -> Result<()> {
         validate_id(resource)?;
         let Some(slot) = self.begin_close(resource).await? else {
-            return Ok(());
+            return self.dispose_rejected_shells(Some(resource)).await;
         };
         let mut slot = slot.lock().await;
         let mut failure = self.close_streams(resource).await.err();
@@ -1261,6 +1265,9 @@ impl Resources {
                     .map_err(|error| backend_error(&error))?;
                 entry.sandbox_destroyed = true;
             }
+        }
+        if let Err(error) = self.dispose_rejected_shells(Some(resource)).await {
+            failure.get_or_insert(error);
         }
         *slot = None;
         self.state.lock().await.entries.remove(resource);
@@ -1366,6 +1373,9 @@ impl Resources {
                 break;
             }
             finished.await;
+        }
+        if let Err(error) = self.dispose_rejected_shells(None).await {
+            failure.get_or_insert(error);
         }
         failure.map_or(Ok(()), Err)
     }

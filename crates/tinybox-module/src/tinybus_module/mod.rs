@@ -18,6 +18,7 @@ use tinybox_bus::{
 
 mod docker;
 mod native_jail;
+mod native_shell;
 mod output;
 mod resources;
 
@@ -69,6 +70,13 @@ impl BoxService {
         command: String,
     ) -> TinyBusResult<tinybox_bus::CommandAnalysis> {
         std::future::ready(Ok(tinybox_core::shell::analysis::analyze_command(&command))).await
+    }
+    /// Discover the module machine's shell syntax and invocation plan.
+    async fn select_shell(
+        &self,
+        request: tinybox_bus::SelectShellRequest,
+    ) -> TinyBusResult<tinybox_bus::ShellInvocation> {
+        std::future::ready(Ok(tinybox_host::select_shell(&request))).await
     }
     /// Discover canonical grants using the caller's protected-path floor.
     async fn resolve_local_grants(
@@ -257,6 +265,31 @@ impl BoxService {
         let resources = self.resources.clone();
         finish_operation(tokio::spawn(async move {
             resources.start_jailed_exec(request, config).await
+        }))
+        .await
+    }
+
+    /// Execute platform shell text using the original two-argument contract.
+    async fn start_shell_exec(
+        &self,
+        request: SpawnRequest,
+        shell: tinybox_bus::SelectShellRequest,
+    ) -> TinyBusResult<ProcessRef> {
+        let resources = self.resources.clone();
+        finish_operation(tokio::spawn(async move {
+            resources.start_platform_shell_exec(request, shell).await
+        }))
+        .await
+    }
+
+    /// Start a shell with module-owned environment, scratch and supervision.
+    async fn start_native_shell_exec(
+        &self,
+        request: tinybox_bus::ShellExecRequest,
+    ) -> TinyBusResult<ProcessRef> {
+        let resources = self.resources.clone();
+        finish_operation(tokio::spawn(async move {
+            resources.start_shell_exec(request).await
         }))
         .await
     }
@@ -474,7 +507,7 @@ tinybus_module::module_export_optional_static! {
     setup = setup,
     worker_threads = 1,
     provides = ["ai.tinyhumans.tinybox.Box"],
-    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput", "StartJailedExec", "RunDocker", "DockerStatus", "CleanupDocker", "RunDockerWithoutWorkspace", "ResolveLocalGrants"],
+    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput", "StartJailedExec", "RunDocker", "DockerStatus", "CleanupDocker", "RunDockerWithoutWorkspace", "ResolveLocalGrants", "SelectShell", "StartShellExec", "StartNativeShellExec"],
     signals = [],
     requires = [],
     optional = [],
