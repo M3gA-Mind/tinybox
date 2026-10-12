@@ -364,10 +364,6 @@ fn failure(operation: &'static str, message: String) -> Error {
     }
 }
 
-#[cfg(all(test, unix))]
-#[path = "jailed_tests.rs"]
-mod tests;
-
 #[cfg(unix)]
 async fn kill_jail_group<F>(
     group: i32,
@@ -385,3 +381,7 @@ where
         Err(error) => Err(failure("kill jail group", error.to_string())),
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "jailed_tests.rs"]
+mod tests;
