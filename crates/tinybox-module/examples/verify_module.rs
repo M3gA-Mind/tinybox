@@ -4,7 +4,10 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use tinybox_bus::{CreateRequest, ExecOutput, ExecRequest, ResourceInfo, ShellAnalysis, Workspace};
+use tinybox_bus::{
+    CreateRequest, ExecOutput, ExecRequest, LocalGrantConfig, LocalGrants, ProtectedPaths,
+    ResolveLocalGrantsRequest, ResourceInfo, ShellAnalysis, Workspace,
+};
 use tinybus::Connection;
 use tinybus::broker::Broker;
 use tinybus::module::ModuleHost;
@@ -90,6 +93,7 @@ async fn verify_resources(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::err
     if !tinybox_bus::is_compatible(capabilities.contract_version) {
         return Err(io::Error::other("artifact contract version mismatch").into());
     }
+    verify_local_grants(proxy).await?;
     let jail: tinybox_bus::JailStatus = proxy.call("JailStatus", ()).await?;
     if jail.backend.is_empty()
         || ((!jail.available || jail.isolation == "none") && jail.suitable_for_untrusted_code)
@@ -132,6 +136,37 @@ async fn verify_resources(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::err
         .is_ok()
     {
         return Err(io::Error::other("shutdown admitted a new resource").into());
+    }
+    Ok(())
+}
+
+/// Exercise contract 1.11 grant discovery through the loaded native artifact.
+async fn verify_local_grants(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    let allowed = home.path().join("allowed");
+    std::fs::create_dir(&allowed)?;
+    let allowed = allowed
+        .canonicalize()?
+        .into_os_string()
+        .into_string()
+        .map_err(|_| io::Error::other("verifier path is not UTF-8"))?;
+    let request = ResolveLocalGrantsRequest {
+        home: Some(
+            home.path()
+                .to_str()
+                .ok_or_else(|| io::Error::other("verifier home is not UTF-8"))?
+                .to_owned(),
+        ),
+        config: LocalGrantConfig {
+            toolchain_homes: false,
+            extra_read_only: vec![allowed.clone()],
+            ..LocalGrantConfig::default()
+        },
+        protected: ProtectedPaths::default(),
+    };
+    let grants: LocalGrants = proxy.call("ResolveLocalGrants", (request,)).await?;
+    if grants.read_only != [allowed] || !grants.read_write.is_empty() {
+        return Err(io::Error::other("unexpected local grant discovery result").into());
     }
     Ok(())
 }
