@@ -147,12 +147,75 @@ impl LimitedLocalHost {
 }
 
 impl LimitedLocalHost {
+    /// Execute platform shell text with the ordinary output and cleanup supervisor.
+    /// The request supplies cwd, environment and stdin; its argv is unused.
+    ///
+    /// # Errors
+    /// Returns native startup, output-limit and cleanup errors just like observed argv execution.
+    pub async fn run_shell_observed(
+        &self,
+        request: &ExecRequest,
+        shell: &tinybox_bus::SelectShellRequest,
+        observer: Arc<dyn ExecutionObserver>,
+    ) -> Result<ExecOutput> {
+        let mut command = crate::build_shell_command(shell);
+        command.envs(&request.env);
+        if let Some(cwd) = &request.cwd {
+            command.current_dir(cwd);
+        }
+        command.stdin(if request.stdin.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        });
+        // Apply startup removals after provider/caller environment overrides.
+        for name in crate::select_shell(shell).remove_environment {
+            command.env_remove(name);
+        }
+        let mut command = tokio::process::Command::from(command);
+        command.kill_on_drop(true);
+        self.collect_command(command, request.stdin.clone(), Some(observer))
+            .await
+    }
+
     async fn collect(
         &self,
         request: &ExecRequest,
         observer: Option<Arc<dyn ExecutionObserver>>,
     ) -> Result<ExecOutput> {
-        let mut command = LocalHost::command(request)?;
+        self.collect_command(
+            LocalHost::command(request)?,
+            request.stdin.clone(),
+            observer,
+        )
+        .await
+    }
+
+    /// Collect a prepared native command with the same bounded ownership as argv execution.
+    /// The provider supplies its approved environment and working directory.
+    /// # Errors
+    /// Reports spawn, pipe, output-budget and retained native cleanup failures.
+    pub async fn run_command_observed(
+        &self,
+        command: std::process::Command,
+        payload: Option<Vec<u8>>,
+        observer: Arc<dyn ExecutionObserver>,
+    ) -> Result<ExecOutput> {
+        let mut command = tokio::process::Command::from(command);
+        command.kill_on_drop(true).stdin(if payload.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        });
+        self.collect_command(command, payload, Some(observer)).await
+    }
+
+    async fn collect_command(
+        &self,
+        mut command: tokio::process::Command,
+        payload: Option<Vec<u8>>,
+        observer: Option<Arc<dyn ExecutionObserver>>,
+    ) -> Result<ExecOutput> {
         process::prepare(&mut command)?;
         command
             .stdout(std::process::Stdio::piped())
@@ -169,7 +232,6 @@ impl LimitedLocalHost {
         let stdout = pipe(process::take_stdout(&mut child), "stdout")?;
         let stderr = pipe(process::take_stderr(&mut child), "stderr")?;
         let stdin = process::take_stdin(&mut child);
-        let payload = request.stdin.clone();
         let budget = Arc::new(AtomicUsize::new(0));
         let limit = self.limit;
         let state = self.state.clone();

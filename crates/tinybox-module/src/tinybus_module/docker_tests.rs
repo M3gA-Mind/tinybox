@@ -9,6 +9,70 @@ use tinybox_docker::DockerCli;
 
 use super::*;
 
+/// Publish a fake CLI and wait out write handles inherited by concurrent forks.
+fn write_cli_fixture(path: &Path, script: impl AsRef<str>) -> std::io::Result<std::path::PathBuf> {
+    let script = script.as_ref().replacen(
+        "#!/bin/sh\n",
+        "#!/bin/sh\n[ \"$1\" = --tinybox-probe ] && exit 0\n",
+        1,
+    );
+    // Execute an immutable launcher: inherited writers can safely retain the
+    // generated script body because the shell reads it as data.
+    let body = path.with_extension("script");
+    std::fs::write(&body, script)?;
+    std::os::unix::fs::symlink(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/docker-cli.sh"),
+        path,
+    )?;
+    probe_cli_fixture(|| {
+        std::process::Command::new(path)
+            .arg("--tinybox-probe")
+            .status()
+    })?;
+    Ok(body)
+}
+
+/// Confirm the fixture is executable without recording a Docker invocation.
+fn probe_cli_fixture(
+    mut probe: impl FnMut() -> std::io::Result<std::process::ExitStatus>,
+) -> std::io::Result<()> {
+    // Forked children can retain a writer until exec. Successful execution
+    // proves the writer is gone; ETXTBSY alone is retryable, without a deadline.
+    loop {
+        match probe() {
+            Err(error) if error.raw_os_error() == Some(26) => {
+                std::thread::yield_now();
+            }
+            result => {
+                let status = result?;
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::other("fake Docker CLI probe failed"))
+                };
+            }
+        }
+    }
+}
+
+#[test]
+fn fixture_probe_waits_for_inherited_writers_without_an_attempt_limit() -> std::io::Result<()> {
+    use std::os::unix::process::ExitStatusExt;
+    let mut busy = 300;
+    probe_cli_fixture(|| {
+        if busy > 0 {
+            busy -= 1;
+            Err(std::io::Error::from_raw_os_error(26))
+        } else {
+            Ok(std::process::ExitStatus::from_raw(0))
+        }
+    })?;
+    assert_eq!(busy, 0);
+    assert!(probe_cli_fixture(|| Err(std::io::Error::from_raw_os_error(2))).is_err());
+    assert!(probe_cli_fixture(|| Ok(std::process::ExitStatus::from_raw(256))).is_err());
+    Ok(())
+}
+
 fn canonical(path: &Path) -> std::io::Result<String> {
     path.canonicalize().map(|path| path.display().to_string())
 }
@@ -24,7 +88,7 @@ async fn docker_status_uses_the_module_owned_cli_probe()
     let temp = tempfile::tempdir()?;
     let calls = temp.path().join("calls");
     let script_path = temp.path().join("docker");
-    write_fake_cli(
+    write_cli_fixture(
         &script_path,
         format!(
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n[ \"$1\" = info ] && exit 0\nexit 1\n",
@@ -51,7 +115,7 @@ async fn docker_status_reports_an_unavailable_daemon_without_failing_the_probe()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
     let script_path = temp.path().join("docker");
-    write_fake_cli(&script_path, "#!/bin/sh\nexit 1\n")?;
+    write_cli_fixture(&script_path, "#!/bin/sh\nexit 1\n")?;
 
     let status = status_with_cli(
         &DockerCli::with_program(&script_path),
@@ -69,7 +133,7 @@ async fn docker_cleanup_only_kills_ids_returned_for_the_requested_label()
     let temp = tempfile::tempdir()?;
     let calls = temp.path().join("calls");
     let script_path = temp.path().join("docker");
-    write_fake_cli(
+    write_cli_fixture(
         &script_path,
         format!(
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nif [ \"$1\" = ps ]; then printf 'box-a\\nbox-b\\n'; exit 0; fi\n[ \"$1\" = kill ] && exit 0\nexit 1\n",
@@ -99,7 +163,7 @@ async fn docker_cleanup_reports_failed_kill_instead_of_claiming_stopped()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
     let script_path = temp.path().join("docker");
-    write_fake_cli(
+    write_cli_fixture(
         &script_path,
         "#!/bin/sh\n[ \"$1\" = ps ] && { printf 'box-a\\n'; exit 0; }\n[ \"$1\" = kill ] && exit 1\nexit 2\n",
     )?;
@@ -128,7 +192,7 @@ async fn docker_cleanup_does_not_kill_ids_from_a_failed_listing()
     let temp = tempfile::tempdir()?;
     let calls = temp.path().join("calls");
     let script_path = temp.path().join("docker");
-    write_fake_cli(
+    write_cli_fixture(
         &script_path,
         format!(
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n[ \"$1\" = ps ] && {{ printf 'box-a\\n'; exit 1; }}\nexit 0\n",
@@ -164,7 +228,7 @@ async fn docker_cleanup_with_no_matching_containers_does_not_kill()
     let temp = tempfile::tempdir()?;
     let calls = temp.path().join("calls");
     let script_path = temp.path().join("docker");
-    write_fake_cli(
+    write_cli_fixture(
         &script_path,
         format!(
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n[ \"$1\" = ps ] && exit 0\nexit 2\n",
@@ -195,7 +259,7 @@ async fn docker_control_rejects_invalid_deadline_and_label_before_cli_call()
     let temp = tempfile::tempdir()?;
     let calls = temp.path().join("calls");
     let script_path = temp.path().join("docker");
-    write_fake_cli(
+    write_cli_fixture(
         &script_path,
         format!(
             "#!/bin/sh\nprintf called >> '{}'\nexit 0\n",
@@ -247,7 +311,7 @@ async fn run_docker_preserves_one_shot_settings_output_and_timeout()
     std::fs::create_dir_all(&readonly)?;
     let argv_file = temp.path().join("argv.bin");
     let script_path = temp.path().join("docker");
-    write_fake_cli(
+    write_cli_fixture(
         &script_path,
         format!(
             "#!/bin/sh\n: > '{}'\nfor a in \"$@\"; do printf '%s\\0' \"$a\" >> '{}'; done\nprintf out\nprintf err >&2\nexit 3\n",
@@ -310,7 +374,7 @@ async fn run_without_workspace_preserves_docker_settings_without_host_mounts()
     let temp = tempfile::tempdir()?;
     let argv_file = temp.path().join("argv.bin");
     let script_path = temp.path().join("docker");
-    write_fake_cli(
+    write_cli_fixture(
         &script_path,
         format!(
             "#!/bin/sh\n: > '{}'\nfor a in \"$@\"; do printf '%s\\0' \"$a\" >> '{}'; done\nprintf out\nprintf err >&2\nexit 0\n",
@@ -410,24 +474,12 @@ fn no_workspace_request_rejects_an_ambiguous_workspace_path()
     Ok(())
 }
 
-fn write_fake_cli(path: &Path, script: impl AsRef<[u8]>) -> std::io::Result<std::path::PathBuf> {
-    // Forks in parallel tests can briefly inherit a script writer. Execute an
-    // immutable launcher and source the generated body instead of execing it.
-    let body = path.with_extension("script");
-    std::fs::write(&body, script)?;
-    std::os::unix::fs::symlink(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/docker-cli.sh"),
-        path,
-    )?;
-    Ok(body)
-}
-
 #[tokio::test]
 async fn docker_fixture_runs_while_an_inherited_script_writer_is_open()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
     let script_path = temp.path().join("docker");
-    let body = write_fake_cli(&script_path, "#!/bin/sh\nexit 0\n")?;
+    let body = write_cli_fixture(&script_path, "#!/bin/sh\nexit 0\n")?;
     // A concurrently forked process can retain a writer until its exec.
     let writer = std::fs::OpenOptions::new().write(true).open(body)?;
     let status = status_with_cli(

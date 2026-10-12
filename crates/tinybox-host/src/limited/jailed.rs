@@ -171,6 +171,34 @@ impl JailLocalHost {
         let mut command = crate::LocalHost::command(request)?.into_std();
         // The host explicitly supplies the approved environment for jailed code.
         command.env_clear().envs(&request.env);
+        self.collect_command(command, request.stdin.clone(), observer)
+            .await
+    }
+
+    /// Collect a prepared shell inside this host's explicit native jail.
+    /// The caller clears and supplies the approved environment before invocation.
+    /// # Errors
+    /// Reports unavailable spawn, output bounds and retained kill/reap failures.
+    pub async fn run_command_observed(
+        &self,
+        mut command: std::process::Command,
+        payload: Option<Vec<u8>>,
+        observer: Arc<dyn ExecutionObserver>,
+    ) -> Result<ExecOutput> {
+        command.stdin(if payload.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        });
+        self.collect_command(command, payload, Some(observer)).await
+    }
+
+    async fn collect_command(
+        &self,
+        mut command: std::process::Command,
+        payload: Option<Vec<u8>>,
+        observer: Option<Arc<dyn ExecutionObserver>>,
+    ) -> Result<ExecOutput> {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -181,7 +209,6 @@ impl JailLocalHost {
             .stderr(std::process::Stdio::piped());
         let jail = self.jail.clone();
         let backend = self.backend.clone();
-        let payload = request.stdin.clone();
         let state = self.state.clone();
         let limit = self.limit;
         let runtime = tokio::runtime::Handle::try_current()

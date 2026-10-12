@@ -21,6 +21,11 @@ pub use grants::{LocalGrantConfig, LocalGrants, ProtectedPaths, ResolveLocalGran
 mod jail;
 pub use jail::{JailEnforcement, NativeJailConfig};
 
+mod shell_execution;
+mod shell_selection;
+pub use shell_execution::ShellExecRequest;
+pub use shell_selection::{SelectShellRequest, ShellFlavor, ShellInvocation};
+
 mod shell;
 pub use shell::{CommandAnalysis, CommandClass, CommandSegment};
 mod files;
@@ -42,8 +47,10 @@ pub use files::{
 /// bounded, module-owned one-shot Docker operation. 1.9 adds bounded Docker
 /// daemon status and label-scoped cleanup operations. 1.10 adds a bounded
 /// Docker command that does not mount a host workspace. 1.11 adds local grant
-/// discovery.
-pub const CONTRACT_VERSION: (u32, u32) = (1, 11);
+/// discovery. 1.12 adds platform shell selection. 1.13 adds supervised native
+/// shell execution on local passthrough resources.
+/// 1.14 adds native shell execution with owned scratch, timeout and optional jail.
+pub const CONTRACT_VERSION: (u32, u32) = (1, 14);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.
@@ -117,6 +124,9 @@ pub const METHODS: &[&str] = &[
     "CleanupDocker",
     "RunDockerWithoutWorkspace",
     "ResolveLocalGrants",
+    "SelectShell",
+    "StartShellExec",
+    "StartNativeShellExec",
 ];
 
 /// Facts about the detected native directory-jail backend.
@@ -554,3 +564,6 @@ mod tests;
 
 mod output;
 pub use output::{ExecutionFailure, ExecutionState, OutputBatch, OutputChunk, OutputStream};
+
+/// Invalid native shell execution inputs.
+pub const INVALID_SHELL_EXEC: &str = "ai.tinyhumans.tinybox.Error.InvalidShellExec";

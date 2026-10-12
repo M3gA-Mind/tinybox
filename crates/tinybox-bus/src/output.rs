@@ -27,6 +27,8 @@ pub struct OutputChunk {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionFailure {
+    /// The runtime budget elapsed; supervised native cleanup is acknowledged.
+    TimedOut,
     /// The native operation could not start.
     StartFailed,
     /// Combined output exceeded the execution budget.

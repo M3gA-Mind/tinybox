@@ -272,3 +272,35 @@ async fn cleanup_retry_does_not_wait_for_or_cancel_an_active_local_execution() -
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn observed_shell_keeps_cwd_environment_stdin_and_output_limits() -> Result<()> {
+    let root = tempfile::tempdir().map_err(|error| Error::io("create fixture", &error))?;
+    let host = LimitedLocalHost::new(64);
+    let request = ExecRequest::new(Vec::<String>::new())
+        .with_cwd(root.path())
+        .with_env("TINYBOX_SHELL_VALUE", "fixture")
+        .with_env("SHELLOPTS", "errexit")
+        .with_stdin("input");
+    let shell = tinybox_bus::SelectShellRequest {
+        command: "false; printf '%s:' \"$TINYBOX_SHELL_VALUE\"; cat; printf file > result.txt"
+            .into(),
+        preserve_pipeline_status: false,
+    };
+    let output = host
+        .run_shell_observed(&request, &shell, Arc::new(Observer::default()))
+        .await?;
+    assert!(output.succeeded());
+    assert_eq!(output.stdout, b"fixture:input");
+    assert!(root.path().join("result.txt").is_file());
+    let error = LimitedLocalHost::new(1)
+        .run_shell_observed(&request, &shell, Arc::new(Observer::default()))
+        .await
+        .err();
+    assert!(matches!(
+        error,
+        Some(Error::OutputLimitExceeded { limit: 1 })
+    ));
+    host.drain_checked().await?;
+    Ok(())
+}

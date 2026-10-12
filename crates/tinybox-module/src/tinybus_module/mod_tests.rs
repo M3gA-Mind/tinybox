@@ -1045,3 +1045,210 @@ async fn unsupported_git_include_expansions_refuse_the_whole_discovery()
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn native_shell_selection_and_execution_roundtrip_through_the_bus_codec()
+-> Result<(), Box<dyn std::error::Error>> {
+    let state = tempfile::tempdir()?;
+    let bus = MemoryBus::new();
+    Broker::new().spawn(bus.clone());
+    let service = Connection::connect(bus.connect().await?).await?;
+    setup(service.clone()).await?;
+    let client = Connection::connect(bus.connect().await?).await?;
+    let proxy = client.proxy(INTERFACE, OBJECT_PATH, INTERFACE)?;
+    let shell = tinybox_bus::SelectShellRequest {
+        command: "echo native".into(),
+        preserve_pipeline_status: false,
+    };
+    let selection: tinybox_bus::ShellInvocation =
+        proxy.call("SelectShell", (shell.clone(),)).await?;
+    assert_eq!(selection, tinybox_host::select_shell(&shell));
+    let resource: tinybox_bus::ResourceId = proxy
+        .call("Reserve", (tinybox_bus::ReserveRequest::Resource,))
+        .await?;
+    proxy
+        .call::<tinybox_bus::ResourceInfo>(
+            "Create",
+            (tinybox_bus::CreateRequest {
+                resource: resource.clone(),
+                backend: "passthrough".into(),
+                workspace: tinybox_bus::Workspace::Directory(".".into()),
+                ..Default::default()
+            },),
+        )
+        .await?;
+    let process = proxy
+        .call(
+            "Reserve",
+            (tinybox_bus::ReserveRequest::Process(resource.clone()),),
+        )
+        .await?;
+    let process: tinybox_bus::ProcessRef = proxy
+        .call(
+            "StartNativeShellExec",
+            (tinybox_bus::ShellExecRequest {
+                process,
+                resource: resource.clone(),
+                shell,
+                cwd: None,
+                extra_env: std::collections::BTreeMap::new(),
+                state_dir: state.path().to_str().ok_or("non-UTF8 state")?.into(),
+                timeout_ms: 5000,
+                stdin: None,
+                jail: None,
+            },),
+        )
+        .await?;
+    let output = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let batch: tinybox_bus::OutputBatch =
+                proxy.call("ReadOutput", (process.clone(), 0_u64)).await?;
+            if batch.state != tinybox_bus::ExecutionState::Running {
+                break Ok::<_, tinybus::Error>(batch);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    assert_eq!(
+        output.state,
+        tinybox_bus::ExecutionState::Exited { exit_code: 0 }
+    );
+    let bytes: Vec<u8> = output
+        .chunks
+        .iter()
+        .flat_map(|chunk| chunk.bytes.clone())
+        .collect();
+    assert_eq!(String::from_utf8_lossy(&bytes).trim(), "native");
+    proxy.call::<()>("ReleaseOutput", (process,)).await?;
+    assert_eq!(
+        std::fs::read_dir(state.path().join("artifacts/sandbox-scratch"))?.count(),
+        0
+    );
+    proxy.call::<()>("Close", (resource,)).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn existing_shell_method_keeps_its_two_argument_bus_codec()
+-> Result<(), Box<dyn std::error::Error>> {
+    let bus = MemoryBus::new();
+    Broker::new().spawn(bus.clone());
+    let service = Connection::connect(bus.connect().await?).await?;
+    setup(service.clone()).await?;
+    let client = Connection::connect(bus.connect().await?).await?;
+    let proxy = client.proxy(INTERFACE, OBJECT_PATH, INTERFACE)?;
+    let shell = tinybox_bus::SelectShellRequest {
+        command: "echo native".into(),
+        preserve_pipeline_status: false,
+    };
+    let selection: tinybox_bus::ShellInvocation =
+        proxy.call("SelectShell", (shell.clone(),)).await?;
+    assert_eq!(selection, tinybox_host::select_shell(&shell));
+    let resource: tinybox_bus::ResourceId = proxy
+        .call("Reserve", (tinybox_bus::ReserveRequest::Resource,))
+        .await?;
+    proxy
+        .call::<tinybox_bus::ResourceInfo>(
+            "Create",
+            (tinybox_bus::CreateRequest {
+                resource: resource.clone(),
+                backend: "passthrough".into(),
+                workspace: tinybox_bus::Workspace::Directory(".".into()),
+                ..Default::default()
+            },),
+        )
+        .await?;
+    let process = proxy
+        .call(
+            "Reserve",
+            (tinybox_bus::ReserveRequest::Process(resource.clone()),),
+        )
+        .await?;
+    let process: tinybox_bus::ProcessRef = proxy
+        .call(
+            "StartShellExec",
+            (
+                tinybox_bus::SpawnRequest {
+                    process,
+                    command: tinybox_bus::ExecRequest {
+                        resource: resource.clone(),
+                        argv: Vec::new(),
+                        cwd: None,
+                        env: std::collections::BTreeMap::new(),
+                        stdin: None,
+                    },
+                },
+                shell,
+            ),
+        )
+        .await?;
+    let output = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let batch: tinybox_bus::OutputBatch =
+                proxy.call("ReadOutput", (process.clone(), 0_u64)).await?;
+            if batch.state != tinybox_bus::ExecutionState::Running {
+                break Ok::<_, tinybus::Error>(batch);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    assert_eq!(
+        output.state,
+        tinybox_bus::ExecutionState::Exited { exit_code: 0 }
+    );
+    let bytes: Vec<u8> = output
+        .chunks
+        .iter()
+        .flat_map(|chunk| chunk.bytes.clone())
+        .collect();
+    assert_eq!(String::from_utf8_lossy(&bytes).trim(), "native");
+    proxy.call::<()>("ReleaseOutput", (process,)).await?;
+    proxy.call::<()>("Close", (resource,)).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn shell_discovery_preserves_the_requested_pipeline_status() -> tinybus::Result<()> {
+    let service = BoxService::default();
+    let selected = service
+        .select_shell(tinybox_bus::SelectShellRequest {
+            command: "false | true".into(),
+            preserve_pipeline_status: true,
+        })
+        .await?;
+    if cfg!(windows) {
+        assert_eq!(selected.flavor, tinybox_bus::ShellFlavor::Cmd);
+        assert_eq!(selected.raw_arguments.as_deref(), Some("\"false | true\""));
+    } else {
+        assert_eq!(selected.flavor, tinybox_bus::ShellFlavor::Posix);
+        assert_eq!(
+            selected.arguments.last().map(String::as_str),
+            Some("false | true")
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn docker_control_dispatch_rejects_unbounded_deadlines() {
+    let service = BoxService::default();
+    let status = service
+        .docker_status(tinybox_bus::DockerStatusRequest { timeout_ms: 0 })
+        .await;
+    assert!(
+        matches!(status, Err(tinybus::Error::MethodFailed { name, .. })
+        if name == tinybox_bus::INVALID_DOCKER_CONTROL)
+    );
+    let cleanup = service
+        .cleanup_docker(tinybox_bus::CleanupDockerRequest {
+            label: "openhuman.sandbox=true".into(),
+            timeout_ms: tinybox_bus::MAX_DOCKER_CONTROL_TIMEOUT_MS + 1,
+        })
+        .await;
+    assert!(
+        matches!(cleanup, Err(tinybus::Error::MethodFailed { name, .. })
+        if name == tinybox_bus::INVALID_DOCKER_CONTROL)
+    );
+}

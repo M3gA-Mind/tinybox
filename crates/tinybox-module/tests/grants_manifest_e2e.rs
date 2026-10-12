@@ -4,7 +4,7 @@ use std::time::Duration;
 use tinybus::{Connection, broker::Broker, module::ModuleHost, transport::memory::MemoryBus};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn compiled_manifest_admits_and_executes_local_grant_discovery()
+async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
 -> Result<(), Box<dyn std::error::Error>> {
     let built_artifact = compiled_artifact()?;
     // Cargo output inherits the checkout ACL on Windows, which need not meet
@@ -59,6 +59,7 @@ async fn compiled_manifest_admits_and_executes_local_grant_discovery()
         tinybox_bus::INTERFACE,
     )?;
     verify_discovery(&proxy).await?;
+    verify_native_shell(&proxy).await?;
     proxy.call::<()>("Shutdown", ()).await?;
     broker_task.abort();
     Ok(())
@@ -92,6 +93,45 @@ async fn verify_discovery(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::err
         ]
     );
     assert_eq!(result.read_write, Vec::<String>::new());
+    let selection: tinybox_bus::ShellInvocation = proxy
+        .call(
+            "SelectShell",
+            (tinybox_bus::SelectShellRequest {
+                command: "false | true".into(),
+                preserve_pipeline_status: false,
+            },),
+        )
+        .await?;
+    if cfg!(windows) {
+        assert_eq!(selection.flavor, tinybox_bus::ShellFlavor::Cmd);
+        let system_root = std::env::var_os("SystemRoot").map_or_else(
+            || std::path::PathBuf::from(r"C:\Windows"),
+            std::path::PathBuf::from,
+        );
+        assert_eq!(
+            std::path::Path::new(&selection.program),
+            system_root.join("System32").join("cmd.exe")
+        );
+        assert_eq!(selection.arguments, ["/D", "/E:ON", "/V:OFF", "/S", "/C"]);
+        assert_eq!(selection.raw_arguments.as_deref(), Some("\"false | true\""));
+    } else {
+        assert_eq!(selection.flavor, tinybox_bus::ShellFlavor::Posix);
+        assert!(selection.arguments.iter().any(|argument| argument == "-c"));
+        if selection.program.ends_with("bash") {
+            assert_eq!(selection.arguments[0], "-p");
+        }
+        assert_eq!(selection.raw_arguments, None);
+        assert_eq!(
+            selection.remove_environment,
+            [
+                "BASH_ENV",
+                "ENV",
+                "SHELLOPTS",
+                "BASHOPTS",
+                "POSIXLY_CORRECT"
+            ]
+        );
+    }
     for include in ["~other/shared.conf", "%(prefix)/shared.conf"] {
         std::fs::write(
             home.path().join(".gitconfig"),
@@ -115,24 +155,98 @@ async fn verify_discovery(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
+async fn verify_native_shell(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::error::Error>> {
+    let workspace = tempfile::tempdir()?;
+    let state_dir = tempfile::tempdir()?;
+    let resource: tinybox_bus::ResourceId = proxy
+        .call("Reserve", (tinybox_bus::ReserveRequest::Resource,))
+        .await?;
+    let _: tinybox_bus::ResourceInfo = proxy
+        .call(
+            "Create",
+            (tinybox_bus::CreateRequest {
+                resource: resource.clone(),
+                backend: "passthrough".into(),
+                workspace: tinybox_bus::Workspace::Directory(
+                    workspace.path().to_str().ok_or("non-UTF8 fixture")?.into(),
+                ),
+                ..Default::default()
+            },),
+        )
+        .await?;
+    let process: tinybox_bus::ResourceId = proxy
+        .call(
+            "Reserve",
+            (tinybox_bus::ReserveRequest::Process(resource.clone()),),
+        )
+        .await?;
+    #[cfg(windows)]
+    let payload = {
+        let executable = workspace.path().join("quoted fixture tool.exe");
+        std::fs::copy(std::env::current_exe()?, &executable)?;
+        format!(
+            "\"{}\" \"--list\" > \"{}\" & echo native-fixture",
+            executable.display(),
+            workspace.path().join("output (fixture).txt").display()
+        )
+    };
+    #[cfg(not(windows))]
+    let payload = "printf fixture > 'output (fixture).txt'; echo native-fixture";
+    let running: tinybox_bus::ProcessRef = proxy
+        .call(
+            "StartNativeShellExec",
+            (serde_json::json!({
+                "process":process, "resource":resource,
+                "shell":{"command":payload},
+                "state_dir":state_dir.path().to_str().ok_or("non-UTF8 fixture")?,
+                "timeout_ms":5000
+            }),),
+        )
+        .await?;
+    let batch = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let batch: tinybox_bus::OutputBatch =
+                proxy.call("ReadOutput", (running.clone(), 0_u64)).await?;
+            if batch.state != tinybox_bus::ExecutionState::Running {
+                return Ok::<_, tinybus::Error>(batch);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    assert_eq!(
+        batch.state,
+        tinybox_bus::ExecutionState::Exited { exit_code: 0 }
+    );
+    let stdout: Vec<u8> = batch
+        .chunks
+        .into_iter()
+        .filter(|chunk| chunk.stream == tinybox_bus::OutputStream::Stdout)
+        .flat_map(|chunk| chunk.bytes)
+        .collect();
+    let stdout = String::from_utf8(stdout)?;
+    assert!(stdout.trim().ends_with("native-fixture"));
+    let redirected = std::fs::read_to_string(workspace.path().join("output (fixture).txt"))?;
+    #[cfg(windows)]
+    assert!(redirected.contains("compiled_manifest_admits_and_executes_grant_and_shell_discovery"));
+    #[cfg(not(windows))]
+    assert_eq!(redirected, "fixture");
+    proxy.call::<()>("ReleaseOutput", (running,)).await?;
+    proxy.call::<()>("Close", (resource,)).await?;
+    Ok(())
+}
+
 fn compiled_artifact() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
-    let executable = std::env::current_exe()?;
-    let dependencies = executable
-        .parent()
-        .ok_or("integration test has no parent directory")?;
     let filename = format!(
         "{}tinybox{}",
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX
     );
-    // All-feature/static-link builds omit the dynamic ABI. Always build the
-    // dynamic variant separately: another validation command may replace the
-    // ordinary dependency artifact after Cargo releases its compilation lock.
-    let target = dependencies
-        .parent()
-        .and_then(std::path::Path::parent)
-        .ok_or("integration test has no target directory")?
-        .join("module-dynamic-proof");
+    // All-feature/static-link builds omit the dynamic ABI. Build a dynamic
+    // variant under this checkout: other PRs share ordinary Cargo artifacts
+    // and must not replace the module between its build and admission.
+    let target =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/module-dynamic-proof");
     let status = std::process::Command::new(env!("CARGO"))
         .args([
             "build",
