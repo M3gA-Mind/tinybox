@@ -69,6 +69,7 @@ fi
 [[ -x "$verifier_bin" ]] || { echo "module verifier is not executable: $verifier_bin" >&2; exit 2; }
 if [[ -n "$verify_uid" ]]; then
   command -v setpriv >/dev/null 2>&1 || { echo "setpriv is required for uid-aware module verification" >&2; exit 2; }
+  chown "$verify_uid:$verify_gid" "$work"
   setpriv --reuid "$verify_uid" --regid "$verify_gid" --clear-groups -- "$verifier_bin" "$library"
 else
   "$verifier_bin" "$library"
