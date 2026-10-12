@@ -13,6 +13,40 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 
 class PackageTests(unittest.TestCase):
+    def test_archive_accepts_dotted_release_host_key_and_attests_library(self):
+        """Package a dotted release host key and preserve the archive attestation."""
+        target = ROOT / "target"; target.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=target) as directory:
+            root = Path(directory); (root/"scripts").mkdir(); (root/"bin").mkdir()
+            shutil.copy2(ROOT/"scripts/build-module.sh", root/"scripts/build-module.sh")
+            for file in ["LICENSE", "README.md", "MODULE.md"]: (root/file).write_text("fixture")
+            cargo = root/"bin/cargo"
+            cargo.write_text(
+                "#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\n"
+                "root=Path.cwd()\n"
+                "if 'metadata' in sys.argv: print(json.dumps({'target_directory':str(root/'target')}))\n"
+                "else:\n"
+                " target=sys.argv[sys.argv.index('--target')+1]\n"
+                " output=root/'target'/target/'release'; output.mkdir(parents=True,exist_ok=True)\n"
+                " (output/'libtinybox.so').write_bytes(b'compiled-fixture')\n"
+            )
+            cargo.chmod(0o755)
+            env = dict(os.environ, PATH=str(root/"bin")+os.pathsep+os.environ["PATH"])
+            env.pop("CARGO_TARGET_DIR", None)
+            result = subprocess.run(
+                ["bash", str(ROOT/"scripts/build-module.sh"),
+                 "--crate", "tinybox-module", "--version", "0.1.22",
+                 "--target", "x86_64-unknown-linux-gnu", "--host", "ubuntu-24.04-x86_64"],
+                cwd=root, env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            archive = root/"release-assets/tinybox-0.1.22-ubuntu-24.04-x86_64.tar.gz"
+            with tarfile.open(archive) as package:
+                data = package.extractfile("./libtinybox.so").read()
+                manifest = tomllib.loads(package.extractfile("./modules.toml").read().decode())
+                self.assertEqual(data, b"compiled-fixture")
+                self.assertEqual(manifest, {"libtinybox.so": hashlib.sha256(data).hexdigest()})
+
     def test_archive_attests_host_library_bytes_from_a_symlinked_checkout(self):
         """Package the actual build script and verify the shipped bytes and attestation."""
         target = ROOT / "target"; target.mkdir(exist_ok=True)
