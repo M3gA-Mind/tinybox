@@ -55,9 +55,18 @@ class PackageTests(unittest.TestCase):
             root = Path(directory)
             bin_dir = root / "bin"
             bin_dir.mkdir()
+            events = root / "handoff-events"
+            chown_args = root / "chown-args"
+            chown = bin_dir / "chown"
+            chown.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CHOWN_ARGS\"\n"
+                "printf 'chown\\n' >> \"$HANDOFF_EVENTS\"\n"
+            )
+            chown.chmod(0o755)
             setpriv = bin_dir / "setpriv"
             setpriv.write_text(
                 "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SET_PRIV_ARGS\"\n"
+                "printf 'setpriv\\n' >> \"$HANDOFF_EVENTS\"\n"
                 "while [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n"
             )
             setpriv.chmod(0o755)
@@ -99,6 +108,8 @@ class PackageTests(unittest.TestCase):
                 HOST_GID=str(host_gid),
                 EXPECTED_LIBRARY=str(expected_library),
                 SET_PRIV_ARGS=str(observed_args),
+                CHOWN_ARGS=str(chown_args),
+                HANDOFF_EVENTS=str(events),
                 CARGO_ARGS=str(cargo_args),
                 PATH=str(bin_dir) + os.pathsep + os.environ["PATH"],
             )
@@ -115,6 +126,12 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(observed_args.exists(), "admission verifier did not run via setpriv")
             self.assertFalse(cargo_args.exists(), "prebuilt verifier unexpectedly invoked Cargo")
+            self.assertEqual(
+                events.read_text().splitlines(),
+                ["chown", "setpriv"],
+                "the extracted workspace must be handed to its owner before privilege drop",
+            )
+            actual_chown_args = chown_args.read_text().splitlines()
             actual_args = observed_args.read_text().splitlines()
             self.assertEqual(
                 actual_args[:7],
@@ -131,6 +148,10 @@ class PackageTests(unittest.TestCase):
             extracted_library = Path(actual_args[7])
             self.assertEqual(extracted_library.name, "libtinybox.so")
             self.assertEqual(extracted_library.parent.parent, ROOT / "target")
+            self.assertEqual(
+                actual_chown_args,
+                [f"{host_uid}:{host_gid}", str(extracted_library.parent)],
+            )
 
     def test_linux_verifier_rejects_archive_traversal_before_handoff(self):
         """Reject unsafe archive paths before invoking setpriv or the verifier."""
