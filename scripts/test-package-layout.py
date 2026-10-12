@@ -121,7 +121,7 @@ class PackageTests(unittest.TestCase):
                     str(verifier),
                 ],
             )
-            extracted_library = Path(actual_args[5])
+            extracted_library = Path(actual_args[7])
             self.assertEqual(extracted_library.name, "libtinybox.so")
             self.assertEqual(extracted_library.parent.parent, ROOT / "target")
 
