@@ -516,3 +516,40 @@ async fn cleanup_retry_does_not_wait_for_or_cancel_an_active_jailed_execution()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn jail_permission_error_after_group_exit_is_successful_cleanup()
+-> Result<(), Box<dyn std::error::Error>> {
+    kill_jail_group(42, |_| Ok(()), |_| async { Ok(true) }).await?;
+    kill_jail_group(
+        42,
+        |_| Err(nix::errno::Errno::ESRCH),
+        |_| async { Ok(true) },
+    )
+    .await?;
+    kill_jail_group(
+        42,
+        |_| Err(nix::errno::Errno::EPERM),
+        |_| async { Ok(false) },
+    )
+    .await?;
+    assert!(
+        kill_jail_group(
+            42,
+            |_| Err(nix::errno::Errno::EPERM),
+            |_| async { Ok(true) },
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        kill_jail_group(
+            42,
+            |_| Err(nix::errno::Errno::EPERM),
+            |_| async { Err(failure("observe jail group", "probe failed".into())) },
+        )
+        .await
+        .is_err()
+    );
+    Ok(())
+}

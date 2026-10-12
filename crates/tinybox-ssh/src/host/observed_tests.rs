@@ -1711,7 +1711,16 @@ fn generated_supervisor_keeps_grace_period_when_group_inspection_fails() -> Resu
     let fake_ps = format!("{fake_bin}/ps");
     std::fs::write(
         &fake_ps,
-        "#!/bin/sh\nprintf 'called\\n' >> \"$TINYBOX_TEST_PS_CALLS\"\nexit 1\n",
+        r#"#!/bin/sh
+group=$(cat "$TINYBOX_TEST_GROUP_FILE") || exit 2
+caller_group=$(awk '{print $5}' "/proc/$$/stat") || exit 2
+if [ "$caller_group" = "$group" ]; then
+  printf '%s\n' "$PPID" >> "$TINYBOX_TEST_PS_CALLS.child"
+else
+  printf '%s\n' "$PPID" >> "$TINYBOX_TEST_PS_CALLS"
+fi
+exit 1
+"#,
     )
     .map_err(|error| Error::io("write failing ps command", &error))?;
     let fake_sleep = format!("{fake_bin}/sleep");
@@ -1749,13 +1758,26 @@ fn generated_supervisor_keeps_grace_period_when_group_inspection_fails() -> Resu
 
     let calls = std::fs::read_to_string(&ps_calls)
         .map_err(|error| Error::io("read failing ps call log", &error))?;
+    let child_log = format!("{ps_calls}.child");
+    let child_calls = match std::fs::read_to_string(&child_log) {
+        Ok(calls) => calls,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(Error::io("read child process inspection log", &error)),
+    };
     let _ = std::fs::remove_file(&ps_calls);
+    let _ = std::fs::remove_file(&child_log);
     state.remove(&id);
     assert_eq!(output.status.code(), Some(7));
     assert_eq!(
         calls.lines().count(),
-        101,
-        "failed process inspection must retain the bounded TERM grace period"
+        100,
+        "failed process inspection must retain all supervisor TERM grace probes"
+    );
+    // The child can inspect its group once after recording status, unless TERM
+    // reaches it first. That optional probe is separate from the supervisor grace.
+    assert!(
+        child_calls.lines().count() <= 1,
+        "the child performs at most one process-group inspection before TERM"
     );
     assert!(!std::path::Path::new(&directory).exists());
     Ok(())

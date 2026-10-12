@@ -1,6 +1,5 @@
 //! Module Docker operation tests use a local fake CLI, never a daemon.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use tinybox_bus::{
@@ -10,28 +9,35 @@ use tinybox_docker::DockerCli;
 
 use super::*;
 
-/// Publish a fake CLI and wait out write handles inherited by concurrent forks.
-fn write_cli_fixture(path: &Path, script: impl AsRef<str>) -> std::io::Result<()> {
+/// Publish a fake CLI through an immutable launcher and confirm execution.
+fn write_cli_fixture(path: &Path, script: impl AsRef<str>) -> std::io::Result<std::path::PathBuf> {
     let script = script.as_ref().replacen(
         "#!/bin/sh\n",
         "#!/bin/sh\n[ \"$1\" = --tinybox-probe ] && exit 0\n",
         1,
     );
-    std::fs::write(path, script)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+    // Execute an immutable launcher: inherited writers can safely retain the
+    // generated script body because the shell reads it as data.
+    let body = path.with_extension("script");
+    std::fs::write(&body, script)?;
+    std::os::unix::fs::symlink(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/docker-cli.sh"),
+        path,
+    )?;
     probe_cli_fixture(|| {
         std::process::Command::new(path)
             .arg("--tinybox-probe")
             .status()
-    })
+    })?;
+    Ok(body)
 }
 
 /// Confirm the fixture is executable without recording a Docker invocation.
 fn probe_cli_fixture(
     mut probe: impl FnMut() -> std::io::Result<std::process::ExitStatus>,
 ) -> std::io::Result<()> {
-    // Forked children can retain a writer until exec. Successful execution
-    // proves the writer is gone; ETXTBSY alone is retryable, without a deadline.
+    // Confirm launch before the test starts. Preserve the existing probe
+    // contract: ETXTBSY alone is retryable, without a deadline.
     loop {
         match probe() {
             Err(error) if error.raw_os_error() == Some(26) => {
@@ -465,5 +471,23 @@ fn no_workspace_request_rejects_an_ambiguous_workspace_path()
         .err()
         .ok_or("workspace must be absent")?;
     assert_eq!(error.wire_name(), tinybox_bus::INVALID_DOCKER_RUN);
+    Ok(())
+}
+
+#[tokio::test]
+async fn docker_fixture_runs_while_an_inherited_script_writer_is_open()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let script_path = temp.path().join("docker");
+    let body = write_cli_fixture(&script_path, "#!/bin/sh\nexit 0\n")?;
+    // A concurrently forked process can retain a writer until its exec.
+    let writer = std::fs::OpenOptions::new().write(true).open(body)?;
+    let status = status_with_cli(
+        &DockerCli::with_program(&script_path),
+        DockerStatusRequest { timeout_ms: 10_000 },
+    )
+    .await?;
+    drop(writer);
+    assert!(status.available);
     Ok(())
 }
