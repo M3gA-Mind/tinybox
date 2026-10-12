@@ -24,6 +24,9 @@ done
   echo "verifier uid and gid must be supplied together as non-negative integers" >&2
   exit 2
 }
+if [[ -n "$verifier_bin" && "$verifier_bin" != /* ]]; then
+  verifier_bin="$PWD/$verifier_bin"
+fi
 archive="$(cd "$(dirname "$archive")" && pwd -P)/$(basename "$archive")"
 cd "$root"
 target_root="${CARGO_TARGET_DIR:-$root/target}"

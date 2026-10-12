@@ -35,7 +35,7 @@ class PackageTests(unittest.TestCase):
             env = dict(os.environ, PATH=str(root/"bin")+os.pathsep+os.environ["PATH"])
             env.pop("CARGO_TARGET_DIR", None)
             result = subprocess.run(
-                ["bash", str(ROOT/"scripts/build-module.sh"),
+                ["bash", str(root/"scripts/build-module.sh"),
                  "--crate", "tinybox-module", "--version", "0.1.22",
                  "--target", "x86_64-unknown-linux-gnu", "--host", "ubuntu-24.04-x86_64"],
                 cwd=root, env=env, text=True, capture_output=True, check=False,
@@ -110,10 +110,12 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             actual_args = observed_args.read_text().splitlines()
             self.assertEqual(
-                actual_args[:5],
+                actual_args[:7],
                 [
-                    f"--reuid={host_uid}",
-                    f"--regid={host_gid}",
+                    "--reuid",
+                    str(host_uid),
+                    "--regid",
+                    str(host_gid),
                     "--clear-groups",
                     "--",
                     str(verifier),
