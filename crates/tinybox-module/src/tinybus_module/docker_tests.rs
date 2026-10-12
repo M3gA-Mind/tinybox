@@ -1,6 +1,5 @@
 //! Module Docker operation tests use a local fake CLI, never a daemon.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use tinybox_bus::{
@@ -411,11 +410,16 @@ fn no_workspace_request_rejects_an_ambiguous_workspace_path()
     Ok(())
 }
 
-fn write_fake_cli(path: &Path, script: impl AsRef<[u8]>) -> std::io::Result<()> {
-    std::fs::write(path, script)?;
-    let mut permissions = std::fs::metadata(path)?.permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(path, permissions)
+fn write_fake_cli(path: &Path, script: impl AsRef<[u8]>) -> std::io::Result<std::path::PathBuf> {
+    // Forks in parallel tests can briefly inherit a script writer. Execute an
+    // immutable launcher and source the generated body instead of execing it.
+    let body = path.with_extension("script");
+    std::fs::write(&body, script)?;
+    std::os::unix::fs::symlink(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/docker-cli.sh"),
+        path,
+    )?;
+    Ok(body)
 }
 
 #[tokio::test]
@@ -423,9 +427,9 @@ async fn docker_fixture_runs_while_an_inherited_script_writer_is_open()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
     let script_path = temp.path().join("docker");
-    write_fake_cli(&script_path, "#!/bin/sh\nexit 0\n")?;
+    let body = write_fake_cli(&script_path, "#!/bin/sh\nexit 0\n")?;
     // A concurrently forked process can retain a writer until its exec.
-    let writer = std::fs::OpenOptions::new().write(true).open(&script_path)?;
+    let writer = std::fs::OpenOptions::new().write(true).open(body)?;
     let status = status_with_cli(
         &DockerCli::with_program(&script_path),
         DockerStatusRequest { timeout_ms: 10_000 },

@@ -24,6 +24,8 @@ also excluding zombies. The probe runs asynchronously within the cleanup deadlin
 and is killed on cancellation; an expired probe is killed and reaped. Solaris and
 illumos use the s state field; Darwin and BSD systems use stat. A permission error from SIGKILL is accepted only when a fresh process
 table confirms there are no live members; otherwise cleanup remains failed.
+JailLocalHost applies the same fresh process-table check when a jailed group
+exits before SIGKILL; live members or a failed probe keep cleanup unacknowledged.
 On Windows, every command starts in a Job Object and cleanup terminates and waits
 for the whole job. Cleanup failure is explicit and never acknowledged as success.
 An escaped Unix process group is outside this trusted passthrough ownership
