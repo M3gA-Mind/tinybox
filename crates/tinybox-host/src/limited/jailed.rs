@@ -372,12 +372,15 @@ mod tests;
 async fn kill_jail_group<F>(
     group: i32,
     kill: impl FnOnce(i32) -> std::result::Result<(), nix::errno::Errno>,
-    _alive: impl FnOnce(i32) -> F,
+    alive: impl FnOnce(i32) -> F,
 ) -> Result<()>
 where
     F: std::future::Future<Output = Result<bool>>,
 {
     match kill(group) {
+        // Darwin can deny signalling a group that exited between inspection
+        // and SIGKILL. Confirm it has no live members before acknowledging it.
+        Err(nix::errno::Errno::EPERM) if !alive(group).await? => Ok(()),
         Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
         Err(error) => Err(failure("kill jail group", error.to_string())),
     }
