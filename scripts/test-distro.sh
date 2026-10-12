@@ -55,9 +55,9 @@ docker run --rm \
     set -euo pipefail
     trap "chown -R \"$HOST_UID:$HOST_GID\" target \"$OUTPUT_DIR\" 2>/dev/null || true" EXIT
     if command -v dnf >/dev/null 2>&1; then
-      dnf install -y gcc gcc-c++ cmake curl git gzip jq make openssl-devel perl tar
+      dnf install -y gcc gcc-c++ cmake curl git gzip jq make openssl-devel perl tar util-linux
     else
-      pacman -Syu --noconfirm base-devel cmake curl git gzip jq openssl perl
+      pacman -Syu --noconfirm base-devel cmake curl git gzip jq openssl perl util-linux
     fi
     case "$(uname -m)" in
       x86_64) rustup_target=x86_64-unknown-linux-gnu; rustup_sha=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c ;;
@@ -85,5 +85,6 @@ docker run --rm \
     scripts/build-module.sh --crate "$MODULE_CRATE" --version "$MODULE_VERSION" \
       --target "$MODULE_TARGET" --host "$MODULE_HOST" \
       --extra-files-json "$EXTRA_PACKAGED_FILES" --output-dir "$OUTPUT_DIR"
-    scripts/verify-module.sh --archive "$OUTPUT_DIR/tinybox-$MODULE_VERSION-$MODULE_HOST.tar.gz"
+    scripts/verify-module.sh --archive "$OUTPUT_DIR/tinybox-$MODULE_VERSION-$MODULE_HOST.tar.gz" \
+      --uid "$HOST_UID" --gid "$HOST_GID"
   '
