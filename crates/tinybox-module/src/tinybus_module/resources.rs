@@ -13,7 +13,7 @@ use tinybox_bus::{
 };
 use tinybox_core::clock::{Clock, SystemClock};
 use tinybox_core::{
-    BoxId, BoxSpec, Forward, Host, HostRef, MemoryStore, Placement, ProcessId, Sandbox, SandboxRef,
+    BoxId, BoxSpec, Forward, Host, HostRef, Placement, ProcessId, Sandbox, SandboxRef, Store,
     WorkspaceSource,
 };
 
@@ -131,6 +131,7 @@ pub(super) struct Resources {
     streams: std::sync::Mutex<BTreeMap<ResourceId, Arc<stream::StreamExecution>>>,
     rejected_shells: Mutex<Vec<(ResourceId, Arc<super::native_shell::ShellContext>)>>,
     preparations: tokio::sync::Semaphore,
+    storage: super::storage::ModuleStorage,
 }
 
 #[derive(Default)]
@@ -159,11 +160,21 @@ impl Default for Resources {
             streams: std::sync::Mutex::default(),
             rejected_shells: Mutex::default(),
             preparations: tokio::sync::Semaphore::new(stream::MAX_STREAM_EXECUTIONS),
+            storage: super::storage::ModuleStorage::default(),
         }
     }
 }
 
 impl Resources {
+    /// Resources whose box records live on the host storage reached through
+    /// `connection`.
+    pub(super) fn with_connection(connection: tinybus::Connection) -> Self {
+        Self {
+            storage: super::storage::ModuleStorage::connected(connection),
+            ..Self::default()
+        }
+    }
+
     pub(super) async fn reserve(&self, request: ReserveRequest) -> Result<ResourceId> {
         let mut state = self.state.lock().await;
         if state.shutdown {
@@ -319,7 +330,7 @@ impl Resources {
                 return Err(failure(tinybox_bus::EXEC_CANCELLED, "resource is closing"));
             }
             let resource_host = host.clone();
-            let store = Arc::new(MemoryStore::new());
+            let store = self.storage.box_store().await;
             let selection = make_sandbox(
                 &request.backend,
                 host.clone(),
@@ -1510,7 +1521,7 @@ fn check_resource_open(
 fn make_sandbox(
     backend: &str,
     host: Arc<dyn Host>,
-    store: Arc<MemoryStore>,
+    store: Arc<dyn Store>,
     namespace: &str,
 ) -> Result<SandboxSelection> {
     match backend {

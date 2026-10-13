@@ -21,6 +21,7 @@ mod native_jail;
 mod native_shell;
 mod output;
 mod resources;
+mod storage;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Platform {
@@ -48,6 +49,16 @@ impl Platform {
 #[derive(Default)]
 struct BoxService {
     resources: std::sync::Arc<resources::Resources>,
+}
+
+impl BoxService {
+    /// A service whose box records live on the host storage behind
+    /// `connection`.
+    fn connected(connection: Connection) -> Self {
+        Self {
+            resources: std::sync::Arc::new(resources::Resources::with_connection(connection)),
+        }
+    }
 }
 
 /// Serialize resolved grant paths without replacing invalid UTF-8 bytes.
@@ -513,7 +524,7 @@ async fn finish_operation<T: Send + 'static>(
 
 async fn setup(connection: Connection) -> TinyBusResult<()> {
     connection
-        .serve_at(OBJECT_PATH.try_into()?, BoxService::default())
+        .serve_at(OBJECT_PATH.try_into()?, BoxService::connected(connection.clone()))
         .await?;
     connection.request_name(INTERFACE).await?;
     Ok(())
