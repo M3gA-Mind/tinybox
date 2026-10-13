@@ -166,3 +166,34 @@ async fn a_failed_connect_is_retried_when_the_host_starts_serving() -> TestResul
     assert!(storage.documents().await.is_some());
     Ok(())
 }
+
+/// Every `Store` method forwards through the worker-safe wrapper.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn the_wrapper_forwards_get_and_set_state() -> TestResult {
+    let rig = rig(true).await?;
+    let storage = ModuleStorage::connected(rig.module.clone());
+    let store = storage.box_store().await;
+    let record = info("forwarded-box")?;
+    store.insert(&record)?;
+    assert_eq!(store.get(&record.id)?, record);
+    store.set_state(&record.id, BoxState::Stopped)?;
+    assert_eq!(store.get(&record.id)?.state, BoxState::Stopped);
+    Ok(())
+}
+
+/// Off a multi-thread runtime there is no worker to hand off, so the call runs
+/// in place.
+#[test]
+fn the_wrapper_runs_in_place_without_a_multi_thread_runtime() -> TestResult {
+    let store = OffWorkerStore(MemoryStore::new());
+    let record = info("plain-box")?;
+    store.insert(&record)?;
+    assert_eq!(store.list()?, vec![record.clone()]);
+    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+    runtime.block_on(async {
+        store.remove(&record.id)?;
+        Ok::<(), tinybox_core::Error>(())
+    })?;
+    assert!(store.list()?.is_empty());
+    Ok(())
+}
