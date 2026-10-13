@@ -14,7 +14,7 @@ publish = false
 [dependencies]
 tinybox-core.workspace = true
 tinybox-jail.workspace = true
-tinystoragedrivers-core.workspace = true
+tinystoragedrivers-core = { workspace = true, features = ["blocking"] }
 serde_json.workspace = true
 log = "0.4"
 
