@@ -2281,10 +2281,14 @@ async fn native_cancel_and_close_terminate_descendants_and_reap_direct_children(
                 assert!(status.is_err(), "direct workload child was not reaped");
             } else if let Ok(status) = status {
                 assert!(
+                    // `X (dead)` is a process already gone and only being
+                    // reaped; Linux can show it for a moment after the signal.
                     status
                         .lines()
                         .find(|line| line.starts_with("State:"))
-                        .is_some_and(|line| line.contains("Z (zombie)")),
+                        .is_some_and(|line| {
+                            line.contains("Z (zombie)") || line.contains("X (dead)")
+                        }),
                     "descendant still executes after native cleanup ({mode}): {status}"
                 );
             }
