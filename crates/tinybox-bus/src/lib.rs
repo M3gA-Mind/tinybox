@@ -92,7 +92,6 @@ pub const RESOURCE_LIMIT: &str = "ai.tinyhumans.tinybox.Error.ResourceLimit";
 pub const INTERFACE: &str = "ai.tinyhumans.tinybox.Box";
 /// Module object path.
 pub const OBJECT_PATH: &str = "/ai/tinyhumans/tinybox/Box";
-/// Supported additive methods, including the original discovery operation.
 /// Named bus members. Hosts call members through these constants, never by
 /// position in [`METHODS`] or by string literal.
 pub mod names {
