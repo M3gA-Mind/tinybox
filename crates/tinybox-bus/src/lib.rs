@@ -52,7 +52,9 @@ pub use files::{
 /// 1.14 adds native shell execution with owned scratch, timeout and optional jail.
 /// 1.15 adds `runtime_path` and `python_utf8` to shell selection.
 /// 1.16 adds the [`names`] member constants; `METHODS` is derived from them.
-pub const CONTRACT_VERSION: (u32, u32) = (1, 16);
+/// 1.17 makes `RunDocker` and `RunDockerWithoutWorkspace` refuse host-network
+/// runs and dangerous mounts.
+pub const CONTRACT_VERSION: (u32, u32) = (1, 17);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.
