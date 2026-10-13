@@ -220,3 +220,19 @@ async fn a_refused_scope_leaves_the_module_on_memory() -> TestResult {
     let _memory = storage.box_store().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_that_stops_serving_leaves_new_boxes_on_memory() -> TestResult {
+    let mut rig = rig(true).await?;
+    let storage = ModuleStorage::connected(rig.module.clone());
+    assert!(storage.documents().await.is_some());
+    // The host withdraws storage after the module cached its handle.
+    drop(rig._served.take());
+    let store =
+        tokio::time::timeout(std::time::Duration::from_secs(30), storage.box_store()).await?;
+    let record = info("fallback-box")?;
+    let writer = Arc::clone(&store);
+    let written = record.clone();
+    tokio::task::spawn_blocking(move || writer.insert(&written)).await??;
+    Ok(())
+}
