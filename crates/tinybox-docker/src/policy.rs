@@ -42,9 +42,11 @@ pub fn run_policy_issues(
 fn is_dangerous(path: &str) -> bool {
     // Compare components so a trailing separator cannot disguise `/etc/`.
     let normalized: Vec<_> = Path::new(path).components().collect();
-    DANGEROUS_MOUNTS
-        .iter()
-        .any(|dangerous| Path::new(dangerous).components().eq(normalized.iter().copied()))
+    DANGEROUS_MOUNTS.iter().any(|dangerous| {
+        Path::new(dangerous)
+            .components()
+            .eq(normalized.iter().copied())
+    })
 }
 
 #[cfg(test)]

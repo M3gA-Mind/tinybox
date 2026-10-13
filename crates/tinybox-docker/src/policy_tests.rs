@@ -7,7 +7,12 @@ fn mounts(paths: &[&str]) -> Vec<String> {
 #[test]
 fn ordinary_run_has_no_issues() {
     assert!(
-        run_policy_issues(Some("none"), Some("/home/u/project"), &mounts(&["/usr/lib"])).is_empty()
+        run_policy_issues(
+            Some("none"),
+            Some("/home/u/project"),
+            &mounts(&["/usr/lib"])
+        )
+        .is_empty()
     );
     assert!(run_policy_issues(None, None, &[]).is_empty());
 }
