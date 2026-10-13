@@ -1,6 +1,6 @@
 use super::*;
-use tinybox_core::{BoxId, BoxInfo, BoxSpec, BoxState, HostRef, Placement, SandboxRef};
 use tinybox_core::WorkspaceSource;
+use tinybox_core::{BoxId, BoxInfo, BoxSpec, BoxState, HostRef, Placement, SandboxRef};
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tinystoragedrivers_busproxy::{PerCallerEndpoint, ServedStorage, serve};
@@ -100,7 +100,11 @@ async fn without_a_storage_host_box_records_stay_in_memory() {
         .await
         .unwrap()
         .unwrap();
-    assert!(host_docs(&rig, tinybox_drivers::BOX_COLLECTION).await.is_empty());
+    assert!(
+        host_docs(&rig, tinybox_drivers::BOX_COLLECTION)
+            .await
+            .is_empty()
+    );
 }
 
 #[tokio::test]
