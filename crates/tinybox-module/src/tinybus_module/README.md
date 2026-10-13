@@ -49,7 +49,7 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | StartShellExec | SpawnRequest, SelectShellRequest | ProcessRef |
 | StartNativeShellExec | ShellExecRequest | ProcessRef |
 
-Capabilities advertises contract version 1.15; 1.0 denotes the original
+Capabilities advertises contract version 1.16; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
