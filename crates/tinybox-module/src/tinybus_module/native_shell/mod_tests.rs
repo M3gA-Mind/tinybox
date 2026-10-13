@@ -19,8 +19,8 @@ fn request(state: &Path) -> ShellExecRequest {
     }
 }
 #[test]
-fn invalid_shell_state_budget_and_environment_are_refused_before_execution(
-) -> std::result::Result<(), Box<dyn std::error::Error>> {
+fn invalid_shell_state_budget_and_environment_are_refused_before_execution()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
     let state = tempfile::tempdir()?;
     let resolved = tinybox_core::ExecRequest::new(["unused"]);
     let original = request(state.path());
@@ -50,8 +50,8 @@ fn invalid_shell_state_budget_and_environment_are_refused_before_execution(
     Ok(())
 }
 #[test]
-fn approved_environment_overrides_preserve_custom_temporary_directory_and_remove_startup_hooks(
-) -> std::result::Result<(), Box<dyn std::error::Error>> {
+fn approved_environment_overrides_preserve_custom_temporary_directory_and_remove_startup_hooks()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
     let state = tempfile::tempdir()?;
     let resolved = tinybox_core::ExecRequest::new(["unused"]);
     let mut request = request(state.path());
@@ -115,8 +115,8 @@ impl tinybox_jail::JailBackend for Backend {
 }
 #[cfg(unix)]
 #[tokio::test]
-async fn native_shell_jail_adds_owned_scratch_and_refuses_unsupported_constraints(
-) -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn native_shell_jail_adds_owned_scratch_and_refuses_unsupported_constraints()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
     let state = tempfile::tempdir()?;
     let mut resolved = tinybox_core::ExecRequest::new(["unused"]);
     resolved.cwd = Some(state.path().to_path_buf());
@@ -156,19 +156,21 @@ async fn native_shell_jail_adds_owned_scratch_and_refuses_unsupported_constraint
         Arc::new(Backend { full: true }),
     )?;
     shell.drain().await?;
-    assert!(ShellContext::prepare_with_backend(
-        request,
-        state.path(),
-        &resolved,
-        Arc::new(Backend { full: false })
-    )
-    .is_err());
+    assert!(
+        ShellContext::prepare_with_backend(
+            request,
+            state.path(),
+            &resolved,
+            Arc::new(Backend { full: false })
+        )
+        .is_err()
+    );
     Ok(())
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn scratch_deletion_runs_outside_the_async_worker(
-) -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn scratch_deletion_runs_outside_the_async_worker()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
     let state = tempfile::tempdir()?;
     let resolved = tinybox_core::ExecRequest::new(["unused"]);
     let shell = ShellContext::prepare(request(state.path()), state.path(), &resolved)?;
@@ -195,8 +197,8 @@ async fn scratch_deletion_runs_outside_the_async_worker(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn scratch_preparation_runs_outside_the_async_worker(
-) -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn scratch_preparation_runs_outside_the_async_worker()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
     let state = tempfile::tempdir()?;
     let root = state.path().to_path_buf();
     let request = request(&root);
@@ -223,8 +225,8 @@ async fn scratch_preparation_runs_outside_the_async_worker(
 }
 
 #[test]
-fn missing_state_and_blocked_scratch_paths_are_refused(
-) -> std::result::Result<(), Box<dyn std::error::Error>> {
+fn missing_state_and_blocked_scratch_paths_are_refused()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
     let state = tempfile::tempdir()?;
     let resolved = tinybox_core::ExecRequest::new(["unused"]);
     for root in [state.path().join("missing"), state.path().to_path_buf()] {
@@ -238,8 +240,8 @@ fn missing_state_and_blocked_scratch_paths_are_refused(
 }
 
 #[test]
-fn native_shell_preserves_resource_environment_and_request_overrides(
-) -> std::result::Result<(), Box<dyn std::error::Error>> {
+fn native_shell_preserves_resource_environment_and_request_overrides()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
     let state = tempfile::tempdir()?;
     let mut resolved = tinybox_core::ExecRequest::new(["unused"]);
     resolved
@@ -268,8 +270,8 @@ fn native_shell_preserves_resource_environment_and_request_overrides(
 }
 
 #[test]
-fn python_utf8_defaults_apply_only_when_requested_and_yield_to_approved_overrides(
-) -> std::result::Result<(), Box<dyn std::error::Error>> {
+fn python_utf8_defaults_apply_only_when_requested_and_yield_to_approved_overrides()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
     let state = tempfile::tempdir()?;
     let resolved = tinybox_core::ExecRequest::new(["unused"]);
     let plain = ShellContext::prepare(request(state.path()), state.path(), &resolved)?;
