@@ -39,3 +39,6 @@ deny = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# `tinybox-drivers` (never published) takes the storage ports from the
+# tinystoragedrivers repository by tag.
+allow-git = ["https://github.com/tinyhumansai/tinystoragedrivers"]

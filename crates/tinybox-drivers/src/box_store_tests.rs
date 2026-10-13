@@ -152,14 +152,22 @@ fn a_document_that_does_not_decode_is_a_store_error() -> Result<()> {
     bridge
         .run(async move {
             writer
-                .put(BOX_COLLECTION, "bad", json!({"nope": 1}), Precondition::None)
+                .put(
+                    BOX_COLLECTION,
+                    "bad",
+                    json!({"nope": 1}),
+                    Precondition::None,
+                )
                 .await
         })
         .expect("bridge")
         .expect("put");
     assert!(matches!(
         store.get(&BoxId::new("bad")?),
-        Err(Error::Store { operation: "decode", .. })
+        Err(Error::Store {
+            operation: "decode",
+            ..
+        })
     ));
     Ok(())
 }

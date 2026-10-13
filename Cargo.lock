@@ -1104,6 +1104,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinybox-drivers"
+version = "0.1.26"
+dependencies = [
+ "log",
+ "serde_json",
+ "tempfile",
+ "tinybox-core",
+ "tinybox-jail",
+ "tinystoragedrivers-core",
+ "tokio",
+]
+
+[[package]]
 name = "tinybox-host"
 version = "0.1.26"
 dependencies = [
@@ -1244,6 +1257,18 @@ dependencies = [
  "tinybus",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "tinystoragedrivers-core"
+version = "0.7.0"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.7.0#6d1a1029de402f5937113fcc56e4023e0dc61c94"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

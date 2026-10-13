@@ -13,7 +13,9 @@ fn documents() -> Arc<dyn DocumentStore> {
 }
 
 fn clock() -> Arc<FixedClock> {
-    Arc::new(FixedClock::new(std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000)))
+    Arc::new(FixedClock::new(
+        std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+    ))
 }
 
 #[test]
@@ -25,10 +27,15 @@ fn an_empty_index_loads_as_absent() {
 #[test]
 fn a_saved_index_loads_back_as_the_same_json() {
     let store = DocumentIndexStore::new(documents(), "main").expect("store");
-    store.save(br#"{"records":{},"schema_version":1}"#).expect("save");
-    let loaded: Value = serde_json::from_slice(&store.load().expect("load").expect("some"))
-        .expect("json");
-    assert_eq!(loaded, serde_json::json!({"records": {}, "schema_version": 1}));
+    store
+        .save(br#"{"records":{},"schema_version":1}"#)
+        .expect("save");
+    let loaded: Value =
+        serde_json::from_slice(&store.load().expect("load").expect("some")).expect("json");
+    assert_eq!(
+        loaded,
+        serde_json::json!({"records": {}, "schema_version": 1})
+    );
 }
 
 #[test]
@@ -57,7 +64,9 @@ fn a_registry_keeps_its_jails_across_reopen_without_an_index_file() {
         JailRegistry::open_with_store(base.path(), clock(), store.clone()).expect("open");
     let created = registry.create("alpha").expect("create");
     registry.rename(&created.id, "beta").expect("rename");
-    registry.set_notes(&created.id, Some("n".into())).expect("notes");
+    registry
+        .set_notes(&created.id, Some("n".into()))
+        .expect("notes");
     drop(registry);
 
     // The metadata lives in the document, not in `index.json`.
