@@ -157,6 +157,17 @@ fn validate(request: &DockerRunRequest, mount_workspace: bool) -> Result<()> {
     {
         return Err(failure("Docker run request is invalid"));
     }
+    let issues = tinybox_docker::run_policy_issues(
+        request.network.as_deref(),
+        mount_workspace.then_some(request.workspace.as_str()),
+        &request.read_only_mounts,
+    );
+    if !issues.is_empty() {
+        return Err(failure(&format!(
+            "Docker run request weakens isolation: {}",
+            issues.join("; ")
+        )));
+    }
     Ok(())
 }
 
