@@ -518,8 +518,10 @@ fn docker_run_refuses_host_network_and_dangerous_mounts() {
         policy_request(None, &["/etc"], "/work"),
         policy_request(None, &[], "/"),
     ] {
-        let error = validate(&request, true).expect_err("unsafe run must be refused");
-        assert_eq!(error.wire_name(), tinybox_bus::INVALID_DOCKER_RUN);
+        assert!(matches!(
+            validate(&request, true),
+            Err(error) if error.wire_name() == tinybox_bus::INVALID_DOCKER_RUN
+        ));
     }
 }
 
