@@ -50,7 +50,8 @@ pub use files::{
 /// discovery. 1.12 adds platform shell selection. 1.13 adds supervised native
 /// shell execution on local passthrough resources.
 /// 1.14 adds native shell execution with owned scratch, timeout and optional jail.
-pub const CONTRACT_VERSION: (u32, u32) = (1, 14);
+/// 1.15 adds `runtime_path` and `python_utf8` to shell selection.
+pub const CONTRACT_VERSION: (u32, u32) = (1, 15);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.

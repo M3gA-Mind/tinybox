@@ -7,6 +7,8 @@ fn request(state: &Path) -> ShellExecRequest {
         shell: tinybox_bus::SelectShellRequest {
             command: "echo accepted".into(),
             preserve_pipeline_status: false,
+            runtime_path: None,
+            python_utf8: false,
         },
         cwd: None,
         extra_env: std::collections::BTreeMap::new(),

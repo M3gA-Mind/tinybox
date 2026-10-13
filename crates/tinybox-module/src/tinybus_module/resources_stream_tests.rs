@@ -644,6 +644,8 @@ async fn shell_request(
         shell: tinybox_bus::SelectShellRequest {
             command: payload.into(),
             preserve_pipeline_status: false,
+            runtime_path: None,
+            python_utf8: false,
         },
         cwd: None,
         extra_env: std::collections::BTreeMap::default(),
@@ -904,6 +906,8 @@ async fn native_shell_execution_preserves_admission_and_request_identity() -> Re
     let shell = tinybox_bus::SelectShellRequest {
         command: "echo fixture".into(),
         preserve_pipeline_status: false,
+        runtime_path: None,
+        python_utf8: false,
     };
     let process = resources
         .start_platform_shell_exec(request.clone(), shell.clone())
@@ -953,6 +957,8 @@ async fn shell_execution_rejects_remote_selection_without_consuming_admission() 
     let shell = tinybox_bus::SelectShellRequest {
         command: "echo fixture".into(),
         preserve_pipeline_status: false,
+        runtime_path: None,
+        python_utf8: false,
     };
     let slot = resources.slot(&resource).await?;
     {

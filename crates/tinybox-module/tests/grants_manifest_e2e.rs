@@ -99,6 +99,8 @@ async fn verify_discovery(proxy: &tinybus::Proxy) -> Result<(), Box<dyn std::err
             (tinybox_bus::SelectShellRequest {
                 command: "false | true".into(),
                 preserve_pipeline_status: false,
+                runtime_path: None,
+                python_utf8: false,
             },),
         )
         .await?;

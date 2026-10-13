@@ -11,6 +11,14 @@ pub struct SelectShellRequest {
     /// enabling Bash pipefail. Windows cmd has no pipefail mode.
     #[serde(default)]
     pub preserve_pipeline_status: bool,
+    /// Managed `PATH` restored after POSIX login profiles run, as a leading
+    /// `export PATH=...` in the payload. Ignored by Windows cmd.
+    #[serde(default)]
+    pub runtime_path: Option<String>,
+    /// Native shell execution only: default `PYTHONUTF8=1` and
+    /// `PYTHONIOENCODING=utf-8` unless the parent environment sets them.
+    #[serde(default)]
+    pub python_utf8: bool,
 }
 
 /// Shell syntax used by the module machine.
