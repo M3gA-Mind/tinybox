@@ -175,4 +175,5 @@ impl Store for DocumentBoxStore {
 
 #[cfg(test)]
 #[path = "box_store_tests.rs"]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests;
