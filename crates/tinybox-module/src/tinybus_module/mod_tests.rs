@@ -1098,6 +1098,7 @@ async fn native_shell_selection_and_execution_roundtrip_through_the_bus_codec()
                 timeout_ms: 5000,
                 stdin: None,
                 jail: None,
+                hide_window: false,
             },),
         )
         .await?;

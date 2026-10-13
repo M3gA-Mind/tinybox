@@ -16,6 +16,7 @@ fn request(state: &Path) -> ShellExecRequest {
         timeout_ms: 1000,
         stdin: None,
         jail: None,
+        hide_window: false,
     }
 }
 #[test]

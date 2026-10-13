@@ -146,6 +146,12 @@ impl ShellContext {
         observer: Arc<super::output::OutputJournal>,
     ) -> tinybox_core::Result<tinybox_core::ExecOutput> {
         let mut command = tinybox_host::build_shell_command(&self.request.shell);
+        #[cfg(windows)]
+        if self.request.hide_window {
+            use std::os::windows::process::CommandExt;
+            // CREATE_NO_WINDOW: no console flashes for a GUI host's shell child.
+            command.creation_flags(0x0800_0000);
+        }
         command.env_clear().envs(&self.environment);
         if let Some(cwd) = &resolved.cwd {
             command.current_dir(cwd);
