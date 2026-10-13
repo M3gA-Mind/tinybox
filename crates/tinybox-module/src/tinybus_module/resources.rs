@@ -339,6 +339,16 @@ impl Resources {
             )?;
             let sandbox = selection.sandbox.clone();
             let spec = make_spec(&request, host.name())?;
+            // The box collection is shared by every resource of the tenant, so
+            // a failed create is recovered only from records it added.
+            let known_before = tinybox_core::Store::list(store.as_ref())
+                .map(|records| {
+                    records
+                        .into_iter()
+                        .map(|record| record.id)
+                        .collect::<std::collections::HashSet<_>>()
+                })
+                .unwrap_or_default();
             let info = match sandbox.create(&spec).await {
                 Ok(info) => info,
                 Err(error) => {
@@ -348,7 +358,9 @@ impl Resources {
                     // this caller-known slot so Close/Shutdown can retry it.
                     if request.backend == "docker"
                         && let Ok(records) = tinybox_core::Store::list(store.as_ref())
-                        && let Some(info) = records.into_iter().next()
+                        && let Some(info) = records
+                            .into_iter()
+                            .find(|record| !known_before.contains(&record.id))
                     {
                         *slot_guard = Some(Resource::new(
                             &request,

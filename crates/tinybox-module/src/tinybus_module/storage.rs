@@ -77,7 +77,7 @@ impl ModuleStorage {
             tokio::task::spawn_blocking(move || tinybox_drivers::DocumentBoxStore::new(documents))
                 .await;
         match opened {
-            Ok(Ok(store)) => Arc::new(store),
+            Ok(Ok(store)) => Arc::new(OffWorkerStore(store)),
             Ok(Err(error)) => {
                 log::warn!("[tinybox_module] box store on host storage refused: {error}");
                 Arc::new(MemoryStore::new())
@@ -111,6 +111,53 @@ impl ModuleStorage {
     }
 }
 
+/// A [`Store`] whose every call may block on a bus reply, run so the runtime
+/// worker that drives the same connection stays free.
+///
+/// The module runs on one worker thread; a blocking bridge on that worker would
+/// wait for a reply only that worker can deliver. On a multi-thread runtime,
+/// `block_in_place` hands the worker's queue to a replacement thread for the
+/// duration of the call.
+#[derive(Debug)]
+struct OffWorkerStore<S>(S);
+
+impl<S> OffWorkerStore<S> {
+    fn off_worker<T>(call: impl FnOnce() -> T) -> T {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(call)
+            }
+            _ => call(),
+        }
+    }
+}
+
+impl<S: Store> Store for OffWorkerStore<S> {
+    fn insert(&self, info: &tinybox_core::BoxInfo) -> tinybox_core::Result<()> {
+        Self::off_worker(|| self.0.insert(info))
+    }
+
+    fn get(&self, id: &tinybox_core::BoxId) -> tinybox_core::Result<tinybox_core::BoxInfo> {
+        Self::off_worker(|| self.0.get(id))
+    }
+
+    fn list(&self) -> tinybox_core::Result<Vec<tinybox_core::BoxInfo>> {
+        Self::off_worker(|| self.0.list())
+    }
+
+    fn set_state(
+        &self,
+        id: &tinybox_core::BoxId,
+        state: tinybox_core::BoxState,
+    ) -> tinybox_core::Result<()> {
+        Self::off_worker(|| self.0.set_state(id, state))
+    }
+
+    fn remove(&self, id: &tinybox_core::BoxId) -> tinybox_core::Result<()> {
+        Self::off_worker(|| self.0.remove(id))
+    }
+}
+
 impl std::fmt::Debug for ModuleStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ModuleStorage")
@@ -121,5 +168,4 @@ impl std::fmt::Debug for ModuleStorage {
 
 #[cfg(test)]
 #[path = "storage_tests.rs"]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests;

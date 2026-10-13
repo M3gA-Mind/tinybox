@@ -1,3 +1,6 @@
+//! Tests for [`ModuleStorage`]: host-backed box records, jail index documents,
+//! the in-memory fallback, and connect retry.
+
 use super::*;
 use tinybox_core::WorkspaceSource;
 use tinybox_core::{BoxId, BoxInfo, BoxSpec, BoxState, HostRef, Placement, SandboxRef};
@@ -100,11 +103,8 @@ async fn without_a_storage_host_box_records_stay_in_memory() {
         .await
         .unwrap()
         .unwrap();
-    assert!(
-        host_docs(&rig, tinybox_drivers::BOX_COLLECTION)
-            .await
-            .is_empty()
-    );
+    let docs = host_docs(&rig, tinybox_drivers::BOX_COLLECTION).await;
+    assert_eq!(docs.len(), 0);
 }
 
 #[tokio::test]
