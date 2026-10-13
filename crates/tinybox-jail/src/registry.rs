@@ -43,6 +43,10 @@ use super::jail::{Jail, JailBackend};
 #[path = "registry_path.rs"]
 mod path;
 
+#[path = "registry_index_store.rs"]
+mod index_store;
+pub use index_store::{FileIndexStore, IndexStore};
+
 /// Metadata persisted for each jail.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JailRecord {
@@ -80,6 +84,7 @@ pub struct JailRegistry {
     base: PathBuf,
     index: Mutex<Index>,
     clock: Arc<dyn Clock>,
+    store: Arc<dyn IndexStore>,
 }
 
 impl JailRegistry {
@@ -104,14 +109,32 @@ impl JailRegistry {
     pub fn open_with_clock(base: impl AsRef<Path>, clock: Arc<dyn Clock>) -> io::Result<Self> {
         let requested_base = base.as_ref().to_path_buf();
         fs::create_dir_all(&requested_base)?;
+        let canonical = requested_base.canonicalize()?;
+        let store = Arc::new(FileIndexStore::new(canonical.join(INDEX_FILENAME)));
+        Self::open_with_store(requested_base, clock, store)
+    }
+
+    /// Open a registry whose index lives in `store` instead of
+    /// `<base>/index.json`.
+    ///
+    /// The jail directories stay under `base`; only the metadata moves. A host
+    /// passes a store on its `tinystoragedrivers` document port, so the index
+    /// follows the backend and scope it configured.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the base directory cannot be created or the index
+    /// cannot be read or decoded.
+    pub fn open_with_store(
+        base: impl AsRef<Path>,
+        clock: Arc<dyn Clock>,
+        store: Arc<dyn IndexStore>,
+    ) -> io::Result<Self> {
+        let requested_base = base.as_ref().to_path_buf();
+        fs::create_dir_all(&requested_base)?;
         let base = requested_base.canonicalize()?;
-        let idx_path = base.join(INDEX_FILENAME);
-        let mut index = if idx_path.exists() {
-            log::debug!(
-                "[cwd_jail] registry.open loading index {}",
-                idx_path.display()
-            );
-            let raw = fs::read(&idx_path)?;
+        let mut index = if let Some(raw) = store.load()? {
+            log::debug!("[cwd_jail] registry.open loaded index bytes={}", raw.len());
             serde_json::from_slice::<Index>(&raw)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
         } else {
@@ -142,6 +165,7 @@ impl JailRegistry {
             base,
             index: Mutex::new(index),
             clock,
+            store,
         })
     }
 
@@ -510,33 +534,13 @@ impl JailRegistry {
         Ok(Jail::new(&resolved, &record.label))
     }
 
-    /// Atomic-rename write of the index. Falls back to direct write on
-    /// Windows if rename-over fails (Windows traditionally refused
-    /// rename-over-existing, though modern NTFS/Win10 supports it).
+    /// Write the index through the configured [`IndexStore`].
     fn persist(&self, idx: &Index) -> io::Result<()> {
-        let path = self.base.join(INDEX_FILENAME);
-        let tmp = self.base.join(format!("{INDEX_FILENAME}.tmp"));
         let bytes = serde_json::to_vec_pretty(idx)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        fs::write(&tmp, &bytes)?;
-        match fs::rename(&tmp, &path) {
-            Ok(()) => {
-                log::trace!(
-                    "[cwd_jail] registry.persist atomic-rename n={}",
-                    idx.records.len()
-                );
-                Ok(())
-            }
-            Err(e) => {
-                // Fallback: direct overwrite.
-                log::debug!(
-                    "[cwd_jail] registry.persist rename failed ({e}); falling back to overwrite"
-                );
-                fs::write(&path, &bytes)?;
-                let _ = fs::remove_file(&tmp);
-                Ok(())
-            }
-        }
+        self.store.save(&bytes)?;
+        log::trace!("[cwd_jail] registry.persist n={}", idx.records.len());
+        Ok(())
     }
 }
 
