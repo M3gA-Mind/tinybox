@@ -194,7 +194,7 @@ fn the_wrapper_runs_in_place_without_a_multi_thread_runtime() -> TestResult {
         store.remove(&record.id)?;
         Ok::<(), tinybox_core::Error>(())
     })?;
-    assert!(store.list()?.is_empty());
+    assert_eq!(store.list()?.len(), 0);
     Ok(())
 }
 
