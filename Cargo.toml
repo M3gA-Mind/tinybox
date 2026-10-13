@@ -25,7 +25,7 @@ members = [
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.1.28"
+version = "0.1.29"
 edition = "2024"
 rust-version = "1.88"
 license = "GPL-3.0-only"
@@ -75,7 +75,7 @@ tinystoragedrivers-core = { version = "0.7.0", git = "https://github.com/tinyhum
 # tests.
 tinystoragedrivers-busproxy = { version = "0.7.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v0.7.0" }
 tinystoragedrivers-client = { version = "0.7.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v0.7.0" }
-tinybox-drivers = { path = "crates/tinybox-drivers", version = "0.1.28" }
+tinybox-drivers = { path = "crates/tinybox-drivers", version = "0.1.29" }
 
 # Lints apply to every crate in the workspace via `[lints] workspace = true`.
 # CI runs clippy with `-D warnings`, so anything set to "warn" here fails CI.
