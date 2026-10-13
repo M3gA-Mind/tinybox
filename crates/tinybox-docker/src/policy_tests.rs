@@ -6,15 +6,16 @@ fn mounts(paths: &[&str]) -> Vec<String> {
 
 #[test]
 fn ordinary_run_has_no_issues() {
-    assert!(
+    assert_eq!(
         run_policy_issues(
             Some("none"),
             Some("/home/u/project"),
             &mounts(&["/usr/lib"])
         )
-        .is_empty()
+        .len(),
+        0
     );
-    assert!(run_policy_issues(None, None, &[]).is_empty());
+    assert_eq!(run_policy_issues(None, None, &[]).len(), 0);
 }
 
 #[test]
@@ -51,10 +52,13 @@ fn dangerous_workspace_is_reported() {
 
 #[test]
 fn skipped_workspace_is_not_checked() {
-    assert!(run_policy_issues(None, None, &[]).is_empty());
+    assert_eq!(run_policy_issues(None, None, &[]).len(), 0);
 }
 
 #[test]
 fn subpaths_of_dangerous_roots_are_allowed() {
-    assert!(run_policy_issues(None, Some("/etc/nginx"), &mounts(&["/proc/self"])).is_empty());
+    assert_eq!(
+        run_policy_issues(None, Some("/etc/nginx"), &mounts(&["/proc/self"])).len(),
+        0
+    );
 }

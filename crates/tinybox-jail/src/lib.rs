@@ -69,7 +69,7 @@ pub use jail::{Jail, JailBackend};
 pub use linux::LandlockBackend;
 pub use macos::SeatbeltBackend;
 pub use noop::{NOOP_BACKEND_NAME, NoopBackend};
-pub use registry::{JailRecord, JailRegistry};
+pub use registry::{FileIndexStore, IndexStore, JailRecord, JailRegistry};
 
 use std::process::{Child, Command};
 use std::sync::{Arc, OnceLock};

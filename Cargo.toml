@@ -9,6 +9,7 @@ members = [
     "crates/tinybox-cli",
     "crates/tinybox-core",
     "crates/tinybox-docker",
+    "crates/tinybox-drivers",
     "crates/tinybox-host",
     "crates/tinybox-jail",
     "crates/tinybox-linux",
@@ -66,6 +67,9 @@ tinybox-microvm = { path = "crates/tinybox-microvm", version = "0.1.25" }
 tinybox-docker = { path = "crates/tinybox-docker", version = "0.1.25" }
 tinybox-ssh = { path = "crates/tinybox-ssh", version = "0.1.25" }
 tinybox-sync = { path = "crates/tinybox-sync", version = "0.1.25" }
+# The storage ports only (no database client), by git tag so a host that vendors
+# tinystoragedrivers once can `[patch]` it. Used by `tinybox-drivers`.
+tinystoragedrivers-core = { version = "0.7.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v0.7.0" }
 
 # Lints apply to every crate in the workspace via `[lints] workspace = true`.
 # CI runs clippy with `-D warnings`, so anything set to "warn" here fails CI.
