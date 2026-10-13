@@ -61,3 +61,8 @@ Unix builders remove BASH_ENV, ENV, SHELLOPTS, BASHOPTS and POSIXLY_CORRECT; She
 returns those removal names. Bash uses -p to ignore imported environment
 functions. Each discovery probes the standard paths again so shell installation
 or removal is reflected immediately. Providers apply them after approved environment overrides.
+
+Contract 1.15 adds `runtime_path` (POSIX payload is prefixed with a quoted
+`export PATH=` after the pipefail line; ignored by cmd) and `python_utf8`
+(native shell execution defaults `PYTHONUTF8`/`PYTHONIOENCODING` unless the
+parent sets them). Both default off.

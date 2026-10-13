@@ -7,6 +7,8 @@ fn request(state: &Path) -> ShellExecRequest {
         shell: tinybox_bus::SelectShellRequest {
             command: "echo accepted".into(),
             preserve_pipeline_status: false,
+            runtime_path: None,
+            python_utf8: false,
         },
         cwd: None,
         extra_env: std::collections::BTreeMap::new(),
@@ -263,6 +265,30 @@ fn native_shell_preserves_resource_environment_and_request_overrides()
     assert_eq!(
         shell.environment.get("OVERRIDE").map(String::as_str),
         Some("request")
+    );
+    Ok(())
+}
+
+#[test]
+fn python_utf8_defaults_apply_only_when_requested_and_yield_to_approved_overrides()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let state = tempfile::tempdir()?;
+    let resolved = tinybox_core::ExecRequest::new(["unused"]);
+    let plain = ShellContext::prepare(request(state.path()), state.path(), &resolved)?;
+    assert_eq!(plain.environment.get("PYTHONIOENCODING"), None);
+    let mut asked = request(state.path());
+    asked.shell.python_utf8 = true;
+    asked
+        .extra_env
+        .insert("PYTHONIOENCODING".into(), "latin-1".into());
+    let shell = ShellContext::prepare(asked, state.path(), &resolved)?;
+    assert!(shell.environment.contains_key("PYTHONUTF8"));
+    assert_eq!(
+        shell
+            .environment
+            .get("PYTHONIOENCODING")
+            .map(String::as_str),
+        Some("latin-1")
     );
     Ok(())
 }

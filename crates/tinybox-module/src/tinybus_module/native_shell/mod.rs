@@ -76,6 +76,9 @@ impl ShellContext {
                 environment.insert(name.to_owned(), value);
             }
         }
+        if request.shell.python_utf8 {
+            apply_python_utf8_defaults(&mut environment);
+        }
         for (name, value) in resolved.env.iter().chain(&request.extra_env) {
             if name.is_empty() || name.contains(['=', '\0']) || value.contains('\0') {
                 return Err(invalid());
@@ -251,3 +254,14 @@ fn invalid() -> tinybus::Error {
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+
+// Parent value wins; otherwise default to UTF-8 so a legacy Windows console
+// code page cannot kill a Python script.
+fn apply_python_utf8_defaults(environment: &mut std::collections::BTreeMap<String, String>) {
+    for (name, default) in [("PYTHONUTF8", "1"), ("PYTHONIOENCODING", "utf-8")] {
+        let value = std::env::var_os(name)
+            .and_then(|v| v.into_string().ok())
+            .unwrap_or_else(|| default.into());
+        environment.insert(name.to_owned(), value);
+    }
+}

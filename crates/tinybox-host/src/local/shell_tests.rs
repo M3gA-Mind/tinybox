@@ -5,6 +5,8 @@ fn request(preserve_pipeline_status: bool) -> SelectShellRequest {
     SelectShellRequest {
         command: "false | true".into(),
         preserve_pipeline_status,
+        runtime_path: None,
+        python_utf8: false,
     }
 }
 
@@ -35,6 +37,8 @@ fn cmd_preserves_quoted_payload_and_lists_bootstrap_names_without_values() {
         &SelectShellRequest {
             command: payload.into(),
             preserve_pipeline_status: false,
+            runtime_path: None,
+            python_utf8: false,
         },
         ShellFlavor::Cmd,
         None,
@@ -63,6 +67,8 @@ fn actual_cmd_raw_payload_keeps_a_quoted_executable_and_argument()
             output.display()
         ),
         preserve_pipeline_status: false,
+        runtime_path: None,
+        python_utf8: false,
     };
     assert!(build_shell_command(&requested).status()?.success());
     assert!(
@@ -106,6 +112,8 @@ fn actual_cmd_raw_payload_keeps_quoted_redirection_paths() -> Result<(), Box<dyn
     let requested = SelectShellRequest {
         command: format!("echo fixture > \"{}\"", output.display()),
         preserve_pipeline_status: false,
+        runtime_path: None,
+        python_utf8: false,
     };
     assert!(build_shell_command(&requested).status()?.success());
     assert_eq!(std::fs::read_to_string(output)?.trim(), "fixture");
@@ -121,6 +129,8 @@ fn bash_startup_environment_cannot_replace_the_requested_payload()
         let request = SelectShellRequest {
             command: "exit 0".into(),
             preserve_pipeline_status: false,
+            runtime_path: None,
+            python_utf8: false,
         };
         assert!(build_shell_command(&request).status()?.success());
         return Ok(());
@@ -153,6 +163,8 @@ fn inherited_bash_options_cannot_abort_the_requested_payload()
         let request = SelectShellRequest {
             command: "false; echo reached".into(),
             preserve_pipeline_status: false,
+            runtime_path: None,
+            python_utf8: false,
         };
         let output = build_shell_command(&request).output()?;
         assert!(output.status.success());
@@ -238,6 +250,8 @@ fn fallback_shell_survives_an_overridden_payload_path() -> Result<(), Box<dyn st
         &SelectShellRequest {
             command: "exit 0".into(),
             preserve_pipeline_status: false,
+            runtime_path: None,
+            python_utf8: false,
         },
         ShellFlavor::Posix,
         None,
@@ -269,6 +283,8 @@ fn cmd_startup_ignores_the_payload_path() -> Result<(), Box<dyn std::error::Erro
     let requested = SelectShellRequest {
         command: "echo %PATH%".into(),
         preserve_pipeline_status: false,
+        runtime_path: None,
+        python_utf8: false,
     };
     let output = build_shell_command(&requested)
         .env("PATH", fixture.path())
@@ -292,6 +308,8 @@ fn inherited_posix_mode_cannot_change_bash_command_substitution()
         &SelectShellRequest {
             command: "set -e; x=$(false; echo reached); echo \"$x\"".into(),
             preserve_pipeline_status: true,
+            runtime_path: None,
+            python_utf8: false,
         },
         ShellFlavor::Posix,
         Some(bash),
@@ -322,4 +340,29 @@ fn bash_discovery_skips_non_executable_files() -> Result<(), Box<dyn std::error:
     assert_eq!(bash_path_in(&[first, second]), Some(second));
     assert_eq!(bash_path_in(&[first]), None);
     Ok(())
+}
+
+#[test]
+fn runtime_path_is_exported_after_login_profiles_and_after_pipefail() {
+    let mut req = request(false);
+    req.command = "echo hi".into();
+    req.runtime_path = Some("/opt/it's/bin:/usr/bin".into());
+    let posix = selection_for(&req, ShellFlavor::Posix, Some("/bin/bash"));
+    assert_eq!(
+        posix.arguments.last().map(String::as_str),
+        Some("set -o pipefail\nexport PATH='/opt/it'\\''s/bin:/usr/bin'\necho hi")
+    );
+    let sh = selection_for(&req, ShellFlavor::Posix, None);
+    assert_eq!(
+        sh.arguments.last().map(String::as_str),
+        Some("export PATH='/opt/it'\\''s/bin:/usr/bin'\necho hi")
+    );
+}
+
+#[test]
+fn runtime_path_never_changes_a_cmd_payload() {
+    let mut req = request(false);
+    req.runtime_path = Some("C:\\bin".into());
+    let cmd = selection_for(&req, ShellFlavor::Cmd, None);
+    assert_eq!(cmd.raw_arguments.as_deref(), Some("\"false | true\""));
 }

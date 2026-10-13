@@ -286,6 +286,8 @@ async fn observed_shell_keeps_cwd_environment_stdin_and_output_limits() -> Resul
         command: "false; printf '%s:' \"$TINYBOX_SHELL_VALUE\"; cat; printf file > result.txt"
             .into(),
         preserve_pipeline_status: false,
+        runtime_path: None,
+        python_utf8: false,
     };
     let output = host
         .run_shell_observed(&request, &shell, Arc::new(Observer::default()))

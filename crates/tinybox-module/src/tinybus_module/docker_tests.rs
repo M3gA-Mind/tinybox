@@ -491,3 +491,47 @@ async fn docker_fixture_runs_while_an_inherited_script_writer_is_open()
     assert!(status.available);
     Ok(())
 }
+
+fn policy_request(network: Option<&str>, mounts: &[&str], workspace: &str) -> DockerRunRequest {
+    DockerRunRequest {
+        workspace: workspace.into(),
+        image: None,
+        command: "true".into(),
+        login_shell: false,
+        network: network.map(str::to_owned),
+        memory_limit_mb: None,
+        cpus: None,
+        read_only_rootfs: None,
+        read_only_mounts: mounts.iter().map(|m| (*m).to_owned()).collect(),
+        extra_cap_drops: Vec::new(),
+        env: std::collections::BTreeMap::new(),
+        label: None,
+        timeout_ms: 1000,
+    }
+}
+
+#[test]
+fn docker_run_refuses_host_network_and_dangerous_mounts() {
+    for request in [
+        policy_request(Some("host"), &[], "/work"),
+        policy_request(None, &["/var/run/docker.sock"], "/work"),
+        policy_request(None, &["/etc"], "/work"),
+        policy_request(None, &[], "/"),
+    ] {
+        assert!(matches!(
+            validate(&request, true),
+            Err(error) if error.wire_name() == tinybox_bus::INVALID_DOCKER_RUN
+        ));
+    }
+}
+
+#[test]
+fn docker_run_accepts_ordinary_isolated_requests() {
+    assert!(validate(&policy_request(Some("none"), &["/usr/lib"], "/work"), true).is_ok());
+    assert!(validate(&policy_request(Some("bridge"), &[], ""), false).is_ok());
+}
+
+#[test]
+fn workspace_less_run_still_refuses_host_network() {
+    assert!(validate(&policy_request(Some("host"), &[], ""), false).is_err());
+}

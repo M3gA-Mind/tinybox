@@ -1059,6 +1059,8 @@ async fn native_shell_selection_and_execution_roundtrip_through_the_bus_codec()
     let shell = tinybox_bus::SelectShellRequest {
         command: "echo native".into(),
         preserve_pipeline_status: false,
+        runtime_path: None,
+        python_utf8: false,
     };
     let selection: tinybox_bus::ShellInvocation =
         proxy.call("SelectShell", (shell.clone(),)).await?;
@@ -1141,6 +1143,8 @@ async fn existing_shell_method_keeps_its_two_argument_bus_codec()
     let shell = tinybox_bus::SelectShellRequest {
         command: "echo native".into(),
         preserve_pipeline_status: false,
+        runtime_path: None,
+        python_utf8: false,
     };
     let selection: tinybox_bus::ShellInvocation =
         proxy.call("SelectShell", (shell.clone(),)).await?;
@@ -1216,6 +1220,8 @@ async fn shell_discovery_preserves_the_requested_pipeline_status() -> tinybus::R
         .select_shell(tinybox_bus::SelectShellRequest {
             command: "false | true".into(),
             preserve_pipeline_status: true,
+            runtime_path: None,
+            python_utf8: false,
         })
         .await?;
     if cfg!(windows) {
