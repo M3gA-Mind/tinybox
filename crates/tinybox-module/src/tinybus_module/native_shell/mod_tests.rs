@@ -293,3 +293,22 @@ fn python_utf8_defaults_apply_only_when_requested_and_yield_to_approved_override
     );
     Ok(())
 }
+
+#[test]
+fn window_flags_never_change_what_is_executed() {
+    let mut hidden = std::process::Command::new("tool");
+    hidden.arg("a");
+    apply_window_flags(&mut hidden, true);
+    assert_eq!(hidden.get_program(), "tool");
+    assert_eq!(hidden.get_args().collect::<Vec<_>>(), ["a"]);
+}
+
+/// Reaches the `CREATE_NO_WINDOW` branch: a hidden console child still runs.
+#[cfg(windows)]
+#[test]
+fn a_child_started_without_a_console_window_still_runs() {
+    let mut command = std::process::Command::new("cmd");
+    command.args(["/C", "exit 0"]);
+    apply_window_flags(&mut command, true);
+    assert!(command.status().expect("child starts").success());
+}
