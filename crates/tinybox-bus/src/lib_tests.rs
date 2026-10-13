@@ -50,7 +50,7 @@ fn docker_run_vocabulary_is_typed_bounded_and_additive() -> Result<(), serde_jso
     assert_eq!(METHODS[28], "DockerStatus");
     assert_eq!(METHODS[29], "CleanupDocker");
     assert_eq!(METHODS[30], "RunDockerWithoutWorkspace");
-    assert_eq!(METHODS.last(), Some(&"StartNativeShellExec"));
+    assert_eq!(METHODS[34], "StartNativeShellExec");
     assert_eq!(CONTRACT_VERSION, (1, 18));
     assert_eq!(MAX_DOCKER_RUN_TIMEOUT_MS, 86_400_000);
     let serialized = serde_json::to_value(&request)?;
