@@ -75,15 +75,13 @@ impl ModuleStorage {
         // not run on an async worker.
         let opened =
             tokio::task::spawn_blocking(move || tinybox_drivers::DocumentBoxStore::new(documents))
-                .await;
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|opened| opened.map_err(|error| error.to_string()));
         match opened {
-            Ok(Ok(store)) => Arc::new(OffWorkerStore(store)),
-            Ok(Err(error)) => {
-                log::warn!("[tinybox_module] box store on host storage refused: {error}");
-                Arc::new(MemoryStore::new())
-            }
+            Ok(store) => Arc::new(OffWorkerStore(store)),
             Err(error) => {
-                log::warn!("[tinybox_module] box store task failed: {error}");
+                log::warn!("[tinybox_module] box store on host storage unavailable: {error}");
                 Arc::new(MemoryStore::new())
             }
         }
