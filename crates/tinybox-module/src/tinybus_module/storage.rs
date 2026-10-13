@@ -121,4 +121,5 @@ impl std::fmt::Debug for ModuleStorage {
 
 #[cfg(test)]
 #[path = "storage_tests.rs"]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests;
