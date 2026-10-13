@@ -57,7 +57,11 @@ fn selection_for(
     bash: Option<&str>,
 ) -> ShellInvocation {
     let posix_payload = match &request.runtime_path {
-        Some(path) => format!("export PATH='{}'\n{}", path.replace('\'', "'\\''"), request.command),
+        Some(path) => format!(
+            "export PATH='{}'\n{}",
+            path.replace('\'', "'\\''"),
+            request.command
+        ),
         None => request.command.clone(),
     };
     match flavor {

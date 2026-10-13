@@ -54,8 +54,8 @@ fn cmd_preserves_quoted_payload_and_lists_bootstrap_names_without_values() {
 
 #[test]
 #[cfg(windows)]
-fn actual_cmd_raw_payload_keeps_a_quoted_executable_and_argument()
--> Result<(), Box<dyn std::error::Error>> {
+fn actual_cmd_raw_payload_keeps_a_quoted_executable_and_argument(
+) -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
     let executable = root.path().join("tool with spaces.exe");
     std::fs::copy(std::env::current_exe()?, &executable)?;
@@ -71,10 +71,8 @@ fn actual_cmd_raw_payload_keeps_a_quoted_executable_and_argument()
         python_utf8: false,
     };
     assert!(build_shell_command(&requested).status()?.success());
-    assert!(
-        std::fs::read_to_string(output)?
-            .contains("actual_cmd_raw_payload_keeps_a_quoted_executable_and_argument")
-    );
+    assert!(std::fs::read_to_string(output)?
+        .contains("actual_cmd_raw_payload_keeps_a_quoted_executable_and_argument"));
     Ok(())
 }
 
@@ -91,8 +89,8 @@ fn selected_shell_and_native_builder_agree() {
 
 #[test]
 #[cfg(unix)]
-fn actual_bash_pipeline_failure_is_visible_unless_preservation_is_requested()
--> Result<(), Box<dyn std::error::Error>> {
+fn actual_bash_pipeline_failure_is_visible_unless_preservation_is_requested(
+) -> Result<(), Box<dyn std::error::Error>> {
     // The fallback is tested above; execution only asserts Bash semantics on
     // hosts whose selected shell actually supports them.
     if bash_path().is_none() {
@@ -122,8 +120,8 @@ fn actual_cmd_raw_payload_keeps_quoted_redirection_paths() -> Result<(), Box<dyn
 
 #[test]
 #[cfg(unix)]
-fn bash_startup_environment_cannot_replace_the_requested_payload()
--> Result<(), Box<dyn std::error::Error>> {
+fn bash_startup_environment_cannot_replace_the_requested_payload(
+) -> Result<(), Box<dyn std::error::Error>> {
     const CHILD: &str = "TINYBOX_SHELL_ENV_REGRESSION_CHILD";
     if std::env::var_os(CHILD).is_some() {
         let request = SelectShellRequest {
@@ -156,8 +154,8 @@ fn bash_startup_environment_cannot_replace_the_requested_payload()
 
 #[test]
 #[cfg(unix)]
-fn inherited_bash_options_cannot_abort_the_requested_payload()
--> Result<(), Box<dyn std::error::Error>> {
+fn inherited_bash_options_cannot_abort_the_requested_payload(
+) -> Result<(), Box<dyn std::error::Error>> {
     const CHILD: &str = "TINYBOX_SHELL_OPTIONS_REGRESSION_CHILD";
     if std::env::var_os(CHILD).is_some() {
         let request = SelectShellRequest {
@@ -299,8 +297,8 @@ fn cmd_startup_ignores_the_payload_path() -> Result<(), Box<dyn std::error::Erro
 
 #[test]
 #[cfg(unix)]
-fn inherited_posix_mode_cannot_change_bash_command_substitution()
--> Result<(), Box<dyn std::error::Error>> {
+fn inherited_posix_mode_cannot_change_bash_command_substitution(
+) -> Result<(), Box<dyn std::error::Error>> {
     let Some(bash) = bash_path() else {
         return Ok(());
     };
