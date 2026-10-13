@@ -33,3 +33,23 @@ fn a_save_that_cannot_land_reports_the_failure() {
     fs::create_dir(&path).expect("mkdir");
     assert!(FileIndexStore::new(path).save(b"{}").is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn a_refused_rename_falls_back_to_overwriting_in_place() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("index.json");
+    fs::write(&path, b"old").expect("seed");
+    fs::write(dir.path().join("index.json.tmp"), b"").expect("tmp");
+    // Existing files stay writable, but nothing can be renamed inside.
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).expect("chmod");
+
+    let store = FileIndexStore::new(&path);
+    let saved = store.save(b"new");
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).expect("restore");
+
+    saved.expect("save");
+    assert_eq!(fs::read(&path).expect("read"), b"new");
+}
