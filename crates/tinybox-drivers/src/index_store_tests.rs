@@ -1,5 +1,5 @@
 use super::*;
-use crate::faulty::{Faulty, Faults};
+use crate::faulty::{Faults, Faulty};
 use tinybox_core::clock::FixedClock;
 use tinybox_jail::JailRegistry;
 use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};

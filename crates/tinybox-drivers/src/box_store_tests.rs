@@ -1,5 +1,5 @@
 use super::*;
-use crate::faulty::{Faulty, Faults};
+use crate::faulty::{Faults, Faulty};
 use serde_json::json;
 use tinybox_core::store::insert_new;
 use tinybox_core::{BoxSpec, HostRef, Placement, SandboxRef, WorkspaceSource};
@@ -203,7 +203,13 @@ fn a_backend_that_refuses_the_collection_fails_to_open() {
         ensure: true,
         ..Faults::default()
     }));
-    assert!(matches!(result, Err(Error::Store { operation: "open", .. })));
+    assert!(matches!(
+        result,
+        Err(Error::Store {
+            operation: "open",
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -221,11 +227,17 @@ fn backend_failures_surface_as_store_errors_per_operation() -> Result<()> {
     });
     assert!(matches!(
         reading.get(&record.id),
-        Err(Error::Store { operation: "read", .. })
+        Err(Error::Store {
+            operation: "read",
+            ..
+        })
     ));
     assert!(matches!(
         reading.set_state(&record.id, BoxState::Stopped),
-        Err(Error::Store { operation: "read", .. })
+        Err(Error::Store {
+            operation: "read",
+            ..
+        })
     ));
 
     let listing = store_with(Faults {
@@ -234,7 +246,10 @@ fn backend_failures_surface_as_store_errors_per_operation() -> Result<()> {
     });
     assert!(matches!(
         listing.list(),
-        Err(Error::Store { operation: "list", .. })
+        Err(Error::Store {
+            operation: "list",
+            ..
+        })
     ));
 
     let writing = store_with(Faults {
@@ -243,11 +258,17 @@ fn backend_failures_surface_as_store_errors_per_operation() -> Result<()> {
     });
     assert!(matches!(
         writing.insert(&info("b")?),
-        Err(Error::Store { operation: "insert", .. })
+        Err(Error::Store {
+            operation: "insert",
+            ..
+        })
     ));
     assert!(matches!(
         writing.set_state(&record.id, BoxState::Stopped),
-        Err(Error::Store { operation: "write", .. })
+        Err(Error::Store {
+            operation: "write",
+            ..
+        })
     ));
 
     let removing = store_with(Faults {
@@ -256,7 +277,10 @@ fn backend_failures_surface_as_store_errors_per_operation() -> Result<()> {
     });
     assert!(matches!(
         removing.remove(&record.id),
-        Err(Error::Store { operation: "remove", .. })
+        Err(Error::Store {
+            operation: "remove",
+            ..
+        })
     ));
     Ok(())
 }
@@ -280,7 +304,10 @@ fn set_state_gives_up_when_the_record_never_settles() -> Result<()> {
     let store = DocumentBoxStore::new(Faulty::with_conflicts(seeded, usize::MAX))?;
     assert!(matches!(
         store.set_state(&record.id, BoxState::Stopped),
-        Err(Error::Store { operation: "write", .. })
+        Err(Error::Store {
+            operation: "write",
+            ..
+        })
     ));
     Ok(())
 }

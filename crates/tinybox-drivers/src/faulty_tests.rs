@@ -15,12 +15,12 @@ type Result<T> = std::result::Result<T, StorageError>;
 
 /// What to break.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct Faults {
-    pub ensure: bool,
-    pub get: bool,
-    pub put: bool,
-    pub delete: bool,
-    pub query: bool,
+pub(crate) struct Faults {
+    pub(crate) ensure: bool,
+    pub(crate) get: bool,
+    pub(crate) put: bool,
+    pub(crate) delete: bool,
+    pub(crate) query: bool,
 }
 
 /// Delegates to `inner`, failing the operations named in `faults`.
@@ -28,14 +28,14 @@ pub struct Faults {
 /// `conflicts` forces that many version-checked writes to report a conflict
 /// before they reach the inner store (`usize::MAX` means always).
 #[derive(Debug)]
-pub struct Faulty {
-    pub inner: Arc<dyn DocumentStore>,
-    pub faults: Faults,
-    pub conflicts: AtomicUsize,
+pub(crate) struct Faulty {
+    pub(crate) inner: Arc<dyn DocumentStore>,
+    pub(crate) faults: Faults,
+    pub(crate) conflicts: AtomicUsize,
 }
 
 impl Faulty {
-    pub fn new(inner: Arc<dyn DocumentStore>, faults: Faults) -> Arc<Self> {
+    pub(crate) fn new(inner: Arc<dyn DocumentStore>, faults: Faults) -> Arc<Self> {
         Arc::new(Self {
             inner,
             faults,
@@ -43,7 +43,7 @@ impl Faulty {
         })
     }
 
-    pub fn with_conflicts(inner: Arc<dyn DocumentStore>, conflicts: usize) -> Arc<Self> {
+    pub(crate) fn with_conflicts(inner: Arc<dyn DocumentStore>, conflicts: usize) -> Arc<Self> {
         Arc::new(Self {
             inner,
             faults: Faults::default(),
