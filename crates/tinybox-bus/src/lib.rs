@@ -51,7 +51,8 @@ pub use files::{
 /// shell execution on local passthrough resources.
 /// 1.14 adds native shell execution with owned scratch, timeout and optional jail.
 /// 1.15 adds `runtime_path` and `python_utf8` to shell selection.
-pub const CONTRACT_VERSION: (u32, u32) = (1, 15);
+/// 1.16 adds the [`names`] member constants; `METHODS` is derived from them.
+pub const CONTRACT_VERSION: (u32, u32) = (1, 16);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.
@@ -92,42 +93,119 @@ pub const INTERFACE: &str = "ai.tinyhumans.tinybox.Box";
 /// Module object path.
 pub const OBJECT_PATH: &str = "/ai/tinyhumans/tinybox/Box";
 /// Supported additive methods, including the original discovery operation.
+/// Named bus members. Hosts call members through these constants, never by
+/// position in [`METHODS`] or by string literal.
+pub mod names {
+    /// Wire name of the `Describe` member.
+    pub const DESCRIBE: &str = "Describe";
+    /// Wire name of the `Create` member.
+    pub const CREATE: &str = "Create";
+    /// Wire name of the `Exec` member.
+    pub const EXEC: &str = "Exec";
+    /// Wire name of the `Inspect` member.
+    pub const INSPECT: &str = "Inspect";
+    /// Wire name of the `Close` member.
+    pub const CLOSE: &str = "Close";
+    /// Wire name of the `Spawn` member.
+    pub const SPAWN: &str = "Spawn";
+    /// Wire name of the `IsRunning` member.
+    pub const IS_RUNNING: &str = "IsRunning";
+    /// Wire name of the `Cancel` member.
+    pub const CANCEL: &str = "Cancel";
+    /// Wire name of the `AnalyzeShell` member.
+    pub const ANALYZE_SHELL: &str = "AnalyzeShell";
+    /// Wire name of the `Reserve` member.
+    pub const RESERVE: &str = "Reserve";
+    /// Wire name of the `Capabilities` member.
+    pub const CAPABILITIES: &str = "Capabilities";
+    /// Wire name of the `Shutdown` member.
+    pub const SHUTDOWN: &str = "Shutdown";
+    /// Wire name of the `Forward` member.
+    pub const FORWARD: &str = "Forward";
+    /// Wire name of the `CloseForward` member.
+    pub const CLOSE_FORWARD: &str = "CloseForward";
+    /// Wire name of the `JailStatus` member.
+    pub const JAIL_STATUS: &str = "JailStatus";
+    /// Wire name of the `AnalyzeCommand` member.
+    pub const ANALYZE_COMMAND: &str = "AnalyzeCommand";
+    /// Wire name of the `BeginFileRead` member.
+    pub const BEGIN_FILE_READ: &str = "BeginFileRead";
+    /// Wire name of the `ReadFileChunk` member.
+    pub const READ_FILE_CHUNK: &str = "ReadFileChunk";
+    /// Wire name of the `FinishFileRead` member.
+    pub const FINISH_FILE_READ: &str = "FinishFileRead";
+    /// Wire name of the `BeginFileWrite` member.
+    pub const BEGIN_FILE_WRITE: &str = "BeginFileWrite";
+    /// Wire name of the `WriteFileChunk` member.
+    pub const WRITE_FILE_CHUNK: &str = "WriteFileChunk";
+    /// Wire name of the `FinishFileWrite` member.
+    pub const FINISH_FILE_WRITE: &str = "FinishFileWrite";
+    /// Wire name of the `AbortFileWrite` member.
+    pub const ABORT_FILE_WRITE: &str = "AbortFileWrite";
+    /// Wire name of the `StartExec` member.
+    pub const START_EXEC: &str = "StartExec";
+    /// Wire name of the `ReadOutput` member.
+    pub const READ_OUTPUT: &str = "ReadOutput";
+    /// Wire name of the `ReleaseOutput` member.
+    pub const RELEASE_OUTPUT: &str = "ReleaseOutput";
+    /// Wire name of the `StartJailedExec` member.
+    pub const START_JAILED_EXEC: &str = "StartJailedExec";
+    /// Wire name of the `RunDocker` member.
+    pub const RUN_DOCKER: &str = "RunDocker";
+    /// Wire name of the `DockerStatus` member.
+    pub const DOCKER_STATUS: &str = "DockerStatus";
+    /// Wire name of the `CleanupDocker` member.
+    pub const CLEANUP_DOCKER: &str = "CleanupDocker";
+    /// Wire name of the `RunDockerWithoutWorkspace` member.
+    pub const RUN_DOCKER_WITHOUT_WORKSPACE: &str = "RunDockerWithoutWorkspace";
+    /// Wire name of the `ResolveLocalGrants` member.
+    pub const RESOLVE_LOCAL_GRANTS: &str = "ResolveLocalGrants";
+    /// Wire name of the `SelectShell` member.
+    pub const SELECT_SHELL: &str = "SelectShell";
+    /// Wire name of the `StartShellExec` member.
+    pub const START_SHELL_EXEC: &str = "StartShellExec";
+    /// Wire name of the `StartNativeShellExec` member.
+    pub const START_NATIVE_SHELL_EXEC: &str = "StartNativeShellExec";
+}
+
+/// Supported additive methods, including the original discovery operation.
+/// Derived from [`names`]; the order is append-only.
 pub const METHODS: &[&str] = &[
-    "Describe",
-    "Create",
-    "Exec",
-    "Inspect",
-    "Close",
-    "Spawn",
-    "IsRunning",
-    "Cancel",
-    "AnalyzeShell",
-    "Reserve",
-    "Capabilities",
-    "Shutdown",
-    "Forward",
-    "CloseForward",
-    "JailStatus",
-    "AnalyzeCommand",
-    "BeginFileRead",
-    "ReadFileChunk",
-    "FinishFileRead",
-    "BeginFileWrite",
-    "WriteFileChunk",
-    "FinishFileWrite",
-    "AbortFileWrite",
-    "StartExec",
-    "ReadOutput",
-    "ReleaseOutput",
-    "StartJailedExec",
-    "RunDocker",
-    "DockerStatus",
-    "CleanupDocker",
-    "RunDockerWithoutWorkspace",
-    "ResolveLocalGrants",
-    "SelectShell",
-    "StartShellExec",
-    "StartNativeShellExec",
+    names::DESCRIBE,
+    names::CREATE,
+    names::EXEC,
+    names::INSPECT,
+    names::CLOSE,
+    names::SPAWN,
+    names::IS_RUNNING,
+    names::CANCEL,
+    names::ANALYZE_SHELL,
+    names::RESERVE,
+    names::CAPABILITIES,
+    names::SHUTDOWN,
+    names::FORWARD,
+    names::CLOSE_FORWARD,
+    names::JAIL_STATUS,
+    names::ANALYZE_COMMAND,
+    names::BEGIN_FILE_READ,
+    names::READ_FILE_CHUNK,
+    names::FINISH_FILE_READ,
+    names::BEGIN_FILE_WRITE,
+    names::WRITE_FILE_CHUNK,
+    names::FINISH_FILE_WRITE,
+    names::ABORT_FILE_WRITE,
+    names::START_EXEC,
+    names::READ_OUTPUT,
+    names::RELEASE_OUTPUT,
+    names::START_JAILED_EXEC,
+    names::RUN_DOCKER,
+    names::DOCKER_STATUS,
+    names::CLEANUP_DOCKER,
+    names::RUN_DOCKER_WITHOUT_WORKSPACE,
+    names::RESOLVE_LOCAL_GRANTS,
+    names::SELECT_SHELL,
+    names::START_SHELL_EXEC,
+    names::START_NATIVE_SHELL_EXEC,
 ];
 
 /// Facts about the detected native directory-jail backend.

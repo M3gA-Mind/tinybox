@@ -51,7 +51,7 @@ fn docker_run_vocabulary_is_typed_bounded_and_additive() -> Result<(), serde_jso
     assert_eq!(METHODS[29], "CleanupDocker");
     assert_eq!(METHODS[30], "RunDockerWithoutWorkspace");
     assert_eq!(METHODS.last(), Some(&"StartNativeShellExec"));
-    assert_eq!(CONTRACT_VERSION, (1, 15));
+    assert_eq!(CONTRACT_VERSION, (1, 16));
     assert_eq!(MAX_DOCKER_RUN_TIMEOUT_MS, 86_400_000);
     let serialized = serde_json::to_value(&request)?;
     assert_eq!(serialized["read_only_rootfs"], false);
@@ -129,7 +129,7 @@ fn host_gateway_and_docker_facts_are_additive_and_default_safely() -> Result<(),
 #[test]
 fn version_and_capability_wire_snapshot_preserve_contract_compatibility()
 -> Result<(), serde_json::Error> {
-    assert_eq!(CONTRACT_VERSION, (1, 15));
+    assert_eq!(CONTRACT_VERSION, (1, 16));
     assert!(is_compatible(CONTRACT_VERSION));
     assert!(!is_compatible((1, 8)));
     assert!(!is_compatible((1, 7)));
@@ -147,7 +147,7 @@ fn version_and_capability_wire_snapshot_preserve_contract_compatibility()
         exec_backends: Vec::new(),
         spawn_backends: Vec::new(),
     };
-    let snapshot = serde_json::json!({"contract_version":[1,15],"create_backends":["passthrough"],"exec_backends":[],"spawn_backends":[]});
+    let snapshot = serde_json::json!({"contract_version":[1,16],"create_backends":["passthrough"],"exec_backends":[],"spawn_backends":[]});
     assert_eq!(serde_json::to_value(&capabilities)?, snapshot);
     assert_eq!(
         serde_json::from_value::<ModuleCapabilities>(snapshot)?,
@@ -166,7 +166,7 @@ fn no_workspace_docker_operation_is_present_in_the_contract() {
             .count(),
         1
     );
-    assert_eq!(CONTRACT_VERSION, (1, 15));
+    assert_eq!(CONTRACT_VERSION, (1, 16));
 }
 
 #[test]
@@ -330,4 +330,53 @@ fn native_shell_wire_defaults_close_stdin_and_keep_a_bounded_runtime()
     assert!(!is_compatible((1, 13)));
     assert!(!is_compatible((1, 10)));
     Ok(())
+}
+
+#[test]
+fn named_members_resolve_to_the_method_catalogue_in_order() {
+    use names::*;
+    let expected = [
+        DESCRIBE,
+        CREATE,
+        EXEC,
+        INSPECT,
+        CLOSE,
+        SPAWN,
+        IS_RUNNING,
+        CANCEL,
+        ANALYZE_SHELL,
+        RESERVE,
+        CAPABILITIES,
+        SHUTDOWN,
+        FORWARD,
+        CLOSE_FORWARD,
+        JAIL_STATUS,
+        ANALYZE_COMMAND,
+        BEGIN_FILE_READ,
+        READ_FILE_CHUNK,
+        FINISH_FILE_READ,
+        BEGIN_FILE_WRITE,
+        WRITE_FILE_CHUNK,
+        FINISH_FILE_WRITE,
+        ABORT_FILE_WRITE,
+        START_EXEC,
+        READ_OUTPUT,
+        RELEASE_OUTPUT,
+        START_JAILED_EXEC,
+        RUN_DOCKER,
+        DOCKER_STATUS,
+        CLEANUP_DOCKER,
+        RUN_DOCKER_WITHOUT_WORKSPACE,
+        RESOLVE_LOCAL_GRANTS,
+        SELECT_SHELL,
+        START_SHELL_EXEC,
+        START_NATIVE_SHELL_EXEC,
+    ];
+    assert_eq!(METHODS, &expected[..]);
+    assert_eq!(DESCRIBE, "Describe");
+    assert_eq!(ANALYZE_SHELL, "AnalyzeShell");
+    let mut unique = METHODS.to_vec();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), METHODS.len());
 }
