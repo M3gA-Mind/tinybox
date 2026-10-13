@@ -223,11 +223,24 @@ async fn a_refused_scope_leaves_the_module_on_memory() -> TestResult {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_host_that_stops_serving_leaves_new_boxes_on_memory() -> TestResult {
-    let mut rig = rig(true).await?;
-    let storage = ModuleStorage::connected(rig.module.clone());
+    let bus = MemoryBus::new();
+    Broker::new().spawn(bus.clone());
+    let backend = MemoryStorage::new();
+    let host = Connection::connect(bus.connect().await?).await?;
+    let withdrawn = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::clone(&withdrawn);
+    let endpoint = PerCallerEndpoint::new(move |_sender| {
+        if flag.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
+        Some(StorageServer::new(backend.for_scope(&Scope::local()).ok()?))
+    });
+    let _served = serve(&host, Arc::new(endpoint)).await?;
+    let module = Connection::connect(bus.connect().await?).await?;
+    let storage = ModuleStorage::connected(module);
     assert!(storage.documents().await.is_some());
     // The host withdraws storage after the module cached its handle.
-    drop(rig._served.take());
+    withdrawn.store(true, std::sync::atomic::Ordering::SeqCst);
     let store =
         tokio::time::timeout(std::time::Duration::from_secs(30), storage.box_store()).await?;
     let record = info("fallback-box")?;
