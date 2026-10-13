@@ -330,7 +330,13 @@ impl Resources {
                 return Err(failure(tinybox_bus::EXEC_CANCELLED, "resource is closing"));
             }
             let resource_host = host.clone();
-            let store = self.storage.box_store().await;
+            let shared = self
+                .storage
+                .box_store()
+                .await
+                .map_err(|error| backend_error(&error))?;
+            let recording = Arc::new(super::storage::RecordingStore::new(shared));
+            let store: Arc<dyn tinybox_core::Store> = recording.clone();
             let selection = make_sandbox(
                 &request.backend,
                 host.clone(),
@@ -339,16 +345,6 @@ impl Resources {
             )?;
             let sandbox = selection.sandbox.clone();
             let spec = make_spec(&request, host.name())?;
-            // The box collection is shared by every resource of the tenant, so
-            // a failed create is recovered only from records it added.
-            let known_before = tinybox_core::Store::list(store.as_ref())
-                .map(|records| {
-                    records
-                        .into_iter()
-                        .map(|record| record.id)
-                        .collect::<std::collections::HashSet<_>>()
-                })
-                .unwrap_or_default();
             let info = match sandbox.create(&spec).await {
                 Ok(info) => info,
                 Err(error) => {
@@ -357,10 +353,7 @@ impl Resources {
                     // when named cleanup failed; keep the sandbox and id in
                     // this caller-known slot so Close/Shutdown can retry it.
                     if request.backend == "docker"
-                        && let Ok(records) = tinybox_core::Store::list(store.as_ref())
-                        && let Some(info) = records
-                            .into_iter()
-                            .find(|record| !known_before.contains(&record.id))
+                        && let Some(info) = recording.first_inserted()
                     {
                         *slot_guard = Some(Resource::new(
                             &request,

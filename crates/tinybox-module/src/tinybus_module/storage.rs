@@ -17,6 +17,9 @@ use tinystoragedrivers_core::{DocumentStore, ScopedStorage, StorageBackend};
 pub(super) struct ModuleStorage {
     connection: Option<Connection>,
     scoped: tokio::sync::Mutex<Option<ScopedStorage>>,
+    /// The opened host-backed box store, shared by every resource: it owns a
+    /// blocking bridge with its own runtime thread, so one per module.
+    boxes: tokio::sync::Mutex<Option<Arc<dyn Store>>>,
 }
 
 impl ModuleStorage {
@@ -25,6 +28,7 @@ impl ModuleStorage {
         Self {
             connection: Some(connection),
             scoped: tokio::sync::Mutex::default(),
+            boxes: tokio::sync::Mutex::default(),
         }
     }
 
@@ -65,26 +69,37 @@ impl ModuleStorage {
             .map(|scoped| Arc::clone(scoped.documents()))
     }
 
-    /// Where a new resource keeps its box record: the host's document port
-    /// when it serves one, memory otherwise.
-    pub(super) async fn box_store(&self) -> Arc<dyn Store> {
+    /// Where resources keep their box records: the host's document port when
+    /// it serves one, memory when the host serves no storage at all.
+    ///
+    /// # Errors
+    ///
+    /// Once the host serves storage, a failure to open its box collection is
+    /// returned rather than hidden behind memory records the host cannot see.
+    pub(super) async fn box_store(&self) -> tinybox_core::Result<Arc<dyn Store>> {
         let Some(documents) = self.documents().await else {
-            return Arc::new(MemoryStore::new());
+            return Ok(Arc::new(MemoryStore::new()));
         };
+        let mut slot = self.boxes.lock().await;
+        if let Some(store) = slot.as_ref() {
+            return Ok(Arc::clone(store));
+        }
         // The store declares its collection with a blocking bridge, which must
         // not run on an async worker.
         let opened =
             tokio::task::spawn_blocking(move || tinybox_drivers::DocumentBoxStore::new(documents))
                 .await
-                .map_err(|error| error.to_string())
-                .and_then(|opened| opened.map_err(|error| error.to_string()));
-        match opened {
-            Ok(store) => Arc::new(OffWorkerStore(store)),
-            Err(error) => {
-                log::warn!("[tinybox_module] box store on host storage unavailable: {error}");
-                Arc::new(MemoryStore::new())
-            }
-        }
+                .map_err(|error| tinybox_core::Error::Store {
+                    operation: "open",
+                    message: error.to_string(),
+                })
+                .and_then(|opened| opened)
+                .inspect_err(|error| {
+                    log::warn!("[tinybox_module] box store on host storage unavailable: {error}");
+                })?;
+        let store: Arc<dyn Store> = Arc::new(OffWorkerStore(opened));
+        *slot = Some(Arc::clone(&store));
+        Ok(store)
     }
 
     /// A jail registry rooted at `base` whose index lives on the host's
@@ -153,6 +168,66 @@ impl<S: Store> Store for OffWorkerStore<S> {
 
     fn remove(&self, id: &tinybox_core::BoxId) -> tinybox_core::Result<()> {
         Self::off_worker(|| self.0.remove(id))
+    }
+}
+
+/// A view of a shared [`Store`] that remembers the records this holder
+/// inserted, so a failed create can find its own record by identity rather
+/// than by diffing a collection other resources write to.
+#[derive(Debug)]
+pub(super) struct RecordingStore {
+    inner: Arc<dyn Store>,
+    inserted: std::sync::Mutex<Vec<tinybox_core::BoxId>>,
+}
+
+impl RecordingStore {
+    /// A recording view over `inner`.
+    pub(super) fn new(inner: Arc<dyn Store>) -> Self {
+        Self {
+            inner,
+            inserted: std::sync::Mutex::default(),
+        }
+    }
+
+    /// The first record this view inserted that the store still holds.
+    pub(super) fn first_inserted(&self) -> Option<tinybox_core::BoxInfo> {
+        let ids = self
+            .inserted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        ids.iter().find_map(|id| self.inner.get(id).ok())
+    }
+}
+
+impl Store for RecordingStore {
+    fn insert(&self, info: &tinybox_core::BoxInfo) -> tinybox_core::Result<()> {
+        self.inner.insert(info)?;
+        self.inserted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(info.id.clone());
+        Ok(())
+    }
+
+    fn get(&self, id: &tinybox_core::BoxId) -> tinybox_core::Result<tinybox_core::BoxInfo> {
+        self.inner.get(id)
+    }
+
+    fn list(&self) -> tinybox_core::Result<Vec<tinybox_core::BoxInfo>> {
+        self.inner.list()
+    }
+
+    fn set_state(
+        &self,
+        id: &tinybox_core::BoxId,
+        state: tinybox_core::BoxState,
+    ) -> tinybox_core::Result<()> {
+        self.inner.set_state(id, state)
+    }
+
+    fn remove(&self, id: &tinybox_core::BoxId) -> tinybox_core::Result<()> {
+        self.inner.remove(id)
     }
 }
 
