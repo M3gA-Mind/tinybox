@@ -26,6 +26,9 @@ mod shell_selection;
 pub use shell_execution::ShellExecRequest;
 pub use shell_selection::{SelectShellRequest, ShellFlavor, ShellInvocation};
 
+mod policy;
+pub use policy::{DockerPolicyReport, DockerPolicyRequest};
+
 mod shell;
 pub use shell::{CommandAnalysis, CommandClass, CommandSegment};
 mod files;
@@ -54,7 +57,11 @@ pub use files::{
 /// 1.16 adds the [`names`] member constants; `METHODS` is derived from them.
 /// 1.17 makes `RunDocker` and `RunDockerWithoutWorkspace` refuse host-network
 /// runs and dangerous mounts.
-pub const CONTRACT_VERSION: (u32, u32) = (1, 17);
+/// 1.18 adds the standalone `ValidateDockerPolicy` member, so a host can ask the
+/// module for the same verdict the Docker run members enforce without starting
+/// a container, and `hide_window` on [`ShellExecRequest`] (Windows console
+/// suppression for a native shell child; ignored elsewhere).
+pub const CONTRACT_VERSION: (u32, u32) = (1, 18);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.
@@ -167,6 +174,8 @@ pub mod names {
     pub const START_SHELL_EXEC: &str = "StartShellExec";
     /// Wire name of the `StartNativeShellExec` member.
     pub const START_NATIVE_SHELL_EXEC: &str = "StartNativeShellExec";
+    /// Wire name of the `ValidateDockerPolicy` member.
+    pub const VALIDATE_DOCKER_POLICY: &str = "ValidateDockerPolicy";
 }
 
 /// Supported additive methods, including the original discovery operation.
@@ -207,6 +216,7 @@ pub const METHODS: &[&str] = &[
     names::SELECT_SHELL,
     names::START_SHELL_EXEC,
     names::START_NATIVE_SHELL_EXEC,
+    names::VALIDATE_DOCKER_POLICY,
 ];
 
 /// Facts about the detected native directory-jail backend.

@@ -653,6 +653,7 @@ async fn shell_request(
         timeout_ms: 5000,
         stdin: None,
         jail: None,
+        hide_window: false,
     })
 }
 #[tokio::test]

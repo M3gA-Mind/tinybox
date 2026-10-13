@@ -294,6 +294,22 @@ impl BoxService {
         .await
     }
 
+    /// Report how a Docker run would weaken isolation, without starting anything.
+    /// Applies the same checks `RunDocker` enforces before it creates a container.
+    async fn validate_docker_policy(
+        &self,
+        request: tinybox_bus::DockerPolicyRequest,
+    ) -> TinyBusResult<tinybox_bus::DockerPolicyReport> {
+        std::future::ready(Ok(tinybox_bus::DockerPolicyReport {
+            issues: tinybox_docker::run_policy_issues(
+                request.network.as_deref(),
+                request.workspace.as_deref(),
+                &request.read_only_mounts,
+            ),
+        }))
+        .await
+    }
+
     /// Run one Docker-isolated shell command with bounded output and runtime.
     async fn run_docker(
         &self,
@@ -507,7 +523,7 @@ tinybus_module::module_export_optional_static! {
     setup = setup,
     worker_threads = 1,
     provides = ["ai.tinyhumans.tinybox.Box"],
-    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput", "StartJailedExec", "RunDocker", "DockerStatus", "CleanupDocker", "RunDockerWithoutWorkspace", "ResolveLocalGrants", "SelectShell", "StartShellExec", "StartNativeShellExec"],
+    methods = ["Describe", "Create", "Exec", "Inspect", "Close", "Spawn", "IsRunning", "Cancel", "AnalyzeShell", "Reserve", "Capabilities", "Shutdown", "Forward", "CloseForward", "JailStatus", "AnalyzeCommand", "BeginFileRead", "ReadFileChunk", "FinishFileRead", "BeginFileWrite", "WriteFileChunk", "FinishFileWrite", "AbortFileWrite", "StartExec", "ReadOutput", "ReleaseOutput", "StartJailedExec", "RunDocker", "DockerStatus", "CleanupDocker", "RunDockerWithoutWorkspace", "ResolveLocalGrants", "SelectShell", "StartShellExec", "StartNativeShellExec", "ValidateDockerPolicy"],
     signals = [],
     requires = [],
     optional = [],

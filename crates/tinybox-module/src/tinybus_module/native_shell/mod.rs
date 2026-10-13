@@ -146,6 +146,7 @@ impl ShellContext {
         observer: Arc<super::output::OutputJournal>,
     ) -> tinybox_core::Result<tinybox_core::ExecOutput> {
         let mut command = tinybox_host::build_shell_command(&self.request.shell);
+        apply_window_flags(&mut command, self.request.hide_window);
         command.env_clear().envs(&self.environment);
         if let Some(cwd) = &resolved.cwd {
             command.current_dir(cwd);
@@ -227,6 +228,17 @@ impl ShellContext {
             tinybox_core::Error::io("join shell scratch cleanup", &std::io::Error::other(error))
         })?
     }
+}
+/// Windows: `CREATE_NO_WINDOW`, so a GUI host's shell child flashes no console.
+/// Other platforms have no console window to hide.
+fn apply_window_flags(command: &mut std::process::Command, hide_window: bool) {
+    #[cfg(windows)]
+    if hide_window {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    #[cfg(not(windows))]
+    let _ = (command, hide_window);
 }
 fn environment_name_matches(left: &str, right: &str) -> bool {
     if cfg!(windows) {

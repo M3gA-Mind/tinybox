@@ -1098,6 +1098,7 @@ async fn native_shell_selection_and_execution_roundtrip_through_the_bus_codec()
                 timeout_ms: 5000,
                 stdin: None,
                 jail: None,
+                hide_window: false,
             },),
         )
         .await?;
@@ -1257,4 +1258,29 @@ async fn docker_control_dispatch_rejects_unbounded_deadlines() {
         matches!(cleanup, Err(tinybus::Error::MethodFailed { name, .. })
         if name == tinybox_bus::INVALID_DOCKER_CONTROL)
     );
+}
+
+#[tokio::test]
+async fn validate_docker_policy_reports_the_run_checks_without_a_daemon()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let service = BoxService::default();
+    let safe = service
+        .validate_docker_policy(tinybox_bus::DockerPolicyRequest {
+            network: Some("none".into()),
+            workspace: Some("/home/u/project".into()),
+            read_only_mounts: vec!["/usr/lib".into()],
+        })
+        .await?;
+    assert_eq!(safe.issues, Vec::<String>::new());
+
+    let unsafe_run = service
+        .validate_docker_policy(tinybox_bus::DockerPolicyRequest {
+            network: Some("host".into()),
+            workspace: Some("/".into()),
+            read_only_mounts: vec!["/etc/".into(), "/var/run/docker.sock".into()],
+        })
+        .await?;
+    assert_eq!(unsafe_run.issues.len(), 4);
+    assert!(unsafe_run.issues[0].contains("host network"));
+    Ok(())
 }

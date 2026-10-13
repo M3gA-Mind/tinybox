@@ -48,8 +48,9 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | SelectShell | SelectShellRequest | ShellInvocation |
 | StartShellExec | SpawnRequest, SelectShellRequest | ProcessRef |
 | StartNativeShellExec | ShellExecRequest | ProcessRef |
+| ValidateDockerPolicy | DockerPolicyRequest | DockerPolicyReport |
 
-Capabilities advertises contract version 1.17; 1.0 denotes the original
+Capabilities advertises contract version 1.18; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -101,6 +102,12 @@ existing callers; when true, the command runs through `sh -lc` rather than
 `sh -c`, preserving login-shell runtime behavior. All other image, network,
 resource, rootfs, read-only mount, capability-drop, environment, label, output,
 and timeout behavior remains shared with `RunDocker`.
+
+Version 1.18 adds `ValidateDockerPolicy(DockerPolicyRequest) -> DockerPolicyReport`,
+the standalone form of the 1.17 check: it lists every way a run's network mode,
+workspace and read-only mounts would weaken isolation, without a daemon or a
+container. It also adds `hide_window` to `ShellExecRequest` (Windows: no
+console window for the shell child; ignored elsewhere).
 
 Version 1.17 makes both Docker run members refuse a request that uses the
 `host` network or bind-mounts `/`, `/etc`, `/var/run/docker.sock`, `/proc` or
