@@ -29,6 +29,10 @@ pub struct ShellExecRequest {
     /// Explicit native confinement; absent is ordinary local execution.
     #[serde(default)]
     pub jail: Option<NativeJailConfig>,
+    /// Windows only: start the child without a console window. Ignored on
+    /// other platforms.
+    #[serde(default)]
+    pub hide_window: bool,
 }
 const fn default_timeout() -> u64 {
     30_000
