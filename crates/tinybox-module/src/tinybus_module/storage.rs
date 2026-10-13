@@ -189,14 +189,22 @@ impl RecordingStore {
         }
     }
 
-    /// The first record this view inserted that the store still holds.
-    pub(super) fn first_inserted(&self) -> Option<tinybox_core::BoxInfo> {
+    /// The first id this view inserted that the store may still hold.
+    ///
+    /// Only a definite `UnknownBox` drops an id; a read that fails for another
+    /// reason keeps it, so a transient error cannot orphan the record.
+    pub(super) fn first_inserted(&self) -> Option<tinybox_core::BoxId> {
         let ids = self
             .inserted
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        ids.iter().find_map(|id| self.inner.get(id).ok())
+        ids.into_iter().find(|id| {
+            !matches!(
+                self.inner.get(id),
+                Err(tinybox_core::Error::UnknownBox { .. })
+            )
+        })
     }
 }
 

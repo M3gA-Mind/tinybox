@@ -240,14 +240,8 @@ async fn a_recording_view_finds_only_its_own_record() -> TestResult {
     assert!(first.first_inserted().is_none());
     first.insert(&info("box-0")?)?;
     second.insert(&info("box-1")?)?;
-    assert_eq!(
-        first.first_inserted().map(|record| record.id),
-        Some(BoxId::new("box-0")?)
-    );
-    assert_eq!(
-        second.first_inserted().map(|record| record.id),
-        Some(BoxId::new("box-1")?)
-    );
+    assert_eq!(first.first_inserted(), Some(BoxId::new("box-0")?));
+    assert_eq!(second.first_inserted(), Some(BoxId::new("box-1")?));
     assert_eq!(second.list()?.len(), 2);
     second.set_state(&BoxId::new("box-1")?, BoxState::Stopped)?;
     assert_eq!(second.get(&BoxId::new("box-1")?)?.state, BoxState::Stopped);

@@ -353,13 +353,13 @@ impl Resources {
                     // when named cleanup failed; keep the sandbox and id in
                     // this caller-known slot so Close/Shutdown can retry it.
                     if request.backend == "docker"
-                        && let Some(info) = recording.first_inserted()
+                        && let Some(id) = recording.first_inserted()
                     {
                         *slot_guard = Some(Resource::new(
                             &request,
                             resource_host,
                             selection,
-                            info.id,
+                            id,
                             supports_execution(platform, &request.backend),
                             collector,
                         ));
