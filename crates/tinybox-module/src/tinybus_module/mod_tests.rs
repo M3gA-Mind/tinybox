@@ -1259,3 +1259,28 @@ async fn docker_control_dispatch_rejects_unbounded_deadlines() {
         if name == tinybox_bus::INVALID_DOCKER_CONTROL)
     );
 }
+
+#[tokio::test]
+async fn validate_docker_policy_reports_the_run_checks_without_a_daemon() {
+    let service = BoxService::default();
+    let safe = service
+        .validate_docker_policy(tinybox_bus::DockerPolicyRequest {
+            network: Some("none".into()),
+            workspace: Some("/home/u/project".into()),
+            read_only_mounts: vec!["/usr/lib".into()],
+        })
+        .await
+        .expect("safe request validates");
+    assert_eq!(safe.issues, Vec::<String>::new());
+
+    let unsafe_run = service
+        .validate_docker_policy(tinybox_bus::DockerPolicyRequest {
+            network: Some("host".into()),
+            workspace: Some("/".into()),
+            read_only_mounts: vec!["/etc/".into(), "/var/run/docker.sock".into()],
+        })
+        .await
+        .expect("unsafe request is reported, not rejected");
+    assert_eq!(unsafe_run.issues.len(), 4);
+    assert!(unsafe_run.issues[0].contains("host network"));
+}
