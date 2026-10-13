@@ -15,6 +15,7 @@ type Result<T> = std::result::Result<T, StorageError>;
 
 /// What to break.
 #[derive(Debug, Default, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct Faults {
     pub(crate) ensure: bool,
     pub(crate) get: bool,
