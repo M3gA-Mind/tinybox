@@ -78,3 +78,8 @@ impl IndexStore for FileIndexStore {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "registry_index_store_tests.rs"]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests;

@@ -21,3 +21,8 @@ mod index_store;
 
 pub use box_store::{BOX_COLLECTION, DocumentBoxStore};
 pub use index_store::{DocumentIndexStore, JAIL_INDEX_COLLECTION};
+
+#[cfg(test)]
+#[path = "faulty_tests.rs"]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod faulty;

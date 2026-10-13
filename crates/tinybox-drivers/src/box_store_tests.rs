@@ -1,4 +1,5 @@
 use super::*;
+use crate::faulty::{Faulty, Faults};
 use serde_json::json;
 use tinybox_core::store::insert_new;
 use tinybox_core::{BoxSpec, HostRef, Placement, SandboxRef, WorkspaceSource};
@@ -66,7 +67,7 @@ fn set_state_and_remove_change_the_record() -> Result<()> {
     store.set_state(&record.id, BoxState::Stopped)?;
     assert_eq!(store.get(&record.id)?.state, BoxState::Stopped);
     store.remove(&record.id)?;
-    assert!(store.list()?.is_empty());
+    assert_eq!(store.list()?.len(), 0);
     Ok(())
 }
 
@@ -190,4 +191,103 @@ fn tokio_rt() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("runtime")
+}
+
+fn faulty(faults: Faults) -> Arc<dyn DocumentStore> {
+    Faulty::new(documents(), faults)
+}
+
+#[test]
+fn a_backend_that_refuses_the_collection_fails_to_open() {
+    let result = DocumentBoxStore::new(faulty(Faults {
+        ensure: true,
+        ..Faults::default()
+    }));
+    assert!(matches!(result, Err(Error::Store { operation: "open", .. })));
+}
+
+#[test]
+fn backend_failures_surface_as_store_errors_per_operation() -> Result<()> {
+    let seeded = documents();
+    let record = info("a")?;
+    DocumentBoxStore::new(Arc::clone(&seeded))?.insert(&record)?;
+    let store_with = |faults: Faults| {
+        DocumentBoxStore::new(Faulty::new(Arc::clone(&seeded), faults)).expect("open")
+    };
+
+    let reading = store_with(Faults {
+        get: true,
+        ..Faults::default()
+    });
+    assert!(matches!(
+        reading.get(&record.id),
+        Err(Error::Store { operation: "read", .. })
+    ));
+    assert!(matches!(
+        reading.set_state(&record.id, BoxState::Stopped),
+        Err(Error::Store { operation: "read", .. })
+    ));
+
+    let listing = store_with(Faults {
+        query: true,
+        ..Faults::default()
+    });
+    assert!(matches!(
+        listing.list(),
+        Err(Error::Store { operation: "list", .. })
+    ));
+
+    let writing = store_with(Faults {
+        put: true,
+        ..Faults::default()
+    });
+    assert!(matches!(
+        writing.insert(&info("b")?),
+        Err(Error::Store { operation: "insert", .. })
+    ));
+    assert!(matches!(
+        writing.set_state(&record.id, BoxState::Stopped),
+        Err(Error::Store { operation: "write", .. })
+    ));
+
+    let removing = store_with(Faults {
+        delete: true,
+        ..Faults::default()
+    });
+    assert!(matches!(
+        removing.remove(&record.id),
+        Err(Error::Store { operation: "remove", .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn set_state_retries_after_a_lost_race() -> Result<()> {
+    let seeded = documents();
+    let record = info("a")?;
+    DocumentBoxStore::new(Arc::clone(&seeded))?.insert(&record)?;
+    let store = DocumentBoxStore::new(Faulty::with_conflicts(Arc::clone(&seeded), 2))?;
+    store.set_state(&record.id, BoxState::Stopped)?;
+    assert_eq!(store.get(&record.id)?.state, BoxState::Stopped);
+    Ok(())
+}
+
+#[test]
+fn set_state_gives_up_when_the_record_never_settles() -> Result<()> {
+    let seeded = documents();
+    let record = info("a")?;
+    DocumentBoxStore::new(Arc::clone(&seeded))?.insert(&record)?;
+    let store = DocumentBoxStore::new(Faulty::with_conflicts(seeded, usize::MAX))?;
+    assert!(matches!(
+        store.set_state(&record.id, BoxState::Stopped),
+        Err(Error::Store { operation: "write", .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn the_debug_form_does_not_dump_the_backend() -> Result<()> {
+    let store = DocumentBoxStore::new(documents())?;
+    assert!(format!("{store:?}").starts_with("DocumentBoxStore"));
+    Ok(())
 }

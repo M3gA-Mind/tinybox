@@ -1,4 +1,5 @@
 use super::*;
+use crate::faulty::{Faulty, Faults};
 use tinybox_core::clock::FixedClock;
 use tinybox_jail::JailRegistry;
 use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
@@ -76,4 +77,73 @@ fn a_registry_keeps_its_jails_across_reopen_without_an_index_file() {
 
     reopened.delete(&created.id).expect("delete");
     assert!(reopened.list().is_empty());
+}
+
+#[test]
+fn backend_failures_surface_as_io_errors() {
+    let refusing = DocumentIndexStore::new(
+        Faulty::new(
+            documents(),
+            Faults {
+                ensure: true,
+                ..Faults::default()
+            },
+        ),
+        "main",
+    );
+    assert!(refusing.is_err());
+
+    let reading = DocumentIndexStore::new(
+        Faulty::new(
+            documents(),
+            Faults {
+                get: true,
+                ..Faults::default()
+            },
+        ),
+        "main",
+    )
+    .expect("store");
+    assert_eq!(
+        reading.load().expect_err("load fails").kind(),
+        io::ErrorKind::Other
+    );
+
+    let writing = DocumentIndexStore::new(
+        Faulty::new(
+            documents(),
+            Faults {
+                put: true,
+                ..Faults::default()
+            },
+        ),
+        "main",
+    )
+    .expect("store");
+    assert_eq!(
+        writing.save(b"{}").expect_err("save fails").kind(),
+        io::ErrorKind::Other
+    );
+}
+
+#[test]
+fn storage_error_kinds_map_to_io_kinds() {
+    assert_eq!(
+        to_io(&StorageError::not_found("x")).kind(),
+        io::ErrorKind::NotFound
+    );
+    assert_eq!(
+        to_io(&StorageError::serialization("x")).kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert_eq!(
+        to_io(&StorageError::backend("x")).kind(),
+        io::ErrorKind::Other
+    );
+}
+
+#[test]
+fn the_debug_form_names_the_registry() {
+    let store = DocumentIndexStore::new(documents(), "main").expect("store");
+    assert!(format!("{store:?}").contains("main"));
 }
