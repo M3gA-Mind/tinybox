@@ -197,3 +197,26 @@ fn the_wrapper_runs_in_place_without_a_multi_thread_runtime() -> TestResult {
     assert!(store.list()?.is_empty());
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_scoped_handle_is_connected_once_and_shared() -> TestResult {
+    let rig = rig(true).await?;
+    let storage = ModuleStorage::connected(rig.module.clone());
+    assert!(storage.documents().await.is_some());
+    assert!(storage.documents().await.is_some());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_scope_leaves_the_module_on_memory() -> TestResult {
+    let bus = MemoryBus::new();
+    Broker::new().spawn(bus.clone());
+    let host = Connection::connect(bus.connect().await?).await?;
+    let module = Connection::connect(bus.connect().await?).await?;
+    let endpoint = PerCallerEndpoint::new(move |_sender| None::<StorageServer>);
+    let _served = serve(&host, Arc::new(endpoint)).await?;
+    let storage = ModuleStorage::connected(module);
+    assert!(storage.documents().await.is_none());
+    let _memory = storage.box_store().await;
+    Ok(())
+}
