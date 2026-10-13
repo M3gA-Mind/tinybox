@@ -1,5 +1,4 @@
 use super::*;
-use std::time::Duration;
 use tinybox_core::clock::FixedClock;
 use tinybox_jail::JailRegistry;
 use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
@@ -13,9 +12,7 @@ fn documents() -> Arc<dyn DocumentStore> {
 }
 
 fn clock() -> Arc<FixedClock> {
-    Arc::new(FixedClock::new(
-        std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-    ))
+    Arc::new(FixedClock::at_epoch())
 }
 
 #[test]
