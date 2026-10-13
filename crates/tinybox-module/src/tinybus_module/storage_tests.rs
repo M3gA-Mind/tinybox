@@ -248,5 +248,10 @@ async fn a_recording_view_finds_only_its_own_record() -> TestResult {
     second.remove(&BoxId::new("box-1")?)?;
     assert!(second.first_inserted().is_none());
     assert!(first.insert(&info("box-0")?).is_err());
+    // After a delete the id may be reissued to another resource; the view
+    // that removed it must not claim the new holder's record.
+    first.remove(&BoxId::new("box-0")?)?;
+    second.insert(&info("box-0")?)?;
+    assert!(first.first_inserted().is_none());
     Ok(())
 }

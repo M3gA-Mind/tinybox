@@ -235,7 +235,13 @@ impl Store for RecordingStore {
     }
 
     fn remove(&self, id: &tinybox_core::BoxId) -> tinybox_core::Result<()> {
-        self.inner.remove(id)
+        self.inner.remove(id)?;
+        // A freed id can be reissued to another resource; it is no longer ours.
+        self.inserted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|held| held != id);
+        Ok(())
     }
 }
 
