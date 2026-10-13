@@ -524,7 +524,10 @@ async fn finish_operation<T: Send + 'static>(
 
 async fn setup(connection: Connection) -> TinyBusResult<()> {
     connection
-        .serve_at(OBJECT_PATH.try_into()?, BoxService::connected(connection.clone()))
+        .serve_at(
+            OBJECT_PATH.try_into()?,
+            BoxService::connected(connection.clone()),
+        )
         .await?;
     connection.request_name(INTERFACE).await?;
     Ok(())

@@ -12,6 +12,8 @@ use tinystoragedrivers_core::{
     DocumentStoreExt, MemoryStorage, Query, Scope, ScopedStorage, StorageBackend,
 };
 
+type TestResult = Result<(), Box<dyn std::error::Error>>;
+
 /// A broker with a module-side connection and, optionally, a storage host.
 struct Rig {
     module: Connection,
@@ -19,92 +21,98 @@ struct Rig {
     _served: Option<ServedStorage>,
 }
 
-async fn rig(serve_storage: bool) -> Rig {
+async fn rig(serve_storage: bool) -> Result<Rig, Box<dyn std::error::Error>> {
     let bus = MemoryBus::new();
     Broker::new().spawn(bus.clone());
     let backend = MemoryStorage::new();
-    let host = Connection::connect(bus.connect().await.unwrap())
-        .await
-        .unwrap();
+    let host = Connection::connect(bus.connect().await?).await?;
     let served = if serve_storage {
         let bound = backend.clone();
         let endpoint = PerCallerEndpoint::new(move |_sender| {
             let scoped: ScopedStorage = bound.for_scope(&Scope::local()).ok()?;
             Some(StorageServer::new(scoped))
         });
-        Some(serve(&host, Arc::new(endpoint)).await.unwrap())
+        Some(serve(&host, Arc::new(endpoint)).await?)
     } else {
         None
     };
-    let module = Connection::connect(bus.connect().await.unwrap())
-        .await
-        .unwrap();
+    let module = Connection::connect(bus.connect().await?).await?;
     // Keep the host connection alive for the life of the broker.
     std::mem::forget(host);
-    Rig {
+    Ok(Rig {
         module,
         backend,
         _served: served,
-    }
+    })
 }
 
-fn info(id: &str) -> BoxInfo {
+fn info(id: &str) -> Result<BoxInfo, Box<dyn std::error::Error>> {
     let spec = BoxSpec::new(
-        Placement::new(
-            HostRef::new("local").unwrap(),
-            SandboxRef::new("passthrough").unwrap(),
-        ),
+        Placement::new(HostRef::new("local")?, SandboxRef::new("passthrough")?),
         WorkspaceSource::LocalDir("/srv/work".into()),
     );
-    BoxInfo::new(BoxId::new(id).unwrap(), BoxState::Ready, spec)
+    Ok(BoxInfo::new(BoxId::new(id)?, BoxState::Ready, spec))
 }
 
-async fn host_docs(rig: &Rig, collection: &'static str) -> Vec<serde_json::Value> {
-    let docs = Arc::clone(rig.backend.for_scope(&Scope::local()).unwrap().documents());
-    docs.query_all(collection, &Query::all())
-        .await
-        .map(|all| all.into_iter().map(|entry| entry.doc).collect())
-        .unwrap_or_default()
+async fn host_docs(
+    rig: &Rig,
+    collection: &'static str,
+) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+    let docs = Arc::clone(rig.backend.for_scope(&Scope::local())?.documents());
+    let all = docs.query_all(collection, &Query::all()).await?;
+    Ok(all.into_iter().map(|entry| entry.doc).collect())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn box_records_land_on_the_host_document_port() {
-    let rig = rig(true).await;
+async fn box_records_land_on_the_host_document_port() -> TestResult {
+    let rig = rig(true).await?;
     let storage = ModuleStorage::connected(rig.module.clone());
     let store = storage.box_store().await;
-    let record = info("module-box-1");
+    let record = info("module-box-1")?;
     let writer = Arc::clone(&store);
     let written = record.clone();
-    tokio::task::spawn_blocking(move || writer.insert(&written))
-        .await
-        .unwrap()
-        .unwrap();
+    tokio::task::spawn_blocking(move || writer.insert(&written)).await??;
 
-    let stored = host_docs(&rig, tinybox_drivers::BOX_COLLECTION).await;
+    let stored = host_docs(&rig, tinybox_drivers::BOX_COLLECTION).await?;
     assert_eq!(stored.len(), 1, "the record is a document on the host");
     let read = Arc::clone(&store);
-    let listed = tokio::task::spawn_blocking(move || read.list())
-        .await
-        .unwrap()
-        .unwrap();
+    let listed = tokio::task::spawn_blocking(move || read.list()).await??;
     assert_eq!(listed, vec![record]);
+    Ok(())
+}
+
+/// The module runs on one worker; a store call made directly from async code
+/// must not wait on a bus reply that only that worker could deliver.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn store_calls_on_the_only_worker_do_not_deadlock() -> TestResult {
+    let rig = rig(true).await?;
+    let storage = ModuleStorage::connected(rig.module.clone());
+    let store = storage.box_store().await;
+    let record = info("single-worker-box")?;
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        store.insert(&record)?;
+        let listed = store.list()?;
+        assert_eq!(listed, vec![record.clone()]);
+        store.remove(&record.id)?;
+        Ok::<(), tinybox_core::Error>(())
+    })
+    .await??;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn without_a_storage_host_box_records_stay_in_memory() {
-    let rig = rig(false).await;
+async fn without_a_storage_host_box_records_stay_in_memory() -> TestResult {
+    let rig = rig(false).await?;
     let storage = ModuleStorage::connected(rig.module.clone());
     assert!(storage.documents().await.is_none());
     let store = storage.box_store().await;
-    let record = info("memory-box");
+    let record = info("memory-box")?;
     let writer = Arc::clone(&store);
     let written = record.clone();
-    tokio::task::spawn_blocking(move || writer.insert(&written))
-        .await
-        .unwrap()
-        .unwrap();
-    let docs = host_docs(&rig, tinybox_drivers::BOX_COLLECTION).await;
+    tokio::task::spawn_blocking(move || writer.insert(&written)).await??;
+    let docs = host_docs(&rig, tinybox_drivers::BOX_COLLECTION).await?;
     assert_eq!(docs.len(), 0);
+    Ok(())
 }
 
 #[tokio::test]
@@ -121,39 +129,32 @@ async fn an_unconnected_module_has_no_documents() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_jail_index_is_a_document_on_the_host_not_a_file() {
-    let rig = rig(true).await;
+async fn the_jail_index_is_a_document_on_the_host_not_a_file() -> TestResult {
+    let rig = rig(true).await?;
     let storage = ModuleStorage::connected(rig.module.clone());
-    let base = tempfile::tempdir().unwrap();
+    let base = tempfile::tempdir()?;
     let registry = storage
         .jail_registry(base.path().to_path_buf(), "jails".into())
         .await
-        .expect("host serves storage")
-        .unwrap();
-    let created = tokio::task::spawn_blocking(move || registry.create("scratch"))
-        .await
-        .unwrap()
-        .unwrap();
+        .ok_or("host serves storage")??;
+    let created = tokio::task::spawn_blocking(move || registry.create("scratch")).await??;
 
     assert!(
         !base.path().join("index.json").exists(),
         "no index file is written"
     );
-    let stored = host_docs(&rig, tinybox_drivers::JAIL_INDEX_COLLECTION).await;
+    let stored = host_docs(&rig, tinybox_drivers::JAIL_INDEX_COLLECTION).await?;
     assert_eq!(stored.len(), 1);
     assert!(stored[0].to_string().contains(&created.id));
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_failed_connect_is_retried_when_the_host_starts_serving() {
+async fn a_failed_connect_is_retried_when_the_host_starts_serving() -> TestResult {
     let bus = MemoryBus::new();
     Broker::new().spawn(bus.clone());
-    let host = Connection::connect(bus.connect().await.unwrap())
-        .await
-        .unwrap();
-    let module = Connection::connect(bus.connect().await.unwrap())
-        .await
-        .unwrap();
+    let host = Connection::connect(bus.connect().await?).await?;
+    let module = Connection::connect(bus.connect().await?).await?;
     let storage = ModuleStorage::connected(module);
     assert!(storage.documents().await.is_none());
 
@@ -161,6 +162,7 @@ async fn a_failed_connect_is_retried_when_the_host_starts_serving() {
     let endpoint = PerCallerEndpoint::new(move |_sender| {
         Some(StorageServer::new(backend.for_scope(&Scope::local()).ok()?))
     });
-    let _served = serve(&host, Arc::new(endpoint)).await.unwrap();
+    let _served = serve(&host, Arc::new(endpoint)).await?;
     assert!(storage.documents().await.is_some());
+    Ok(())
 }
