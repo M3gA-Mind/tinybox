@@ -279,6 +279,8 @@ fn shell_selection_wire_defaults_preserve_safe_pipeline_behavior() -> Result<(),
     let request: SelectShellRequest =
         serde_json::from_value(serde_json::json!({"command":"false | true"}))?;
     assert!(!request.preserve_pipeline_status);
+    assert_eq!(request.runtime_path, None);
+    assert!(!request.python_utf8);
     let invocation = ShellInvocation {
         flavor: ShellFlavor::Cmd,
         program: "cmd".into(),

@@ -76,6 +76,16 @@ impl ShellContext {
                 environment.insert(name.to_owned(), value);
             }
         }
+        if request.shell.python_utf8 {
+            // Parent value wins; otherwise default to UTF-8 so a legacy
+            // Windows console code page cannot kill a Python script.
+            for (name, default) in [("PYTHONUTF8", "1"), ("PYTHONIOENCODING", "utf-8")] {
+                let value = std::env::var_os(name)
+                    .and_then(|v| v.into_string().ok())
+                    .unwrap_or_else(|| default.into());
+                environment.insert(name.to_owned(), value);
+            }
+        }
         for (name, value) in resolved.env.iter().chain(&request.extra_env) {
             if name.is_empty() || name.contains(['=', '\0']) || value.contains('\0') {
                 return Err(invalid());

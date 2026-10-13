@@ -56,6 +56,10 @@ fn selection_for(
     flavor: ShellFlavor,
     bash: Option<&str>,
 ) -> ShellInvocation {
+    let posix_payload = match &request.runtime_path {
+        Some(path) => format!("export PATH='{}'\n{}", path.replace('\'', "'\\''"), request.command),
+        None => request.command.clone(),
+    };
     match flavor {
         ShellFlavor::Cmd => ShellInvocation {
             flavor,
@@ -89,9 +93,9 @@ fn selection_for(
                 arguments.extend([
                     "-c".into(),
                     if bash.is_some() && !request.preserve_pipeline_status {
-                        format!("set -o pipefail\n{}", request.command)
+                        format!("set -o pipefail\n{posix_payload}")
                     } else {
-                        request.command.clone()
+                        posix_payload
                     },
                 ]);
                 arguments
