@@ -41,7 +41,7 @@ impl DocumentIndexStore {
     /// Returns an error when the bridge cannot start or the backend refuses
     /// the collection.
     pub fn new(documents: Arc<dyn DocumentStore>, registry: impl Into<String>) -> io::Result<Self> {
-        let bridge = Blocking::new().map_err(to_io)?;
+        let bridge = Blocking::new().map_err(|e| to_io(&e))?;
         let docs = Arc::clone(&documents);
         bridge
             .run(async move {
@@ -49,7 +49,7 @@ impl DocumentIndexStore {
                     .await
             })
             .and_then(|inner| inner)
-            .map_err(to_io)?;
+            .map_err(|e| to_io(&e))?;
         Ok(Self {
             documents,
             bridge,
@@ -58,7 +58,7 @@ impl DocumentIndexStore {
     }
 }
 
-fn to_io(error: StorageError) -> io::Error {
+fn to_io(error: &StorageError) -> io::Error {
     let kind = match error.kind() {
         ErrorKind::Serialization => io::ErrorKind::InvalidData,
         ErrorKind::NotFound => io::ErrorKind::NotFound,
@@ -75,7 +75,7 @@ impl IndexStore for DocumentIndexStore {
             .bridge
             .run(async move { docs.get(JAIL_INDEX_COLLECTION, &key).await })
             .and_then(|inner| inner)
-            .map_err(to_io)?;
+            .map_err(|e| to_io(&e))?;
         found
             .map(|entry| {
                 serde_json::to_vec(&entry.doc)
@@ -96,7 +96,7 @@ impl IndexStore for DocumentIndexStore {
             })
             .and_then(|inner| inner)
             .map(|_| ())
-            .map_err(to_io)
+            .map_err(|e| to_io(&e))
     }
 }
 
