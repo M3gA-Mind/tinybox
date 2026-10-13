@@ -1,6 +1,6 @@
 use super::*;
 use tinybox_core::{BoxId, BoxInfo, BoxSpec, BoxState, HostRef, Placement, SandboxRef};
-use tinybox_core::{WorkspaceSource, store::insert_new};
+use tinybox_core::WorkspaceSource;
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tinystoragedrivers_busproxy::{PerCallerEndpoint, ServedStorage, serve};
@@ -60,7 +60,7 @@ async fn host_docs(rig: &Rig, collection: &'static str) -> Vec<serde_json::Value
     let docs = Arc::clone(rig.backend.for_scope(&Scope::local()).unwrap().documents());
     docs.query_all(collection, &Query::all())
         .await
-        .map(|all| all.into_iter().map(|entry| entry.value).collect())
+        .map(|all| all.into_iter().map(|entry| entry.doc).collect())
         .unwrap_or_default()
 }
 
@@ -72,7 +72,7 @@ async fn box_records_land_on_the_host_document_port() {
     let record = info("module-box-1");
     let writer = Arc::clone(&store);
     let written = record.clone();
-    tokio::task::spawn_blocking(move || insert_new(writer.as_ref(), &written))
+    tokio::task::spawn_blocking(move || writer.insert(&written))
         .await
         .unwrap()
         .unwrap();

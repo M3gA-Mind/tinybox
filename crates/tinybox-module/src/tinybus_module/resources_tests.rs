@@ -1,5 +1,6 @@
 //! Deterministic startup and cleanup races over an injected host.
 use super::*;
+use tinybox_core::MemoryStore;
 use tinybox_core::{ExecOutput as NativeOutput, ExecRequest as NativeRequest, Host};
 
 #[test]
