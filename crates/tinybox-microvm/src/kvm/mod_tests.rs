@@ -38,7 +38,8 @@ fn a_nonexistent_device_path_is_missing() {
 }
 
 #[test]
-fn a_plain_writable_file_probes_as_available() {
-    let file = tempfile::NamedTempFile::new().unwrap();
+fn a_plain_writable_file_probes_as_available() -> std::io::Result<()> {
+    let file = tempfile::NamedTempFile::new()?;
     assert_eq!(probe_device(file.path()), KvmStatus::Available);
+    Ok(())
 }
