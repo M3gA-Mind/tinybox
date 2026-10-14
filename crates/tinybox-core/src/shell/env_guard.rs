@@ -1,5 +1,6 @@
 //! The "dangerous" subset of inline environment-variable assignments that can redirect execution of an
 //! otherwise-allowed command (pagers, editors, loader overrides, …).
+#![allow(deprecated)]
 
 /// Environment variable names that can trigger arbitrary command execution
 /// when supplied as a leading inline assignment on an otherwise-allowed

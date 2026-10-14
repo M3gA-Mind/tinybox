@@ -1,6 +1,7 @@
 //! Detecting bases that execute arbitrary code (interpreters,
 //! shells, `xargs`, Windows `LOLBins`, …). Basename normalisation itself is
 //! `tinybox_core::shell::scan`.
+#![allow(deprecated)]
 
 use super::scan::normalized_command_name;
 

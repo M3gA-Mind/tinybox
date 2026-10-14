@@ -1,6 +1,7 @@
 //! Base-command classification: the read/write/network/install/destructive
 //! bucket lists, verb-sensitive VCS / package-manager handling, and the
 //! structural "hidden execution" guard for the harness-gated command flow.
+#![allow(deprecated)]
 
 use super::executor::is_command_executor;
 use super::scan::{contains_unquoted_background_ampersand, strip_quoted_heredoc_bodies};
