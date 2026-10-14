@@ -1,7 +1,7 @@
 //! Discoverability for the hardware prerequisite of the microVM backend.
 //!
 //! Firecracker needs `/dev/kvm` opened read-write. A missing device and a
-//! device the caller may not open fail the same way at boot, so [`KvmProbe`]
+//! device the caller may not open fail the same way at boot, so [`probe`]
 //! checks first and says which it is and what to do about it.
 
 use std::io::ErrorKind;
