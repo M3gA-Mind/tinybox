@@ -397,3 +397,10 @@ TinyBus itself is not shipped here; the pinned submodule is the build-time SDK.
 ## License
 
 GPL-3.0-only. See [LICENSE](LICENSE).
+
+## Scope
+
+tinybox is sandbox-only. It enforces the confinement a caller asks for (filesystem,
+network, processes, resources), reports observational events, and refuses what it
+cannot enforce. It owns no policy, approval, audit or command-classification logic;
+that is `tinysecurity`. See `docs/specs/contract-1-19.md`.

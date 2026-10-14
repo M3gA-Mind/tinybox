@@ -50,7 +50,7 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | StartNativeShellExec | ShellExecRequest | ProcessRef |
 | ValidateDockerPolicy | DockerPolicyRequest | DockerPolicyReport |
 
-Capabilities advertises contract version 1.18; 1.0 denotes the original
+Capabilities advertises contract version 1.19; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -377,3 +377,6 @@ owned timeout/cancellation cleanup. `ReadOutput` retains scratch until
 requests refuse unavailable enforcement; remote/Docker providers refuse this
 operation. State directory authorization and Windows private parent ACLs belong
 to the caller. See [the native shell contract](../../../docs/specs/native-shell-execution.md).
+
+Version 1.19 adds `NetworkPolicy::Allowlist` and the `SandboxEvent` vocabulary
+without a new member; see `docs/specs/contract-1-19.md`.
