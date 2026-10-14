@@ -1594,9 +1594,15 @@ fn make_spec(request: &CreateRequest, host: &str) -> Result<BoxSpec> {
     );
     let mut spec = BoxSpec::new(placement, source);
     spec.env = request.env.clone();
-    spec.network = match request.network {
+    spec.network = match &request.network {
         tinybox_bus::NetworkPolicy::Denied => tinybox_core::NetworkPolicy::Denied,
         tinybox_bus::NetworkPolicy::Egress => tinybox_core::NetworkPolicy::Egress,
+        tinybox_bus::NetworkPolicy::Allowlist(list) => {
+            tinybox_core::NetworkPolicy::Allowlist(tinybox_core::EgressAllowlist {
+                hosts: list.hosts.clone(),
+                ports: list.ports.clone(),
+            })
+        }
         tinybox_bus::NetworkPolicy::Open => tinybox_core::NetworkPolicy::Open,
     };
     spec.resources = tinybox_core::Resources {
