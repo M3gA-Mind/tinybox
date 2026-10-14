@@ -1208,7 +1208,7 @@ dependencies = [
 
 [[package]]
 name = "tinybox-bus"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "serde",
  "serde_json",
@@ -1216,7 +1216,7 @@ dependencies = [
 
 [[package]]
 name = "tinybox-cli"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "async-trait",
  "clap",
@@ -1236,7 +1236,7 @@ dependencies = [
 
 [[package]]
 name = "tinybox-core"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "async-trait",
  "serde",
@@ -1247,7 +1247,7 @@ dependencies = [
 
 [[package]]
 name = "tinybox-docker"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "async-trait",
  "serde_json",
@@ -1260,7 +1260,7 @@ dependencies = [
 
 [[package]]
 name = "tinybox-drivers"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "log",
  "serde_json",
@@ -1273,7 +1273,7 @@ dependencies = [
 
 [[package]]
 name = "tinybox-host"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "async-trait",
  "cap-std",
@@ -1288,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "tinybox-jail"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "landlock",
  "log",
@@ -1302,7 +1302,7 @@ dependencies = [
 
 [[package]]
 name = "tinybox-linux"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "async-trait",
  "tempfile",
@@ -1313,7 +1313,7 @@ dependencies = [
 
 [[package]]
 name = "tinybox-microvm"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "async-trait",
  "serde",
@@ -1326,7 +1326,7 @@ dependencies = [
 
 [[package]]
 name = "tinybox-module"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "async-trait",
  "log",
@@ -1352,7 +1352,7 @@ dependencies = [
 
 [[package]]
 name = "tinybox-ssh"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "async-trait",
  "tempfile",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "tinybox-sync"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "async-trait",
  "blake3",
@@ -1422,8 +1422,8 @@ dependencies = [
 
 [[package]]
 name = "tinystoragedrivers-bus"
-version = "0.8.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.8.0#f4b73d358f2e7b2ae9993f8e696401b1d2639858"
+version = "0.10.0"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.10.0#44745d66089db880b83747832ab5173eb1397a75"
 dependencies = [
  "serde",
  "serde_json",
@@ -1432,8 +1432,8 @@ dependencies = [
 
 [[package]]
 name = "tinystoragedrivers-busproxy"
-version = "0.8.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.8.0#f4b73d358f2e7b2ae9993f8e696401b1d2639858"
+version = "0.10.0"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.10.0#44745d66089db880b83747832ab5173eb1397a75"
 dependencies = [
  "async-trait",
  "serde",
@@ -1447,8 +1447,8 @@ dependencies = [
 
 [[package]]
 name = "tinystoragedrivers-client"
-version = "0.8.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.8.0#f4b73d358f2e7b2ae9993f8e696401b1d2639858"
+version = "0.10.0"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.10.0#44745d66089db880b83747832ab5173eb1397a75"
 dependencies = [
  "async-trait",
  "serde",
@@ -1461,8 +1461,8 @@ dependencies = [
 
 [[package]]
 name = "tinystoragedrivers-core"
-version = "0.8.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.8.0#f4b73d358f2e7b2ae9993f8e696401b1d2639858"
+version = "0.10.0"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.10.0#44745d66089db880b83747832ab5173eb1397a75"
 dependencies = [
  "async-trait",
  "serde",
@@ -1473,8 +1473,8 @@ dependencies = [
 
 [[package]]
 name = "tinystoragedrivers-secrets"
-version = "0.8.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.8.0#f4b73d358f2e7b2ae9993f8e696401b1d2639858"
+version = "0.10.0"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.10.0#44745d66089db880b83747832ab5173eb1397a75"
 dependencies = [
  "async-trait",
  "atomicwrites",
