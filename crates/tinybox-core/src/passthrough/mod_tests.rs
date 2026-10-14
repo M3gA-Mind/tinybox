@@ -497,3 +497,22 @@ async fn observed_execution_resolves_workspace_environment_and_stdin_before_disp
     assert_eq!(host.0.seen().len(), 1);
     Ok(())
 }
+
+#[tokio::test]
+async fn an_unenforceable_network_allowlist_is_refused_at_creation() -> Result<()> {
+    let (sandbox, _host) = sandbox();
+    let policy = tinybox_core::NetworkPolicy::Allowlist(tinybox_core::EgressAllowlist::new(
+        ["example.com"],
+        [443],
+    ));
+    let error = sandbox.create(&spec()?.with_network(policy)).await.unwrap_err();
+    assert!(matches!(
+        error,
+        Error::ConstraintNotEnforced {
+            constraint: tinybox_core::Constraint::Network,
+            enforcement: tinybox_core::Enforcement::Unsupported,
+            ..
+        }
+    ));
+    Ok(())
+}
