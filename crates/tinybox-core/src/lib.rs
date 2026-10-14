@@ -86,7 +86,7 @@ pub use runtime::{
     OutputStream, Sandbox, WorkspaceFileReader, WorkspaceFileWriter,
 };
 pub use spec::{
-    BoxSpec, Lifecycle, NetworkPolicy, Placement, PortMapping, Resources, WorkspaceSource,
+    BoxSpec, EgressAllowlist, Lifecycle, NetworkPolicy, Placement, PortMapping, Resources, WorkspaceSource,
 };
 pub use store::{MemoryStore, Store, insert_new};
 pub use template::{MemoryTemplates, Templates};

@@ -125,6 +125,7 @@ impl Sandbox for NamespaceSandbox {
 
     async fn create(&self, spec: &BoxSpec) -> Result<BoxInfo> {
         spec.validate()?;
+        spec.network.refuse_allowlist(self.name())?;
         // Nothing is started here: a box is a record plus a directory, and the
         // sandbox itself exists only for the length of a command. Checking the
         // source now means an unusable spec fails at `create` rather than
