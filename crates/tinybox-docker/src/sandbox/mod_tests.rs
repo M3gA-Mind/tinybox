@@ -1668,7 +1668,10 @@ async fn an_unenforceable_network_allowlist_is_refused_at_creation() -> Result<(
         ["example.com"],
         [443],
     ));
-    let error = sandbox.create(&spec()?.with_network(policy)).await.unwrap_err();
+    let error = sandbox
+        .create(&spec()?.with_network(policy))
+        .await
+        .unwrap_err();
     assert!(matches!(
         error,
         Error::ConstraintNotEnforced {
