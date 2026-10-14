@@ -260,14 +260,14 @@ fn spec_validate_rejects_a_bad_allowlist() -> Result<()> {
 fn refuse_allowlist_is_a_typed_network_refusal() {
     use super::EgressAllowlist;
     let policy = NetworkPolicy::Allowlist(EgressAllowlist::new(["example.com"], [443]));
-    let error = policy.refuse_allowlist("docker").unwrap_err();
+    let result = policy.refuse_allowlist("docker");
     assert!(matches!(
-        error,
-        crate::Error::ConstraintNotEnforced {
+        result,
+        Err(crate::Error::ConstraintNotEnforced {
             constraint: crate::Constraint::Network,
             enforcement: crate::Enforcement::Unsupported,
             ..
-        }
+        })
     ));
     assert!(NetworkPolicy::Egress.refuse_allowlist("docker").is_ok());
 }
