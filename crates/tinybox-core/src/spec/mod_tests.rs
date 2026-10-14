@@ -206,11 +206,31 @@ fn allowlist_validation_rejects_malformed_and_metadata_hosts() {
     use super::EgressAllowlist;
     let ok = EgressAllowlist::new(["example.com"], [443]);
     assert!(ok.validate().is_ok());
-    assert!(EgressAllowlist::new(Vec::<String>::new(), [443]).validate().is_err());
-    assert!(EgressAllowlist::new(["example.com"], Vec::<u16>::new()).validate().is_err());
-    assert!(EgressAllowlist::new(["example.com"], [0]).validate().is_err());
-    assert!(EgressAllowlist::new(["*.example.com"], [443]).validate().is_err());
-    for host in ["169.254.169.254", "[fd00:ec2::254]", "Metadata.Google.Internal"] {
+    assert!(
+        EgressAllowlist::new(Vec::<String>::new(), [443])
+            .validate()
+            .is_err()
+    );
+    assert!(
+        EgressAllowlist::new(["example.com"], Vec::<u16>::new())
+            .validate()
+            .is_err()
+    );
+    assert!(
+        EgressAllowlist::new(["example.com"], [0])
+            .validate()
+            .is_err()
+    );
+    assert!(
+        EgressAllowlist::new(["*.example.com"], [443])
+            .validate()
+            .is_err()
+    );
+    for host in [
+        "169.254.169.254",
+        "[fd00:ec2::254]",
+        "Metadata.Google.Internal",
+    ] {
         assert!(
             EgressAllowlist::new([host], [80]).validate().is_err(),
             "{host} must be refused"
@@ -229,10 +249,11 @@ fn allowlist_policy_allows_egress_but_open_is_highest_risk() {
 }
 
 #[test]
-fn spec_validate_rejects_a_bad_allowlist() {
+fn spec_validate_rejects_a_bad_allowlist() -> Result<()> {
     use super::EgressAllowlist;
-    let spec = spec().with_network(NetworkPolicy::Allowlist(EgressAllowlist::default()));
+    let spec = spec()?.with_network(NetworkPolicy::Allowlist(EgressAllowlist::default()));
     assert!(spec.validate().is_err());
+    Ok(())
 }
 
 #[test]

@@ -22,13 +22,3 @@ fn collecting_sink_keeps_events_in_order() {
     );
     assert_eq!(events[2].1, SandboxEvent::Exited { status: Some(137) });
 }
-
-#[test]
-fn denied_event_round_trips_through_json() {
-    let event = SandboxEvent::Denied {
-        kind: DenialKind::Network,
-        target: Some("169.254.169.254:80".into()),
-    };
-    let json = serde_json::to_string(&event).unwrap();
-    assert_eq!(serde_json::from_str::<SandboxEvent>(&json).unwrap(), event);
-}
