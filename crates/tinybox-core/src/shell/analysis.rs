@@ -1,6 +1,6 @@
 //! Generic parser facts; hosts own path authorization and approval policy.
+#![allow(deprecated)]
 
-#[allow(deprecated)]
 use super::{classify, env_guard, executor, scan};
 use tinybox_bus::{CommandAnalysis, CommandSegment};
 
