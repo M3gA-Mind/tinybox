@@ -1,5 +1,4 @@
 use super::*;
-use std::os::unix::fs::PermissionsExt as _;
 
 #[test]
 fn an_unrestricted_kernel_is_available() {
@@ -71,8 +70,10 @@ fn each_blocked_state_gives_an_actionable_message() {
     assert!(restricted.problem().unwrap().contains("AppArmor"));
 }
 
+#[cfg(unix)]
 #[test]
 fn path_search_finds_only_executable_files() {
+    use std::os::unix::fs::PermissionsExt as _;
     let dir = tempfile::tempdir().unwrap();
     let plain = dir.path().join("bwrap");
     std::fs::write(&plain, "").unwrap();
