@@ -116,7 +116,7 @@ pub(super) fn run(
     ];
 
     argv.extend(resource_flags(&spec.resources));
-    argv.extend(network_flags(spec.network));
+    argv.extend(network_flags(&spec.network));
     argv.extend(port_flags(spec));
 
     if let WorkspaceSource::LocalDir(path) = &spec.source {
@@ -161,7 +161,7 @@ fn resource_flags(resources: &Resources) -> Vec<String> {
 /// Docker has no "outbound only" network mode, so `Egress` gets the default
 /// bridge — outbound works, and nothing is published inbound because tinybox
 /// never passes `--publish`.
-fn network_flags(policy: NetworkPolicy) -> Vec<String> {
+fn network_flags(policy: &NetworkPolicy) -> Vec<String> {
     match policy {
         NetworkPolicy::Egress | NetworkPolicy::Open => Vec::new(),
         // `Denied`, and anything added to the non-exhaustive enum later. An
