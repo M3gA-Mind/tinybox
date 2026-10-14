@@ -393,6 +393,7 @@ impl Sandbox for DockerSandbox {
 
     async fn create(&self, spec: &BoxSpec) -> Result<BoxInfo> {
         spec.validate()?;
+        spec.network.refuse_allowlist(self.name())?;
         let attempt = uuid::Uuid::new_v4().to_string();
         // Claim the record first. A container is expensive to create and has to
         // be torn down if the record cannot be written, so taking the cheap

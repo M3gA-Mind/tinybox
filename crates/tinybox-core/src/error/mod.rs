@@ -84,6 +84,14 @@ pub enum Error {
         limit: &'static str,
     },
 
+    /// A network policy was malformed, such as an empty allowlist or one that
+    /// names a cloud metadata endpoint.
+    #[error("invalid network policy: {reason}")]
+    InvalidNetworkPolicy {
+        /// Stable, non-sensitive reason for rejecting the policy.
+        reason: &'static str,
+    },
+
     /// A box was referenced that the sandbox does not know about.
     #[error("no box with id {id}")]
     UnknownBox {

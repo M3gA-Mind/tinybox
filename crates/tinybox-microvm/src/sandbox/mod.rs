@@ -169,6 +169,7 @@ impl Sandbox for MicroVmSandbox {
 
     async fn create(&self, spec: &BoxSpec) -> Result<BoxInfo> {
         spec.validate()?;
+        spec.network.refuse_allowlist(self.name())?;
         // Nothing boots here: a box is a record and a directory, and the VM
         // exists only for the length of a command. Checking the source now
         // means an unusable spec fails at `create` rather than at the first

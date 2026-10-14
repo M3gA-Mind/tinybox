@@ -380,6 +380,7 @@ impl BoxService {
     }
 
     /// Return shell structure facts without applying host security policy.
+    #[allow(deprecated)]
     async fn analyze_shell(&self, command: String) -> TinyBusResult<ShellAnalysis> {
         use tinybox_core::shell::{classify, scan};
         let stripped = scan::strip_quoted_heredoc_bodies(&command);

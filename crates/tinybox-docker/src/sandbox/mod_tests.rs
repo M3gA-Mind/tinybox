@@ -1660,3 +1660,22 @@ fn preflight_reports_each_enforced_boundary_without_claiming_disk() {
     );
     assert!(backend.require(&[Constraint::Disk]).is_err());
 }
+
+#[tokio::test]
+async fn an_unenforceable_network_allowlist_is_refused_at_creation() -> Result<()> {
+    let (sandbox, _host, _store) = sandbox();
+    let policy = tinybox_core::NetworkPolicy::Allowlist(tinybox_core::EgressAllowlist::new(
+        ["example.com"],
+        [443],
+    ));
+    let result = sandbox.create(&spec()?.with_network(policy)).await;
+    assert!(matches!(
+        result,
+        Err(Error::ConstraintNotEnforced {
+            constraint: tinybox_core::Constraint::Network,
+            enforcement: tinybox_core::Enforcement::Unsupported,
+            ..
+        })
+    ));
+    Ok(())
+}

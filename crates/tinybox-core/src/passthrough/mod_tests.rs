@@ -497,3 +497,20 @@ async fn observed_execution_resolves_workspace_environment_and_stdin_before_disp
     assert_eq!(host.0.seen().len(), 1);
     Ok(())
 }
+
+#[tokio::test]
+async fn an_unenforceable_network_allowlist_is_refused_at_creation() -> Result<()> {
+    let (sandbox, _host) = sandbox();
+    let policy =
+        crate::NetworkPolicy::Allowlist(crate::EgressAllowlist::new(["example.com"], [443]));
+    let result = sandbox.create(&spec()?.with_network(policy)).await;
+    assert!(matches!(
+        result,
+        Err(Error::ConstraintNotEnforced {
+            constraint: crate::Constraint::Network,
+            enforcement: crate::Enforcement::Unsupported,
+            ..
+        })
+    ));
+    Ok(())
+}

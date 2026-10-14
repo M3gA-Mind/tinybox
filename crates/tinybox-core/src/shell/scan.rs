@@ -5,6 +5,7 @@
 //! and normalise a command word. They decide nothing about whether a command
 //! is safe; a host that gates execution builds its policy on top of them.
 //! Every function is pure and none of them expands or evaluates anything.
+#![allow(deprecated)]
 
 use std::borrow::Cow;
 use std::collections::VecDeque;

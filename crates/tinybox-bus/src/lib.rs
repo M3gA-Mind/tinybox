@@ -29,6 +29,9 @@ pub use shell_selection::{SelectShellRequest, ShellFlavor, ShellInvocation};
 mod policy;
 pub use policy::{DockerPolicyReport, DockerPolicyRequest};
 
+mod event;
+pub use event::{DenialKind, EgressAllowlist, LimitKind, SandboxEvent};
+
 mod shell;
 pub use shell::{CommandAnalysis, CommandClass, CommandSegment};
 mod files;
@@ -61,7 +64,9 @@ pub use files::{
 /// module for the same verdict the Docker run members enforce without starting
 /// a container, and `hide_window` on [`ShellExecRequest`] (Windows console
 /// suppression for a native shell child; ignored elsewhere).
-pub const CONTRACT_VERSION: (u32, u32) = (1, 18);
+/// 1.19 adds `NetworkPolicy::Allowlist` and the observational
+/// [`SandboxEvent`] vocabulary (`Started`, `Denied`, `LimitHit`, `Exited`).
+pub const CONTRACT_VERSION: (u32, u32) = (1, 19);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.
@@ -348,13 +353,16 @@ pub struct SshHostConfig {
 }
 
 /// Network access policy applied by a sandbox.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum NetworkPolicy {
     /// Disable all network access.
     #[default]
     Denied,
     /// Permit outbound connections without publishing inbound ports.
     Egress,
+    /// Permit outbound connections only to the named hosts and ports. Added in
+    /// contract 1.19; a backend that cannot enforce it refuses the request.
+    Allowlist(EgressAllowlist),
     /// Permit unrestricted network access.
     Open,
 }
