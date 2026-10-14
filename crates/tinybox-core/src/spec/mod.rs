@@ -44,7 +44,9 @@ use serde::{Deserialize, Serialize};
 
 mod types;
 
-pub use types::{EgressAllowlist, Lifecycle, NetworkPolicy, Placement, PortMapping, Resources, WorkspaceSource};
+pub use types::{
+    EgressAllowlist, Lifecycle, NetworkPolicy, Placement, PortMapping, Resources, WorkspaceSource,
+};
 
 /// The complete description of a box, before any sandbox acts on it.
 ///

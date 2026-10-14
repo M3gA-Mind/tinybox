@@ -77,10 +77,10 @@ pub mod template;
 pub mod constraint;
 pub use constraint::{Constraint, ConstraintSupport, Enforcement, PlanCheck};
 
-pub use event::{CollectingSink, DenialKind, EventSink, LimitKind, SandboxEvent};
 pub use capability::{Capability, IsolationLevel, SandboxCapabilities, SnapshotSupport};
 pub use clock::{Clock, SystemClock};
 pub use error::{Error, Result};
+pub use event::{CollectingSink, DenialKind, EventSink, LimitKind, SandboxEvent};
 pub use identity::{BoxId, HostRef, ProcessId, SandboxRef, SnapshotId, TemplateName};
 pub use passthrough::PassthroughSandbox;
 pub use runtime::{
@@ -88,7 +88,8 @@ pub use runtime::{
     OutputStream, Sandbox, WorkspaceFileReader, WorkspaceFileWriter,
 };
 pub use spec::{
-    BoxSpec, EgressAllowlist, Lifecycle, NetworkPolicy, Placement, PortMapping, Resources, WorkspaceSource,
+    BoxSpec, EgressAllowlist, Lifecycle, NetworkPolicy, Placement, PortMapping, Resources,
+    WorkspaceSource,
 };
 pub use store::{MemoryStore, Store, insert_new};
 pub use template::{MemoryTemplates, Templates};

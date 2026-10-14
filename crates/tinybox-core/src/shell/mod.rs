@@ -95,12 +95,21 @@ pub fn script(
     parts.join(" ")
 }
 
-#[deprecated(since = "0.1.34", note = "command policy belongs to tinysecurity-policy (tinysecurity command_shell::classify); tinybox only reports shell structure through `analysis`. Removed in the release after 0.1.34.")]
+#[deprecated(
+    since = "0.1.34",
+    note = "command policy belongs to tinysecurity-policy (tinysecurity command_shell::classify); tinybox only reports shell structure through `analysis`. Removed in the release after 0.1.34."
+)]
 pub mod classify;
-#[deprecated(since = "0.1.34", note = "command policy belongs to tinysecurity-policy (tinysecurity env guard); tinybox only reports shell structure through `analysis`. Removed in the release after 0.1.34.")]
+#[deprecated(
+    since = "0.1.34",
+    note = "command policy belongs to tinysecurity-policy (tinysecurity env guard); tinybox only reports shell structure through `analysis`. Removed in the release after 0.1.34."
+)]
 pub mod env_guard;
 pub mod executor;
-#[deprecated(since = "0.1.34", note = "command policy belongs to tinysecurity-policy (tinysecurity command_shell::scan); tinybox only reports shell structure through `analysis`. Removed in the release after 0.1.34.")]
+#[deprecated(
+    since = "0.1.34",
+    note = "command policy belongs to tinysecurity-policy (tinysecurity command_shell::scan); tinybox only reports shell structure through `analysis`. Removed in the release after 0.1.34."
+)]
 pub mod scan;
 
 #[cfg(test)]
