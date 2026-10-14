@@ -665,17 +665,14 @@ async fn an_unenforceable_network_allowlist_is_refused_at_creation() -> Result<(
         ["example.com"],
         [443],
     ));
-    let error = sandbox
-        .create(&spec()?.with_network(policy))
-        .await
-        .unwrap_err();
+    let result = sandbox.create(&spec()?.with_network(policy)).await;
     assert!(matches!(
-        error,
-        Error::ConstraintNotEnforced {
+        result,
+        Err(Error::ConstraintNotEnforced {
             constraint: tinybox_core::Constraint::Network,
             enforcement: tinybox_core::Enforcement::Unsupported,
             ..
-        }
+        })
     ));
     Ok(())
 }

@@ -19,14 +19,14 @@ pub enum UsernsStatus {
     /// `kernel.unprivileged_userns_clone` is zero.
     DisabledBySysctl,
     /// `kernel.apparmor_restrict_unprivileged_userns` is `1` (Ubuntu 24.04),
-    /// so only binaries with an AppArmor profile granting `userns` may create
+    /// so only binaries with an `AppArmor` profile granting `userns` may create
     /// one.
     RestrictedByAppArmor,
 }
 
 impl UsernsStatus {
     /// Derive the status from raw sysctl file contents (`None` when the file
-    /// does not exist). Disabling wins over AppArmor restriction because it is
+    /// does not exist). Disabling wins over `AppArmor` restriction because it is
     /// the harder block.
     #[must_use]
     pub fn from_sysctls(
