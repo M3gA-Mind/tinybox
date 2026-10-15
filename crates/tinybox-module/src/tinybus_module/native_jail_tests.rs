@@ -203,6 +203,8 @@ fn declared_enforcement_rejects_each_unsupported_requested_constraint()
     Ok(())
 }
 
+// `prepare` refuses every native jail off Unix before reading any path.
+#[cfg(unix)]
 #[test]
 fn denials_are_canonicalized_and_refused_where_a_backend_cannot_keep_them()
 -> std::result::Result<(), Box<dyn std::error::Error>> {

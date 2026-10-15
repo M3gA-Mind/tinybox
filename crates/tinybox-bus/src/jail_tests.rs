@@ -27,7 +27,7 @@ fn deny_read_defaults_empty_and_round_trips() -> Result<(), serde_json::Error> {
     });
     // A 1.19 request still decodes, and an empty list is not written back.
     let config: NativeJailConfig = serde_json::from_value(value.clone())?;
-    assert!(config.deny_read.is_empty());
+    assert_eq!(config.deny_read, Vec::<String>::new());
     assert_eq!(serde_json::to_value(&config)?, value);
 
     value["deny_read"] = serde_json::json!(["/Users/a/.ssh"]);
