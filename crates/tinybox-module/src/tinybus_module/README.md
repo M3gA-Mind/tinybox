@@ -50,7 +50,7 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | StartNativeShellExec | ShellExecRequest | ProcessRef |
 | ValidateDockerPolicy | DockerPolicyRequest | DockerPolicyReport |
 
-Capabilities advertises contract version 1.19; 1.0 denotes the original
+Capabilities advertises contract version 1.20; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -245,7 +245,12 @@ enforcement preflight before consuming process admission. `Enforced` refuses
 partial constraints; `Declared` requires an explicit host decision using
 `JailStatus`. Neither mode admits the no-op or unavailable backend. A caller
 requiring the process-isolation security floor sets `require_process_isolation`.
-The host retains credential-path exclusions and approval policy.
+The host retains approval policy and chooses the credential paths; it sends them
+as `deny_read` (1.20), which the module canonicalizes (dropping paths that do not
+exist) and refuses when a denial covers the root or a writable grant, or lies
+inside the root or a grant on a backend that cannot subtract from grants.
+Seatbelt denies them last in its profile; Landlock and `AppContainer` never grant
+them.
 
 The jail owns a separate native collector for each execution. Output replay,
 Cancel, ReleaseOutput, Close and Shutdown use the same retained cleanup barriers
@@ -379,4 +384,5 @@ operation. State directory authorization and Windows private parent ACLs belong
 to the caller. See [the native shell contract](../../../docs/specs/native-shell-execution.md).
 
 Version 1.19 adds `NetworkPolicy::Allowlist` and the `SandboxEvent` vocabulary
-without a new member; see `docs/specs/contract-1-19.md`.
+without a new member; see `docs/specs/contract-1-19.md`. Version 1.20 adds
+`NativeJailConfig::deny_read`; see `docs/specs/contract-1-20.md`.

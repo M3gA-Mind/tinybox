@@ -246,6 +246,7 @@ async fn new_module_operations_dispatch_and_preserve_validation_errors() -> tiny
                 allow_subprocess: false,
                 enforcement: tinybox_bus::JailEnforcement::Declared,
                 require_process_isolation: false,
+                deny_read: Vec::new(),
             },
         )
         .await;

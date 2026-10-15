@@ -20,6 +20,9 @@ impl JailBackend for Backend {
     fn is_suitable_for_untrusted_code(&self) -> bool {
         self.suitable
     }
+    fn carves_denials(&self) -> bool {
+        self.name == "seatbelt"
+    }
     fn constraint_support(&self) -> tinybox_core::ConstraintSupport {
         use tinybox_core::{Constraint, ConstraintSupport, Enforcement};
         if self.full {
@@ -43,6 +46,7 @@ fn config() -> NativeJailConfig {
         allow_subprocess: false,
         enforcement: JailEnforcement::Enforced,
         require_process_isolation: false,
+        deny_read: Vec::new(),
     }
 }
 #[test]
@@ -196,5 +200,65 @@ fn declared_enforcement_rejects_each_unsupported_requested_constraint()
         )
         .is_err()
     );
+    Ok(())
+}
+
+#[test]
+fn denials_are_canonicalized_and_refused_where_a_backend_cannot_keep_them()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let home = tempfile::tempdir()?;
+    let root = home.path().join("project");
+    let secrets = home.path().join(".ssh");
+    let token = home.path().join(".netrc");
+    std::fs::create_dir(&root)?;
+    std::fs::create_dir(&secrets)?;
+    std::fs::write(&token, b"secret")?;
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.clone());
+    let backend = |name| Backend {
+        available: true,
+        suitable: false,
+        name,
+        full: true,
+    };
+    let path = |p: &std::path::Path| p.to_string_lossy().into_owned();
+    let mut config = config();
+    config.deny_read = vec![
+        path(&secrets),
+        path(&token),
+        path(&home.path().join(".aws")),
+    ];
+
+    // Outside every grant: any backend keeps it; the absent path is dropped.
+    for name in ["fixture", "seatbelt"] {
+        let jail = prepare(&root, &config, &command, &backend(name))?;
+        assert_eq!(
+            jail.deny_read,
+            vec![secrets.canonicalize()?, token.canonicalize()?]
+        );
+    }
+
+    // Inside a read grant: only a backend that subtracts from grants keeps it.
+    config.read_only = vec![path(home.path())];
+    assert!(prepare(&root, &config, &command, &backend("fixture")).is_err());
+    let jail = prepare(&root, &config, &command, &backend("seatbelt"))?;
+    assert_eq!(jail.deny_read.len(), 2);
+    config.read_only.clear();
+
+    // A denial over the root or a writable grant is refused everywhere.
+    for denied in [path(home.path()), path(&root)] {
+        config.deny_read = vec![denied];
+        assert!(prepare(&root, &config, &command, &backend("seatbelt")).is_err());
+    }
+    config.deny_read = vec![path(&secrets)];
+    config.read_write = vec![path(&secrets)];
+    assert!(prepare(&root, &config, &command, &backend("seatbelt")).is_err());
+    config.read_write.clear();
+
+    // Malformed denials are refused like malformed grants.
+    for bad in ["relative", "/usr/../etc", "/bad\0path"] {
+        config.deny_read = vec![bad.into()];
+        assert!(prepare(&root, &config, &command, &backend("seatbelt")).is_err());
+    }
     Ok(())
 }

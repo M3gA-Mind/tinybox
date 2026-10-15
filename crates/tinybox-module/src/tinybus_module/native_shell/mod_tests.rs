@@ -129,6 +129,7 @@ async fn native_shell_jail_adds_owned_scratch_and_refuses_unsupported_constraint
         allow_subprocess: false,
         enforcement: tinybox_bus::JailEnforcement::Enforced,
         require_process_isolation: false,
+        deny_read: Vec::new(),
     });
     let shell = ShellContext::prepare_with_backend(
         request.clone(),

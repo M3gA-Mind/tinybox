@@ -27,6 +27,12 @@ pub struct NativeJailConfig {
     pub enforcement: JailEnforcement,
     /// Require the provider to meet the process-isolation security floor.
     pub require_process_isolation: bool,
+    /// Absolute paths the child may neither read nor write, even where the
+    /// root or a grant would otherwise reach them (credential stores, for a
+    /// provider that reads allow-by-default). Paths that do not exist are
+    /// ignored. Added in contract 1.20; empty by default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny_read: Vec<String>,
 }
 
 #[cfg(test)]
