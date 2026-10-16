@@ -18,6 +18,7 @@
 
 mod box_store;
 mod index_store;
+mod record;
 
 pub use box_store::{BOX_COLLECTION, DocumentBoxStore};
 pub use index_store::{DocumentIndexStore, JAIL_INDEX_COLLECTION};
