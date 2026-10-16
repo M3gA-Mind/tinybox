@@ -236,5 +236,43 @@ async fn migrating_twice_changes_nothing() {
         .migrate(&storage, &MigrateOptions::new())
         .await
         .expect("second");
-    assert!(report.ran.is_empty());
+    assert_eq!(report.ran.len(), 0);
+}
+
+#[tokio::test]
+async fn a_v1_jail_index_with_a_bad_time_stops_the_step_and_is_kept() {
+    let mut bad = v1_jail_index();
+    bad["records"]["j1"]["created_at_unix"] = json!("yesterday");
+    let (registry, _backend, storage) = v1_storage(&[("tinybox_jail_index", "main", bad)]).await;
+    registry
+        .migrate(&storage, &MigrateOptions::new())
+        .await
+        .expect_err("bad time");
+    let docs = storage.documents();
+    assert!(
+        docs.get("tinybox_jail_index", "main")
+            .await
+            .expect("get")
+            .is_some()
+    );
+    assert!(
+        docs.get("box.jail_index", "main")
+            .await
+            .expect("get")
+            .is_none()
+    );
+}
+
+#[test]
+fn a_box_the_model_cannot_name_is_refused_by_the_step() {
+    let error = box_to_v2(SourceRecord {
+        id: "x".to_owned(),
+        body: json!({"id": "x"}),
+        meta: tinystoragedrivers_core::Meta::unknown(),
+    })
+    .expect_err("incomplete box");
+    assert_eq!(
+        error.kind(),
+        tinystoragedrivers_core::ErrorKind::Serialization
+    );
 }
