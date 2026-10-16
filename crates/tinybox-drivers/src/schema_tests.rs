@@ -1,11 +1,8 @@
 use super::*;
 use serde_json::json;
-use std::sync::Arc;
 use tinystoragedrivers_core::CollectionSpec;
 use tinystoragedrivers_core::schema::{Item, MigrateOptions, Registry};
-use tinystoragedrivers_core::{
-    DocumentStore, MemoryStorage, Precondition, Scope, ScopedStorage, StorageBackend,
-};
+use tinystoragedrivers_core::{MemoryStorage, Precondition, Scope, ScopedStorage, StorageBackend};
 
 /// A box as the v1 store wrote it: `BoxInfo` serialized by serde, keyed by id.
 fn v1_box() -> Value {

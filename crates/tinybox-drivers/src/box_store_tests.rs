@@ -193,10 +193,6 @@ fn tokio_rt() -> tokio::runtime::Runtime {
         .expect("runtime")
 }
 
-fn faulty(faults: Faults) -> Arc<dyn DocumentStore> {
-    Faulty::new(documents(), faults)
-}
-
 #[test]
 fn backend_failures_surface_as_store_errors_per_operation() -> Result<()> {
     let seeded = documents();
