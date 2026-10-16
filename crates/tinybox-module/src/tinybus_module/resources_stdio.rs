@@ -146,16 +146,16 @@ impl Resources {
                 )
             })??
         };
-        self.admit_stdio(&request, &target).await?;
-        let started =
-            StdioSession::spawn(request.clone(), backend, jail, build_command(&resolved)).await;
-        let session = match started {
-            Ok(session) => session,
-            Err(error) => {
-                self.remove_stdio(&target);
-                return Err(error);
-            }
+        let slot = self.slot(&request.resource).await?;
+        self.admit_stdio(&slot, &request, &target).await?;
+        // Ends the Starting slot however this start ends, and wakes a Close
+        // that is waiting for it.
+        let _starting = StartingGuard {
+            resources: self,
+            target: target.clone(),
         };
+        let session =
+            StdioSession::spawn(request.clone(), backend, jail, build_command(&resolved)).await?;
         self.stdio
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -163,6 +163,7 @@ impl Resources {
                 target.process.clone(),
                 StdioSlot::Ready(target.clone(), session.clone()),
             );
+        self.stdio_changed.notify_waiters();
         // A Close that began while the child started must not leave it alive.
         let open = {
             let state = self.state.lock().await;
@@ -241,7 +242,19 @@ impl Resources {
         }
     }
 
-    async fn admit_stdio(&self, request: &StdioStartRequest, target: &ProcessRef) -> Result<()> {
+    async fn admit_stdio(
+        &self,
+        slot: &super::ResourceSlot,
+        request: &StdioStartRequest,
+        target: &ProcessRef,
+    ) -> Result<()> {
+        // The resource lock comes first, as everywhere else, and the stream
+        // and stdio tables are never held across each other's lock.
+        let guard = slot.lock().await;
+        let entry = guard
+            .as_ref()
+            .ok_or_else(|| failure(tinybox_bus::UNKNOWN_RESOURCE, "closed resource"))?;
+        let other_processes = entry.processes.len() + self.streams_for(&request.resource).len();
         let mut state = self.state.lock().await;
         let executions = self
             .executions
@@ -259,10 +272,11 @@ impl Resources {
             ));
         }
         if stdio.len() >= tinybox_bus::MAX_STDIO_PROCESSES
-            || stdio
-                .values()
-                .filter(|slot| slot.target().resource == request.resource)
-                .count()
+            || other_processes
+                + stdio
+                    .values()
+                    .filter(|slot| slot.target().resource == request.resource)
+                    .count()
                 >= tinybox_bus::MAX_PROCESSES_PER_RESOURCE
         {
             return Err(failure(
@@ -284,6 +298,7 @@ impl Resources {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&target.process);
+        self.stdio_changed.notify_waiters();
     }
 
     fn stdio_session(&self, target: &ProcessRef) -> Result<Option<Arc<StdioSession>>> {
@@ -359,31 +374,46 @@ impl Resources {
         Ok(())
     }
 
-    /// Kill every stdio process of a closing resource; failures stay retained
-    /// so a later Close can retry them.
+    /// Kill every stdio process of a closing resource, waiting for any start
+    /// still in flight so nothing outlives the Close. A failure leaves the
+    /// slot in place so a later Close retries it.
     pub(super) async fn close_stdio(&self, resource: &ResourceId) -> Result<()> {
-        let sessions: Vec<(ProcessRef, Arc<StdioSession>)> = self
-            .stdio
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .values()
-            .filter_map(|slot| match slot {
-                StdioSlot::Ready(target, session) if target.resource == *resource => {
-                    Some((target.clone(), session.clone()))
-                }
-                _ => None,
-            })
-            .collect();
         let mut failure = None;
-        for (target, session) in sessions {
-            match session.kill().await {
-                Ok(()) => self.remove_stdio(&target),
-                Err(error) => {
-                    failure.get_or_insert(error);
+        loop {
+            let changed = self.stdio_changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let mut sessions = Vec::new();
+            let mut starting = false;
+            for slot in self
+                .stdio
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .values()
+            {
+                match slot {
+                    StdioSlot::Ready(target, session) if target.resource == *resource => {
+                        sessions.push((target.clone(), session.clone()));
+                    }
+                    StdioSlot::Starting(target) if target.resource == *resource => {
+                        starting = true;
+                    }
+                    _ => {}
                 }
             }
+            for (target, session) in sessions {
+                match session.kill().await {
+                    Ok(()) => self.remove_stdio(&target),
+                    Err(error) => {
+                        failure.get_or_insert(error);
+                    }
+                }
+            }
+            if !starting {
+                return failure.map_or(Ok(()), Err);
+            }
+            changed.await;
         }
-        failure.map_or(Ok(()), Err)
     }
 }
 

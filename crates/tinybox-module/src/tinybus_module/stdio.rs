@@ -136,7 +136,12 @@ impl StdioSession {
     }
 
     pub(super) async fn write(&self, data: &[u8]) -> Result<()> {
-        let mut guard = self.stdin.lock().await;
+        // One deadline covers waiting behind earlier writes and the write.
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_millis(MAX_STDIO_WAIT_MS);
+        let Ok(mut guard) = tokio::time::timeout_at(deadline, self.stdin.lock()).await else {
+            return Err(backend_failure("stdin is busy with an earlier write"));
+        };
         let Some(stdin) = guard.as_mut() else {
             return Err(failure(STDIO_CLOSED, "stdin is closed"));
         };
@@ -144,8 +149,7 @@ impl StdioSession {
             stdin.write_all(data).await?;
             stdin.flush().await
         };
-        let deadline = std::time::Duration::from_millis(MAX_STDIO_WAIT_MS);
-        if matches!(tokio::time::timeout(deadline, write).await, Ok(Ok(()))) {
+        if matches!(tokio::time::timeout_at(deadline, write).await, Ok(Ok(()))) {
             Ok(())
         } else {
             // A partial write leaves the framing unknown; close rather than
@@ -261,16 +265,18 @@ fn reap_detached(mut child: Child) {
 async fn pump(mut pipe: impl AsyncRead + Unpin, shared: Arc<Shared>, which: Pipe) {
     let mut chunk = [0_u8; 8192];
     loop {
-        shared
+        // Read no more than the buffer has room for, so the bound is exact.
+        let room = shared
             .wait(|buffers| {
                 let held = match which {
                     Pipe::Stdout => buffers.stdout.len(),
                     Pipe::Stderr => buffers.stderr.len(),
                 };
-                (held < MAX_STDIO_BUFFER_BYTES).then_some(())
+                (held < MAX_STDIO_BUFFER_BYTES).then_some(MAX_STDIO_BUFFER_BYTES - held)
             })
             .await;
-        match pipe.read(&mut chunk).await {
+        let take = room.min(chunk.len());
+        match pipe.read(&mut chunk[..take]).await {
             Ok(0) | Err(_) => break,
             Ok(read) => {
                 let mut buffers = shared.lock();
@@ -306,6 +312,12 @@ async fn reap(child: Arc<StdMutex<Option<Child>>>, shared: Arc<Shared>, group: i
         match waited {
             Ok(None) => tokio::time::sleep(REAP_POLL).await,
             Ok(Some(status)) => {
+                // Reaped: the id may be reused from now on, so nothing may
+                // signal it through this session again (Kill, Drop).
+                child
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
                 #[cfg(unix)]
                 if group > 0 {
                     use nix::{
