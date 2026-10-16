@@ -455,3 +455,121 @@ async fn live_stdio_processes_are_bounded() -> Result<()> {
     }
     resources.close(&resource).await
 }
+
+#[tokio::test]
+async fn an_unknown_process_answers_unknown_and_kill_is_harmless() -> Result<()> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let ghost = ProcessRef {
+        resource: resource.clone(),
+        process: ResourceId("ghost".into()),
+    };
+    assert!(failed_with(
+        resources.read_stdio(read(&ghost, 0)).await,
+        tinybox_bus::UNKNOWN_PROCESS
+    ));
+    assert!(failed_with(
+        resources.close_stdin(&ghost).await,
+        tinybox_bus::UNKNOWN_PROCESS
+    ));
+    assert!(failed_with(
+        resources
+            .write_stdio(StdioWriteRequest {
+                process: ghost.clone(),
+                data: b"x".to_vec(),
+            })
+            .await,
+        tinybox_bus::UNKNOWN_PROCESS
+    ));
+    resources.kill_stdio(&ghost).await?;
+    let missing = StdioStartRequest {
+        process: ResourceId("p".into()),
+        resource: ResourceId("no-such-resource".into()),
+        argv: vec!["cat".into()],
+        cwd: None,
+        env: std::collections::BTreeMap::new(),
+        jail: jail_config(),
+    };
+    assert!(failed_with(
+        resources.start_stdio(missing).await,
+        tinybox_bus::UNKNOWN_RESOURCE
+    ));
+    resources.close(&resource).await
+}
+
+#[tokio::test]
+async fn a_program_that_cannot_start_fails_and_frees_its_slot() -> Result<()> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let backend = Recording::new();
+    let request = start_request(&resources, &resource, &["/nonexistent/tinybox-program"]).await?;
+    assert!(failed_with(
+        resources
+            .start_stdio_with(request.clone(), backend.clone())
+            .await,
+        tinybox_bus::BACKEND_ERROR
+    ));
+    assert!(failed_with(
+        resources.stdio_status(&ProcessRef {
+            resource: resource.clone(),
+            process: request.process.clone(),
+        }),
+        tinybox_bus::UNKNOWN_PROCESS
+    ));
+    resources.close(&resource).await
+}
+
+#[tokio::test]
+async fn reads_are_capped_and_an_idle_read_returns_empty_after_its_wait() -> Result<()> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let backend = Recording::new();
+    let process = start(&resources, &resource, &backend, &["cat"]).await?;
+    let idle = resources.read_stdio(read(&process, 50)).await?;
+    assert!(idle.stdout.is_empty() && idle.stderr.is_empty() && idle.status.running);
+    resources
+        .write_stdio(StdioWriteRequest {
+            process: process.clone(),
+            data: vec![b'a'; 100],
+        })
+        .await?;
+    let mut taken = 0;
+    while taken < 100 {
+        let chunk = resources
+            .read_stdio(StdioReadRequest {
+                process: process.clone(),
+                max_bytes: 10,
+                wait_ms: 1_000,
+            })
+            .await?;
+        assert!(chunk.stdout.len() <= 10);
+        taken += chunk.stdout.len();
+    }
+    resources.kill_stdio(&process).await?;
+    resources.close(&resource).await
+}
+
+#[tokio::test]
+async fn dropping_the_registry_kills_a_stdio_child_it_still_owns() -> Result<()> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let backend = Recording::new();
+    let process = start(
+        &resources,
+        &resource,
+        &backend,
+        &["sh", "-c", "echo $$; exec sleep 60"],
+    )
+    .await?;
+    let (out, _, _) = collect(&resources, &process, |out, _, _| out.ends_with(b"\n")).await?;
+    let pid = String::from_utf8_lossy(&out).trim().to_owned();
+    assert!(alive(&pid));
+    drop(resources);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while alive(&pid) {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| Error::failed("child survived the registry"))
+}
