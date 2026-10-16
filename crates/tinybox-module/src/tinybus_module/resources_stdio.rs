@@ -352,6 +352,7 @@ impl Resources {
     }
 }
 
-#[cfg(test)]
+// The fixtures run `sh`, `cat` and `kill`, and the jail itself is Unix-only.
+#[cfg(all(test, unix))]
 #[path = "resources_stdio_tests.rs"]
 mod tests;
