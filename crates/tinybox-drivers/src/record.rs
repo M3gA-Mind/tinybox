@@ -2,8 +2,8 @@
 //!
 //! [`BoxInfo`] and [`BoxSpec`] are model types: their serde form is shared with
 //! templates and snapshot manifests, and it uses `Duration` and `SystemTime`
-//! encodings and PascalCase variant names. The document body is its own type
-//! so the stored shape follows the schema (snake_case, `*_ms` times, tagged
+//! encodings and `PascalCase` variant names. The document body is its own type
+//! so the stored shape follows the schema (`snake_case`, `*_ms` times, tagged
 //! variants) without touching the model's wire form.
 //!
 //! The box id is the document id and is not repeated in the body.

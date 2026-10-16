@@ -37,6 +37,10 @@ impl DocumentBoxStore {
     /// # Errors
     ///
     /// Returns [`Error::Store`] when the bridge cannot start.
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "the handle is taken by value, as it always was"
+    )]
     pub fn new(documents: Arc<dyn DocumentStore>) -> Result<Self> {
         let bridge = Blocking::new().map_err(|error| store_error("open", &error))?;
         let boxes = Repo::new(&documents, BOX_COLLECTION)

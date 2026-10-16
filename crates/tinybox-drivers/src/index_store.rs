@@ -43,6 +43,10 @@ impl DocumentIndexStore {
     ///
     /// Returns an error when the bridge cannot start or `registry` cannot be a
     /// document id.
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "the handle is taken by value, as it always was"
+    )]
     pub fn new(documents: Arc<dyn DocumentStore>, registry: impl Into<String>) -> io::Result<Self> {
         let registry = registry.into();
         let bridge = Blocking::new().map_err(|e| to_io(&e))?;
