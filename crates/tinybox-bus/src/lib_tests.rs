@@ -51,7 +51,7 @@ fn docker_run_vocabulary_is_typed_bounded_and_additive() -> Result<(), serde_jso
     assert_eq!(METHODS[29], "CleanupDocker");
     assert_eq!(METHODS[30], "RunDockerWithoutWorkspace");
     assert_eq!(METHODS[34], "StartNativeShellExec");
-    assert_eq!(CONTRACT_VERSION, (1, 20));
+    assert_eq!(CONTRACT_VERSION, (1, 21));
     assert_eq!(MAX_DOCKER_RUN_TIMEOUT_MS, 86_400_000);
     let serialized = serde_json::to_value(&request)?;
     assert_eq!(serialized["read_only_rootfs"], false);
@@ -129,7 +129,7 @@ fn host_gateway_and_docker_facts_are_additive_and_default_safely() -> Result<(),
 #[test]
 fn version_and_capability_wire_snapshot_preserve_contract_compatibility()
 -> Result<(), serde_json::Error> {
-    assert_eq!(CONTRACT_VERSION, (1, 20));
+    assert_eq!(CONTRACT_VERSION, (1, 21));
     assert!(is_compatible(CONTRACT_VERSION));
     assert!(!is_compatible((1, 8)));
     assert!(!is_compatible((1, 7)));
@@ -166,7 +166,7 @@ fn no_workspace_docker_operation_is_present_in_the_contract() {
             .count(),
         1
     );
-    assert_eq!(CONTRACT_VERSION, (1, 20));
+    assert_eq!(CONTRACT_VERSION, (1, 21));
 }
 
 #[test]
@@ -372,6 +372,12 @@ fn named_members_resolve_to_the_method_catalogue_in_order() {
         START_SHELL_EXEC,
         START_NATIVE_SHELL_EXEC,
         VALIDATE_DOCKER_POLICY,
+        START_STDIO,
+        WRITE_STDIO,
+        READ_STDIO,
+        CLOSE_STDIN,
+        KILL_STDIO,
+        STDIO_STATUS,
     ];
     assert_eq!(METHODS, &expected[..]);
     assert_eq!(DESCRIBE, "Describe");
@@ -384,7 +390,6 @@ fn named_members_resolve_to_the_method_catalogue_in_order() {
 
 #[test]
 fn docker_policy_validation_is_a_standalone_appended_member() -> Result<(), serde_json::Error> {
-    assert_eq!(METHODS.last(), Some(&"ValidateDockerPolicy"));
     assert_eq!(METHODS[35], "ValidateDockerPolicy");
     assert_eq!(names::VALIDATE_DOCKER_POLICY, "ValidateDockerPolicy");
     let request: DockerPolicyRequest = serde_json::from_value(serde_json::json!({}))?;

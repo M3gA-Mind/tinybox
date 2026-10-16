@@ -26,6 +26,13 @@ mod shell_selection;
 pub use shell_execution::ShellExecRequest;
 pub use shell_selection::{SelectShellRequest, ShellFlavor, ShellInvocation};
 
+mod stdio;
+pub use stdio::{
+    MAX_STDIO_BUFFER_BYTES, MAX_STDIO_PROCESSES, MAX_STDIO_READ_BYTES, MAX_STDIO_WAIT_MS,
+    MAX_STDIO_WRITE_BYTES, STDIO_CLOSED, StdioChunk, StdioExit, StdioReadRequest,
+    StdioStartRequest, StdioStatus, StdioWriteRequest,
+};
+
 mod policy;
 pub use policy::{DockerPolicyReport, DockerPolicyRequest};
 
@@ -67,7 +74,11 @@ pub use files::{
 /// 1.19 adds `NetworkPolicy::Allowlist` and the observational
 /// [`SandboxEvent`] vocabulary (`Started`, `Denied`, `LimitHit`, `Exited`).
 /// 1.20 adds `deny_read` to [`NativeJailConfig`].
-pub const CONTRACT_VERSION: (u32, u32) = (1, 20);
+/// 1.21 adds the interactive piped-stdio members `StartStdio`, `WriteStdio`,
+/// `ReadStdio`, `CloseStdin`, `KillStdio` and `StdioStatus`, which run one
+/// program inside a mandatory native jail and stream its stdin, stdout and
+/// stderr over the bus.
+pub const CONTRACT_VERSION: (u32, u32) = (1, 21);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.
@@ -182,6 +193,18 @@ pub mod names {
     pub const START_NATIVE_SHELL_EXEC: &str = "StartNativeShellExec";
     /// Wire name of the `ValidateDockerPolicy` member.
     pub const VALIDATE_DOCKER_POLICY: &str = "ValidateDockerPolicy";
+    /// Wire name of the `StartStdio` member.
+    pub const START_STDIO: &str = "StartStdio";
+    /// Wire name of the `WriteStdio` member.
+    pub const WRITE_STDIO: &str = "WriteStdio";
+    /// Wire name of the `ReadStdio` member.
+    pub const READ_STDIO: &str = "ReadStdio";
+    /// Wire name of the `CloseStdin` member.
+    pub const CLOSE_STDIN: &str = "CloseStdin";
+    /// Wire name of the `KillStdio` member.
+    pub const KILL_STDIO: &str = "KillStdio";
+    /// Wire name of the `StdioStatus` member.
+    pub const STDIO_STATUS: &str = "StdioStatus";
 }
 
 /// Supported additive methods, including the original discovery operation.
@@ -223,6 +246,12 @@ pub const METHODS: &[&str] = &[
     names::START_SHELL_EXEC,
     names::START_NATIVE_SHELL_EXEC,
     names::VALIDATE_DOCKER_POLICY,
+    names::START_STDIO,
+    names::WRITE_STDIO,
+    names::READ_STDIO,
+    names::CLOSE_STDIN,
+    names::KILL_STDIO,
+    names::STDIO_STATUS,
 ];
 
 /// Facts about the detected native directory-jail backend.
