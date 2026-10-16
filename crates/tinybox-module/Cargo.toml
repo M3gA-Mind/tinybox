@@ -60,7 +60,8 @@ tinystoragedrivers-client.workspace = true
 # Deterministic delayed-host fixtures implement the existing object-safe host trait.
 async-trait.workspace = true
 # Module integration tests exercise the real asynchronous in-memory TinyBus.
-tokio.workspace = true
+# `test-util` lets the stdio cleanup-deadline tests pause the clock.
+tokio = { workspace = true, features = ["test-util"] }
 # The GitHub release verifier passes an explicit empty module configuration.
 serde_json.workspace = true
 

@@ -351,3 +351,8 @@ fn exit_of(status: std::process::ExitStatus) -> StdioExit {
     }
     status.code().map_or(StdioExit::Unknown, StdioExit::Code)
 }
+
+// The fixtures run `sh` and `head`, and the jail itself is Unix-only.
+#[cfg(all(test, unix))]
+#[path = "stdio_tests.rs"]
+mod tests;
