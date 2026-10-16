@@ -9,6 +9,12 @@
 //! - [`DocumentIndexStore`]: the jail registry's index as one document, behind
 //!   [`tinybox_jail::IndexStore`].
 //!
+//! - [`storage_schema`]: the `box` owner's collections (`box.boxes`,
+//!   `box.jail_index`) and the v1 to v2 steps. The host composes it into its
+//!   registry, declares the collections, runs the migration, and grants the
+//!   module exactly these items (`ScopeClass::Module`). The stores here never
+//!   declare a collection themselves.
+//!
 //! Both traits are synchronous, so each store owns a [`Blocking`] bridge that
 //! runs the port's futures on a dedicated runtime thread. That works from inside
 //! or outside a tokio runtime.
