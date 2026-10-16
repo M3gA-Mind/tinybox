@@ -670,6 +670,7 @@ async fn verify_native_jail(
         allow_subprocess: true,
         enforcement: JailEnforcement::Enforced,
         require_process_isolation: false,
+        deny_read: Vec::new(),
     };
     let status: tinybox_bus::JailStatus = proxy.call("JailStatus", ()).await?;
     eprintln!(
@@ -806,6 +807,7 @@ async fn verify_docker_rejects_local_jail(
                     allow_subprocess: true,
                     enforcement: JailEnforcement::Declared,
                     require_process_isolation: false,
+                    deny_read: Vec::new(),
                 },
             ),
         )

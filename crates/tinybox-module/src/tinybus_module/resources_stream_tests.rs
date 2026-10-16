@@ -287,6 +287,7 @@ async fn jailed_start_rejects_missing_grants_without_consuming_reservation() -> 
         allow_subprocess: true,
         enforcement: tinybox_bus::JailEnforcement::Declared,
         require_process_isolation: false,
+        deny_read: Vec::new(),
     };
     assert!(
         resources

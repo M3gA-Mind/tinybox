@@ -19,7 +19,9 @@ pub(super) fn prepare(
     if config.require_process_isolation && !backend.is_suitable_for_untrusted_code() {
         return Err(unavailable());
     }
-    if config.read_only.len() + config.read_write.len() > tinybox_bus::MAX_NATIVE_JAIL_GRANTS {
+    if config.read_only.len() + config.read_write.len() + config.deny_read.len()
+        > tinybox_bus::MAX_NATIVE_JAIL_GRANTS
+    {
         return Err(invalid());
     }
     let root = root.canonicalize().map_err(|_| invalid())?;
@@ -39,6 +41,28 @@ pub(super) fn prepare(
     jail.allow_subprocess = config.allow_subprocess;
     jail.read_only = grants(&config.read_only)?;
     jail.read_write = grants(&config.read_write)?;
+    jail.deny_read = denials(&config.deny_read)?;
+    // A denial over the root or a writable grant would leave the command no
+    // workspace; that is a host error, not a weaker jail.
+    if jail.deny_read.iter().any(|denied| {
+        std::iter::once(&jail.root)
+            .chain(&jail.read_write)
+            .any(|granted| granted.starts_with(denied))
+    }) {
+        return Err(invalid());
+    }
+    // Inside the root or a grant, only a backend that subtracts from grants
+    // can keep the denial; outside them nothing grants the path anyway.
+    if !backend.carves_denials()
+        && jail.deny_read.iter().any(|denied| {
+            std::iter::once(&jail.root)
+                .chain(&jail.read_only)
+                .chain(&jail.read_write)
+                .any(|granted| denied.starts_with(granted))
+        })
+    {
+        return Err(unavailable());
+    }
     match config.enforcement {
         JailEnforcement::Enforced => backend.require(&jail).map_err(|_| unavailable())?,
         JailEnforcement::Declared => {
@@ -71,6 +95,30 @@ fn grants(paths: &[String]) -> Result<Vec<std::path::PathBuf>> {
             path.canonicalize().map_err(|_| invalid())
         })
         .collect()
+}
+/// Denied paths, validated like grants; a path that does not exist cannot be
+/// read and is dropped, an existing one is canonicalized so the backend matches
+/// the real location behind a symlink.
+fn denials(paths: &[String]) -> Result<Vec<std::path::PathBuf>> {
+    let mut denied = Vec::new();
+    for value in paths {
+        let path = Path::new(value);
+        if value.len() > tinybox_bus::MAX_FILE_PATH_BYTES
+            || value.contains('\0')
+            || !path.is_absolute()
+            || path
+                .components()
+                .any(|part| matches!(part, Component::ParentDir))
+        {
+            return Err(invalid());
+        }
+        match path.canonicalize() {
+            Ok(path) => denied.push(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(invalid()),
+        }
+    }
+    Ok(denied)
 }
 fn invalid() -> Error {
     super::resources::failure(

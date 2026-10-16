@@ -50,6 +50,11 @@ impl JailBackend for SeatbeltBackend {
         declared_constraint_support(self.is_available())
     }
 
+    /// The profile's last rule denies `deny_read` paths over every allow.
+    fn carves_denials(&self) -> bool {
+        true
+    }
+
     /// Launcher presence proves no process-isolation guarantee.
     fn isolation(&self) -> tinybox_core::IsolationLevel {
         tinybox_core::IsolationLevel::None
@@ -185,6 +190,17 @@ fn render_profile(jail: &Jail) -> String {
         let _ = writeln!(out, "  (subpath \"{}\")", escape(&path.to_string_lossy()));
     }
     out.push_str("  (subpath \"/private/tmp\")\n  (literal \"/dev/null\")\n)\n");
+
+    // Reads are allow-default, so a credential store is readable unless it is
+    // denied here. Last, so it also overrides the write grants above; a
+    // `subpath` matches a single file as well as a directory tree.
+    if !jail.deny_read.is_empty() {
+        out.push_str("(deny file-read* file-write*\n");
+        for path in &jail.deny_read {
+            let _ = writeln!(out, "  (subpath \"{}\")", escape(&path.to_string_lossy()));
+        }
+        out.push_str(")\n");
+    }
 
     // `read_only` is informational on macOS — reads are already allowed
     // by `(allow default)`. We keep the field on `Jail` because Landlock

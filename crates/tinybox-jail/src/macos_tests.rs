@@ -29,6 +29,22 @@ fn profile_allow_subprocess_default_has_no_process_deny() {
 }
 
 #[test]
+fn profile_denies_reads_and_writes_of_denied_paths_last() {
+    let mut jail = Jail::new("/Users/a/project", "x");
+    assert!(!render_profile(&jail).contains("file-read*"));
+    jail.deny_read = vec!["/Users/a/.ssh".into(), "/Users/a/.netrc".into()];
+    let p = render_profile(&jail);
+    let denial = p
+        .find("(deny file-read* file-write*")
+        .expect("denied paths are emitted");
+    // After the write allows, so it overrides them.
+    assert!(denial > p.find("(allow file-write*").unwrap());
+    assert!(p[denial..].contains("(subpath \"/Users/a/.ssh\")"));
+    assert!(p[denial..].contains("(subpath \"/Users/a/.netrc\")"));
+    assert!(SeatbeltBackend::new().carves_denials());
+}
+
+#[test]
 fn escape_handles_backslash_and_quote() {
     assert_eq!(escape("a\\b"), "a\\\\b");
     assert_eq!(escape("a\"b"), "a\\\"b");

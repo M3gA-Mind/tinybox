@@ -27,6 +27,11 @@ pub struct Jail {
     /// must write to without it landing inside the root (e.g. a per-call
     /// output-capture directory). Grant the narrowest directory that works.
     pub read_write: Vec<PathBuf>,
+    /// Paths the child may neither read nor write, even inside the root or a
+    /// grant. Only a backend that [`carves_denials`](JailBackend::carves_denials)
+    /// can subtract them from a grant; everywhere else they are unreachable
+    /// already because nothing grants them.
+    pub deny_read: Vec<PathBuf>,
     /// Allow outbound network. Most agent tools need this; some risky tools
     /// (untrusted code execution) should disable it.
     pub allow_net: bool,
@@ -46,6 +51,7 @@ impl Jail {
             root: root.as_ref().to_path_buf(),
             read_only: Vec::new(),
             read_write: Vec::new(),
+            deny_read: Vec::new(),
             allow_net: true,
             allow_subprocess: true,
             label: label.into(),
@@ -107,7 +113,12 @@ impl Jail {
     /// Returns the filesystem error encountered while canonicalizing `root`.
     pub fn canonicalize(&mut self) -> std::io::Result<()> {
         self.root = self.root.canonicalize()?;
-        for p in self.read_only.iter_mut().chain(self.read_write.iter_mut()) {
+        for p in self
+            .read_only
+            .iter_mut()
+            .chain(self.read_write.iter_mut())
+            .chain(self.deny_read.iter_mut())
+        {
             if let Ok(c) = p.canonicalize() {
                 *p = c;
             }
@@ -135,6 +146,13 @@ impl Jail {
 /// `AppContainer` requires custom `CreateProcess` flags that `std`'s
 /// `Command::spawn` does not expose.
 pub trait JailBackend: Send + Sync {
+    /// Whether [`Jail::deny_read`] is enforced even inside the root or a grant.
+    /// Allow-list backends (Landlock, `AppContainer`) cannot subtract from a
+    /// grant, so they keep the default `false`.
+    fn carves_denials(&self) -> bool {
+        false
+    }
+
     /// Stable identifier, used in logs / audit ("landlock", "seatbelt",
     /// "appcontainer", "noop").
     fn name(&self) -> &'static str;
