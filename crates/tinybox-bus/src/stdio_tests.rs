@@ -3,22 +3,25 @@ use super::*;
 use crate::NativeJailConfig;
 
 fn jail() -> NativeJailConfig {
-    serde_json::from_value(serde_json::json!({
-        "read_only": [], "read_write": [], "allow_net": false,
-        "allow_subprocess": false, "enforcement": "enforced",
-        "require_process_isolation": true,
-    }))
-    .expect("jail fixture")
+    NativeJailConfig {
+        read_only: Vec::new(),
+        read_write: Vec::new(),
+        allow_net: false,
+        allow_subprocess: false,
+        enforcement: crate::JailEnforcement::Enforced,
+        require_process_isolation: true,
+        deny_read: Vec::new(),
+    }
 }
 
 #[test]
-fn stdio_members_are_appended_after_the_1_20_catalogue() {
+fn stdio_members_are_appended_after_the_1_20_catalogue() -> Result<(), &'static str> {
     use crate::{CONTRACT_VERSION, METHODS, names};
     assert!(CONTRACT_VERSION >= (1, 21));
     let start = METHODS
         .iter()
         .position(|name| *name == names::START_STDIO)
-        .expect("StartStdio is advertised");
+        .ok_or("StartStdio is not advertised")?;
     assert_eq!(
         &METHODS[start..start + 6],
         [
@@ -30,6 +33,7 @@ fn stdio_members_are_appended_after_the_1_20_catalogue() {
             "StdioStatus"
         ]
     );
+    Ok(())
 }
 
 #[test]

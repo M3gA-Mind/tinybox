@@ -157,13 +157,13 @@ async fn bytes_round_trip_through_stdin_and_stdout_until_eof() -> Result<()> {
         .await?;
     let (out, _, _) = collect(&resources, &process, |out, _, _| out.ends_with(b"hello\n")).await?;
     assert_eq!(out, b"hello\n");
-    assert!(resources.stdio_status(&process).await?.running);
+    assert!(resources.stdio_status(&process)?.running);
     resources.close_stdin(&process).await?;
     let (_, _, last) = collect(&resources, &process, |_, _, chunk| chunk.stdout_closed).await?;
     assert!(last.stderr_closed || last.status.exit.is_some() || !last.status.running);
     let status = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            let status = resources.stdio_status(&process).await?;
+            let status = resources.stdio_status(&process)?;
             if !status.running {
                 return Ok::<_, Error>(status);
             }
@@ -266,7 +266,7 @@ async fn kill_ends_the_whole_process_group_and_releases_the_handle() -> Result<(
     .await
     .map_err(|_| Error::failed("grandchild survived the kill"))?;
     assert!(failed_with(
-        resources.stdio_status(&process).await,
+        resources.stdio_status(&process),
         tinybox_bus::UNKNOWN_PROCESS
     ));
     // Kill is idempotent once released.
@@ -288,10 +288,10 @@ async fn closing_the_resource_kills_its_stdio_processes() -> Result<()> {
     let resource = local_resource(&resources).await?;
     let backend = Recording::new();
     let process = start(&resources, &resource, &backend, &["sleep", "60"]).await?;
-    assert!(resources.stdio_status(&process).await?.running);
+    assert!(resources.stdio_status(&process)?.running);
     resources.close(&resource).await?;
     assert!(failed_with(
-        resources.stdio_status(&process).await,
+        resources.stdio_status(&process),
         tinybox_bus::UNKNOWN_PROCESS
     ));
     Ok(())
@@ -408,7 +408,7 @@ async fn invalid_requests_replays_and_foreign_handles_are_rejected() -> Result<(
         process: process.process.clone(),
     };
     assert!(failed_with(
-        resources.stdio_status(&foreign).await,
+        resources.stdio_status(&foreign),
         tinybox_bus::INVALID_ID
     ));
     assert!(failed_with(

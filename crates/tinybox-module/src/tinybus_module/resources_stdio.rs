@@ -94,49 +94,7 @@ impl Resources {
                 ))
             };
         }
-        let slot = self.slot(&request.resource).await?;
-        let (root, resolved) = {
-            let guard = slot.lock().await;
-            let entry = guard
-                .as_ref()
-                .ok_or_else(|| failure(tinybox_bus::UNKNOWN_RESOURCE, "closed resource"))?;
-            let (Some(sandbox), Some(root)) = (&entry.local_sandbox, &entry.workspace_root) else {
-                return Err(failure(
-                    tinybox_bus::UNSUPPORTED_OPERATION,
-                    "stdio requires a local passthrough directory resource",
-                ));
-            };
-            if !entry.native_host {
-                return Err(failure(
-                    tinybox_bus::UNSUPPORTED_OPERATION,
-                    "stdio requires local passthrough execution",
-                ));
-            }
-            {
-                let mut state = self.state.lock().await;
-                let executions = self
-                    .executions
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                check_resource_open(&state, &executions, &request.resource)?;
-                self.check_reservation(
-                    &mut state,
-                    &request.process,
-                    &ReserveRequest::Process(request.resource.clone()),
-                )?;
-            }
-            let native = command(tinybox_bus::ExecRequest {
-                resource: request.resource.clone(),
-                argv: request.argv.clone(),
-                cwd: request.cwd.clone(),
-                env: request.env.clone(),
-                stdin: None,
-            });
-            let resolved = sandbox
-                .resolve_command(&entry.id, &native)
-                .map_err(|error| backend_error(&error))?;
-            (root.clone(), resolved)
-        };
+        let (root, resolved) = self.resolve_stdio(&request).await?;
         // The same preflight as StartJailedExec: refuse before any admission
         // when the backend cannot meet the requested floor.
         let jail = {
@@ -196,6 +154,56 @@ impl Resources {
             target.process.0
         );
         Ok(target)
+    }
+
+    /// Check the resource and reservation, and resolve the command inside it.
+    async fn resolve_stdio(
+        &self,
+        request: &StdioStartRequest,
+    ) -> Result<(std::path::PathBuf, tinybox_core::ExecRequest)> {
+        let slot = self.slot(&request.resource).await?;
+        {
+            let guard = slot.lock().await;
+            let entry = guard
+                .as_ref()
+                .ok_or_else(|| failure(tinybox_bus::UNKNOWN_RESOURCE, "closed resource"))?;
+            let (Some(sandbox), Some(root)) = (&entry.local_sandbox, &entry.workspace_root) else {
+                return Err(failure(
+                    tinybox_bus::UNSUPPORTED_OPERATION,
+                    "stdio requires a local passthrough directory resource",
+                ));
+            };
+            if !entry.native_host {
+                return Err(failure(
+                    tinybox_bus::UNSUPPORTED_OPERATION,
+                    "stdio requires local passthrough execution",
+                ));
+            }
+            {
+                let mut state = self.state.lock().await;
+                let executions = self
+                    .executions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                check_resource_open(&state, &executions, &request.resource)?;
+                self.check_reservation(
+                    &mut state,
+                    &request.process,
+                    &ReserveRequest::Process(request.resource.clone()),
+                )?;
+            }
+            let native = command(tinybox_bus::ExecRequest {
+                resource: request.resource.clone(),
+                argv: request.argv.clone(),
+                cwd: request.cwd.clone(),
+                env: request.env.clone(),
+                stdin: None,
+            });
+            let resolved = sandbox
+                .resolve_command(&entry.id, &native)
+                .map_err(|error| backend_error(&error))?;
+            Ok((root.clone(), resolved))
+        }
     }
 
     async fn admit_stdio(&self, request: &StdioStartRequest, target: &ProcessRef) -> Result<()> {
@@ -299,7 +307,7 @@ impl Resources {
         Ok(())
     }
 
-    pub(in crate::tinybus_module) async fn stdio_status(
+    pub(in crate::tinybus_module) fn stdio_status(
         &self,
         process: &ProcessRef,
     ) -> Result<StdioStatus> {

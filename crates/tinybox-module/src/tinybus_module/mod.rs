@@ -347,7 +347,7 @@ impl BoxService {
 
     /// Report whether a stdio process runs and how it ended.
     async fn stdio_status(&self, process: ProcessRef) -> TinyBusResult<tinybox_bus::StdioStatus> {
-        self.resources.stdio_status(&process).await
+        std::future::ready(self.resources.stdio_status(&process)).await
     }
 
     /// Report how a Docker run would weaken isolation, without starting anything.
