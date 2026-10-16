@@ -20,6 +20,8 @@ use tinybox_core::{
 use tinybus::{Error, Result};
 use tokio::sync::Mutex;
 
+#[path = "resources_stdio.rs"]
+mod stdio_ops;
 #[path = "resources_stream.rs"]
 mod stream;
 
@@ -129,6 +131,7 @@ pub(super) struct Resources {
     state: Mutex<State>,
     executions: std::sync::Mutex<Executions>,
     streams: std::sync::Mutex<BTreeMap<ResourceId, Arc<stream::StreamExecution>>>,
+    stdio: std::sync::Mutex<BTreeMap<ResourceId, stdio_ops::StdioSlot>>,
     rejected_shells: Mutex<Vec<(ResourceId, Arc<super::native_shell::ShellContext>)>>,
     preparations: tokio::sync::Semaphore,
     storage: super::storage::ModuleStorage,
@@ -158,6 +161,7 @@ impl Default for Resources {
             state: Mutex::default(),
             executions: std::sync::Mutex::default(),
             streams: std::sync::Mutex::default(),
+            stdio: std::sync::Mutex::default(),
             rejected_shells: Mutex::default(),
             preparations: tokio::sync::Semaphore::new(stream::MAX_STREAM_EXECUTIONS),
             storage: super::storage::ModuleStorage::default(),
@@ -1216,6 +1220,9 @@ impl Resources {
         };
         let mut slot = slot.lock().await;
         let mut failure = self.close_streams(resource).await.err();
+        if let Err(error) = self.close_stdio(resource).await {
+            failure.get_or_insert(error);
+        }
         if let Some(entry) = slot.as_mut() {
             // Stop tunnel admission before touching the sandbox. Even when a
             // process or container cleanup must be retried, the closed

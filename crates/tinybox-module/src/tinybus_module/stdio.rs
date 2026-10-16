@@ -90,7 +90,10 @@ impl StdioSession {
         .await
         .map_err(|_| backend_failure("stdio start worker failed"))?
         .map_err(|error| {
-            log::debug!("[tinybox:stdio] jailed spawn failed kind={:?}", error.kind());
+            log::debug!(
+                "[tinybox:stdio] jailed spawn failed kind={:?}",
+                error.kind()
+            );
             backend_failure("jailed stdio start failed")
         })?;
         let group = i32::try_from(child.id()).unwrap_or(0);
@@ -165,7 +168,7 @@ impl StdioSession {
         let take = |buffers: &mut Buffers| {
             let ready = !buffers.stdout.is_empty()
                 || !buffers.stderr.is_empty()
-                || (buffers.stdout_eof && buffers.stderr_eof);
+                || (buffers.stdout_eof && buffers.stderr_eof && buffers.exit.is_some());
             ready.then(|| drain(buffers, max))
         };
         let chunk = tokio::time::timeout(wait, self.shared.wait(take)).await;
@@ -189,10 +192,6 @@ impl StdioSession {
         tokio::time::timeout(KILL_DEADLINE, reaped)
             .await
             .map_err(|_| backend_failure("stdio child cleanup remains pending"))
-    }
-
-    pub(super) fn exited(&self) -> bool {
-        self.shared.lock().exit.is_some()
     }
 }
 

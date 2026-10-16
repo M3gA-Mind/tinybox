@@ -695,3 +695,5 @@ pub use output::{ExecutionFailure, ExecutionState, OutputBatch, OutputChunk, Out
 
 /// Invalid native shell execution inputs.
 pub const INVALID_SHELL_EXEC: &str = "ai.tinyhumans.tinybox.Error.InvalidShellExec";
+/// Invalid interactive stdio program, argument, or environment.
+pub const INVALID_STDIO: &str = "ai.tinyhumans.tinybox.Error.InvalidStdio";
