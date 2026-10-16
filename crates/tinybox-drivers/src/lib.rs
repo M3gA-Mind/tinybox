@@ -20,9 +20,11 @@ mod box_store;
 mod index_body;
 mod index_store;
 mod record;
+mod schema;
 
-pub use box_store::{BOX_COLLECTION, DocumentBoxStore};
-pub use index_store::{DocumentIndexStore, JAIL_INDEX_COLLECTION};
+pub use box_store::DocumentBoxStore;
+pub use index_store::DocumentIndexStore;
+pub use schema::{BOX_COLLECTION, JAIL_INDEX_COLLECTION, storage_schema};
 
 #[cfg(test)]
 #[path = "faulty_tests.rs"]
