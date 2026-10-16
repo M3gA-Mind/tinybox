@@ -49,8 +49,14 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | StartShellExec | SpawnRequest, SelectShellRequest | ProcessRef |
 | StartNativeShellExec | ShellExecRequest | ProcessRef |
 | ValidateDockerPolicy | DockerPolicyRequest | DockerPolicyReport |
+| StartStdio | StdioStartRequest | ProcessRef |
+| WriteStdio | StdioWriteRequest | () |
+| ReadStdio | StdioReadRequest | StdioChunk |
+| CloseStdin | ProcessRef | () |
+| KillStdio | ProcessRef | () |
+| StdioStatus | ProcessRef | StdioStatus |
 
-Capabilities advertises contract version 1.20; 1.0 denotes the original
+Capabilities advertises contract version 1.21; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -386,3 +392,19 @@ to the caller. See [the native shell contract](../../../docs/specs/native-shell-
 Version 1.19 adds `NetworkPolicy::Allowlist` and the `SandboxEvent` vocabulary
 without a new member; see `docs/specs/contract-1-19.md`. Version 1.20 adds
 `NativeJailConfig::deny_read`; see `docs/specs/contract-1-20.md`.
+
+Version 1.21 adds interactive piped stdio for long-lived children such as stdio
+MCP servers. `StartStdio` runs one unshelled program inside the native jail of a
+local passthrough directory resource; the `NativeJailConfig` is mandatory and
+goes through the same preflight as `StartJailedExec` (enforcement, process
+isolation floor, `deny_read`), so an unsuitable or unavailable backend refuses
+and nothing is spawned unconfined. The child starts from a safe environment
+snapshot plus the request's `env`, leads its own process group, and is killed as
+a group by `KillStdio`, resource `Close` and `Shutdown`. `WriteStdio` returns
+after the bytes are in the pipe, `ReadStdio` takes buffered stdout/stderr and
+waits up to `wait_ms`, and each stream is buffered up to
+`MAX_STDIO_BUFFER_BYTES` before the module stops reading its pipe, which
+backpressures the child instead of dropping bytes. `CloseStdin` delivers end of
+input, `StdioStatus` reports `running` and the exit, and `KillStdio` doubles as
+release (an unknown process is already gone). See
+`docs/specs/contract-1-21.md`.

@@ -1285,3 +1285,56 @@ async fn validate_docker_policy_reports_the_run_checks_without_a_daemon()
     assert!(unsafe_run.issues[0].contains("host network"));
     Ok(())
 }
+
+#[tokio::test]
+async fn stdio_members_refuse_unknown_handles_without_starting_anything() -> tinybus::Result<()> {
+    use tinybox_bus::{
+        JailEnforcement, NativeJailConfig, ProcessRef, ResourceId, StdioReadRequest,
+        StdioStartRequest, StdioWriteRequest,
+    };
+    let service = BoxService::default();
+    let ghost = ProcessRef {
+        resource: ResourceId("resource".into()),
+        process: ResourceId("process".into()),
+    };
+    let start = StdioStartRequest {
+        process: ResourceId("process".into()),
+        resource: ResourceId("resource".into()),
+        argv: vec!["cat".into()],
+        cwd: None,
+        env: std::collections::BTreeMap::new(),
+        jail: NativeJailConfig {
+            read_only: Vec::new(),
+            read_write: Vec::new(),
+            allow_net: false,
+            allow_subprocess: false,
+            enforcement: JailEnforcement::Enforced,
+            require_process_isolation: true,
+            deny_read: Vec::new(),
+        },
+    };
+    assert!(service.start_stdio(start).await.is_err());
+    assert!(
+        service
+            .write_stdio(StdioWriteRequest {
+                process: ghost.clone(),
+                data: b"x".to_vec(),
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .read_stdio(StdioReadRequest {
+                process: ghost.clone(),
+                max_bytes: 0,
+                wait_ms: 0,
+            })
+            .await
+            .is_err()
+    );
+    assert!(service.close_stdin(ghost.clone()).await.is_err());
+    assert!(service.stdio_status(ghost.clone()).await.is_err());
+    // Killing what is not there is already done.
+    service.kill_stdio(ghost).await
+}
