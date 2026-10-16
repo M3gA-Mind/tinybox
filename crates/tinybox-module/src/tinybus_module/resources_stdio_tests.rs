@@ -597,8 +597,106 @@ async fn a_start_still_in_progress_blocks_lookups_and_duplicate_starts() -> Resu
         resources.start_stdio_with(request, backend).await,
         tinybox_bus::DUPLICATE_ID
     ));
-    // Close has nothing live to kill for a start that never produced a child.
-    resources.close_stdio(&resource).await?;
     resources.remove_stdio(&target);
+    resources.close(&resource).await
+}
+
+#[tokio::test]
+async fn close_waits_for_a_start_in_flight_before_it_finishes() -> Result<()> {
+    let resources = Arc::new(Resources::default());
+    let resource = local_resource(&resources).await?;
+    let target = ProcessRef {
+        resource: resource.clone(),
+        process: ResourceId("starting".into()),
+    };
+    resources
+        .stdio
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(target.process.clone(), StdioSlot::Starting(target.clone()));
+    let closing = tokio::spawn({
+        let (resources, resource) = (resources.clone(), resource.clone());
+        async move { resources.close_stdio(&resource).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(!closing.is_finished(), "close must wait for the start");
+    // The start ends (failed or cancelled): its slot goes and Close finishes.
+    resources.remove_stdio(&target);
+    tokio::time::timeout(std::time::Duration::from_secs(5), closing)
+        .await
+        .map_err(|_| Error::failed("close did not finish after the start ended"))?
+        .map_err(|error| Error::failed(error.to_string()))??;
+    resources.close(&resource).await
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_stdio_cleanup_keeps_the_resource_registered_for_a_retry() -> Result<()> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let target = ProcessRef {
+        resource: resource.clone(),
+        process: ResourceId("stuck".into()),
+    };
+    resources
+        .stdio
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(
+            target.process.clone(),
+            StdioSlot::Ready(
+                target.clone(),
+                crate::tinybus_module::stdio::tests::inert_session(),
+            ),
+        );
+    assert!(resources.close(&resource).await.is_err());
+    // Still registered, so the next Close reaches the stuck child again.
+    resources.inspect(&resource).await?;
+    assert_eq!(resources.stdio_count(&resource), 1);
+    resources.remove_stdio(&target);
+    resources.close(&resource).await
+}
+
+#[tokio::test]
+async fn stdio_children_count_against_the_per_resource_process_limit() -> Result<()> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let backend = Recording::new();
+    let mut live = Vec::new();
+    for _ in 0..tinybox_bus::MAX_STDIO_PROCESSES {
+        live.push(start(&resources, &resource, &backend, &["cat"]).await?);
+    }
+    let mut detached = 0;
+    loop {
+        let process = resources
+            .reserve(ReserveRequest::Process(resource.clone()))
+            .await?;
+        let spawned = resources
+            .spawn(tinybox_bus::SpawnRequest {
+                process,
+                command: tinybox_bus::ExecRequest {
+                    resource: resource.clone(),
+                    argv: vec!["sleep".into(), "60".into()],
+                    cwd: None,
+                    env: std::collections::BTreeMap::new(),
+                    stdin: None,
+                },
+            })
+            .await;
+        match spawned {
+            Ok(_) => detached += 1,
+            Err(_) => break,
+        }
+        assert!(
+            detached <= tinybox_bus::MAX_PROCESSES_PER_RESOURCE,
+            "unbounded"
+        );
+    }
+    assert_eq!(
+        detached + tinybox_bus::MAX_STDIO_PROCESSES,
+        tinybox_bus::MAX_PROCESSES_PER_RESOURCE
+    );
+    for process in live {
+        resources.kill_stdio(&process).await?;
+    }
     resources.close(&resource).await
 }
