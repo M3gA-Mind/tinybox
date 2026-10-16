@@ -1343,6 +1343,7 @@ name = "tinybox-drivers"
 version = "0.1.36"
 dependencies = [
  "log",
+ "serde",
  "serde_json",
  "tempfile",
  "tinybox-core",

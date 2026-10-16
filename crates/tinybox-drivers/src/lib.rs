@@ -17,6 +17,7 @@
 //! [`Blocking`]: tinystoragedrivers_core::Blocking
 
 mod box_store;
+mod index_body;
 mod index_store;
 mod record;
 

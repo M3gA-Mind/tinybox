@@ -27,7 +27,7 @@ fn round_trip(info: &BoxInfo) -> Result<BoxInfo> {
         operation: "decode",
         message: e.to_string(),
     })?;
-    back.into_info(info.id.clone())
+    Ok(back.into_info(info.id.clone()))
 }
 
 #[test]
@@ -89,7 +89,8 @@ fn every_network_policy_round_trips() -> Result<()> {
         NetworkPolicy::Allowlist(EgressAllowlist::new(["example.test"], [443])),
         NetworkPolicy::Open,
     ] {
-        let info = info_with(base_spec(WorkspaceSource::OciImage("a".into()))?.with_network(network))?;
+        let info =
+            info_with(base_spec(WorkspaceSource::OciImage("a".into()))?.with_network(network))?;
         assert_eq!(round_trip(&info)?, info);
     }
     Ok(())
