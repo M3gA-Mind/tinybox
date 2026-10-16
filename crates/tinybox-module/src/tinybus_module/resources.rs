@@ -132,6 +132,7 @@ pub(super) struct Resources {
     executions: std::sync::Mutex<Executions>,
     streams: std::sync::Mutex<BTreeMap<ResourceId, Arc<stream::StreamExecution>>>,
     stdio: std::sync::Mutex<BTreeMap<ResourceId, stdio_ops::StdioSlot>>,
+    stdio_changed: tokio::sync::Notify,
     rejected_shells: Mutex<Vec<(ResourceId, Arc<super::native_shell::ShellContext>)>>,
     preparations: tokio::sync::Semaphore,
     storage: super::storage::ModuleStorage,
@@ -162,6 +163,7 @@ impl Default for Resources {
             executions: std::sync::Mutex::default(),
             streams: std::sync::Mutex::default(),
             stdio: std::sync::Mutex::default(),
+            stdio_changed: tokio::sync::Notify::new(),
             rejected_shells: Mutex::default(),
             preparations: tokio::sync::Semaphore::new(stream::MAX_STREAM_EXECUTIONS),
             storage: super::storage::ModuleStorage::default(),
@@ -1279,6 +1281,12 @@ impl Resources {
             if self.stream_cleanup_pending(resource) {
                 return failure
                     .map_or_else(|| Err(Error::failed("stream cleanup remains pending")), Err);
+            }
+            // A stdio child that could not be killed and reaped keeps the
+            // resource registered, so a later Close retries it.
+            if self.stdio_count(resource) > 0 {
+                return failure
+                    .map_or_else(|| Err(Error::failed("stdio cleanup remains pending")), Err);
             }
             if !entry.sandbox_destroyed {
                 entry

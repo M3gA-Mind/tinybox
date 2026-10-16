@@ -65,7 +65,42 @@ fn build_command(resolved: &tinybox_core::ExecRequest) -> std::process::Command 
     native
 }
 
+/// Removes a still-`Starting` slot when its start ends any way, so a failed or
+/// cancelled start never blocks `Close`.
+struct StartingGuard<'a> {
+    resources: &'a Resources,
+    target: ProcessRef,
+}
+
+impl Drop for StartingGuard<'_> {
+    fn drop(&mut self) {
+        let mut stdio = self
+            .resources
+            .stdio
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(
+            stdio.get(&self.target.process),
+            Some(StdioSlot::Starting(_))
+        ) {
+            stdio.remove(&self.target.process);
+        }
+        drop(stdio);
+        self.resources.stdio_changed.notify_waiters();
+    }
+}
+
 impl Resources {
+    /// Stdio slots, starting or ready, held by `resource`.
+    pub(super) fn stdio_count(&self, resource: &ResourceId) -> usize {
+        self.stdio
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .filter(|slot| slot.target().resource == *resource)
+            .count()
+    }
+
     pub(in crate::tinybus_module) async fn start_stdio(
         &self,
         request: StdioStartRequest,
