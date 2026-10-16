@@ -25,6 +25,10 @@ async fn rig(serve_storage: bool) -> Result<Rig, Box<dyn std::error::Error>> {
     let bus = MemoryBus::new();
     Broker::new().spawn(bus.clone());
     let backend = MemoryStorage::new();
+    // The host declares what the module may store from the module's own schema.
+    tinystoragedrivers_core::schema::Registry::compose([tinybox_drivers::storage_schema()])?
+        .prepare(&backend)
+        .await?;
     let host = Connection::connect(bus.connect().await?).await?;
     let served = if serve_storage {
         let bound = backend.clone();
