@@ -109,12 +109,14 @@ async fn buffers_never_hold_more_than_their_bound_even_after_a_partial_drain() -
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_kill_that_is_never_acknowledged_reports_pending_cleanup() {
+async fn a_kill_that_is_never_acknowledged_reports_pending_cleanup() -> Outcome {
     let error = inert_session()
         .kill()
         .await
-        .expect_err("no exit is recorded");
+        .err()
+        .ok_or("no exit is recorded, so the kill cannot be acknowledged")?;
     assert!(error.to_string().contains("remains pending"), "{error}");
+    Ok(())
 }
 
 #[tokio::test(start_paused = true)]
