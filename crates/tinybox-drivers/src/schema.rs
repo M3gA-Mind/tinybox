@@ -13,7 +13,9 @@
 
 use serde_json::Value;
 use tinybox_core::BoxInfo;
-use tinystoragedrivers_core::schema::{Owner, Schema, ScopeClass, SourceRecord, Step, TargetRecord};
+use tinystoragedrivers_core::schema::{
+    Owner, Schema, ScopeClass, SourceRecord, Step, TargetRecord,
+};
 use tinystoragedrivers_core::{Key, Result, StorageError};
 
 use crate::index_body;

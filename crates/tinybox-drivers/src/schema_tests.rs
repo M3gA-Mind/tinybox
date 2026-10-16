@@ -1,5 +1,7 @@
 use super::*;
 use serde_json::json;
+use std::sync::Arc;
+use tinystoragedrivers_core::CollectionSpec;
 use tinystoragedrivers_core::schema::{Item, MigrateOptions, Registry};
 use tinystoragedrivers_core::{
     DocumentStore, MemoryStorage, Precondition, Scope, ScopedStorage, StorageBackend,
@@ -102,14 +104,17 @@ fn the_collection_constants_are_the_declared_names() {
 
 #[tokio::test]
 async fn a_v1_box_migrates_to_the_v2_body_under_the_same_id() {
-    let (registry, _backend, storage) =
-        v1_storage(&[("tinybox_boxes", "build-1", v1_box())]).await;
+    let (registry, _backend, storage) = v1_storage(&[("tinybox_boxes", "build-1", v1_box())]).await;
     registry
         .migrate(&storage, &MigrateOptions::new())
         .await
         .expect("migrate");
     let docs = storage.documents();
-    let found = docs.get("box.boxes", "build-1").await.expect("get").expect("migrated");
+    let found = docs
+        .get("box.boxes", "build-1")
+        .await
+        .expect("get")
+        .expect("migrated");
     assert_eq!(
         found.doc,
         json!({
@@ -134,7 +139,10 @@ async fn a_v1_box_migrates_to_the_v2_body_under_the_same_id() {
     );
     assert_eq!(found.meta.schema, 2);
     assert!(
-        docs.get("tinybox_boxes", "build-1").await.expect("get").is_none(),
+        docs.get("tinybox_boxes", "build-1")
+            .await
+            .expect("get")
+            .is_none(),
         "the v1 row is removed once the step completes"
     );
 }
@@ -212,13 +220,17 @@ async fn a_v1_jail_index_migrates_to_millisecond_times() {
         })
     );
     assert_eq!(found.meta.schema, 2);
-    assert!(docs.get("tinybox_jail_index", "main").await.expect("get").is_none());
+    assert!(
+        docs.get("tinybox_jail_index", "main")
+            .await
+            .expect("get")
+            .is_none()
+    );
 }
 
 #[tokio::test]
 async fn migrating_twice_changes_nothing() {
-    let (registry, _backend, storage) =
-        v1_storage(&[("tinybox_boxes", "build-1", v1_box())]).await;
+    let (registry, _backend, storage) = v1_storage(&[("tinybox_boxes", "build-1", v1_box())]).await;
     registry
         .migrate(&storage, &MigrateOptions::new())
         .await
