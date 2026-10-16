@@ -573,3 +573,32 @@ async fn dropping_the_registry_kills_a_stdio_child_it_still_owns() -> Result<()>
     .await
     .map_err(|_| Error::failed("child survived the registry"))
 }
+
+#[tokio::test]
+async fn a_start_still_in_progress_blocks_lookups_and_duplicate_starts() -> Result<()> {
+    let resources = Resources::default();
+    let resource = local_resource(&resources).await?;
+    let backend = Recording::new();
+    let request = start_request(&resources, &resource, &["cat"]).await?;
+    let target = ProcessRef {
+        resource: resource.clone(),
+        process: request.process.clone(),
+    };
+    resources
+        .stdio
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(target.process.clone(), StdioSlot::Starting(target.clone()));
+    assert!(failed_with(
+        resources.stdio_status(&target),
+        tinybox_bus::DUPLICATE_ID
+    ));
+    assert!(failed_with(
+        resources.start_stdio_with(request, backend).await,
+        tinybox_bus::DUPLICATE_ID
+    ));
+    // Close has nothing live to kill for a start that never produced a child.
+    resources.close_stdio(&resource).await?;
+    resources.remove_stdio(&target);
+    resources.close(&resource).await
+}
