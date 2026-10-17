@@ -1,3 +1,5 @@
+//! Tests for `storage_schema` and the v1 to v2 migration steps.
+
 use super::*;
 use serde_json::{Value, json};
 use tinystoragedrivers_core::CollectionSpec;

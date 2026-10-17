@@ -1,3 +1,5 @@
+//! Tests for the jail index conversion between registry seconds and body milliseconds.
+
 use super::*;
 use serde_json::json;
 

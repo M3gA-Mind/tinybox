@@ -1,3 +1,5 @@
+//! Tests for the v1 box row to v2 `box.boxes` body conversion.
+
 use super::*;
 
 fn v1() -> Value {

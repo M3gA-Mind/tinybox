@@ -1,3 +1,5 @@
+//! Tests for the `BoxRecord` v2 body encoding and its match with the v1 migration.
+
 use super::*;
 use serde_json::json;
 use std::time::{Duration, UNIX_EPOCH};
