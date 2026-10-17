@@ -1,5 +1,8 @@
 //! Converting a jail registry's index between its own JSON and the v2 body.
 //!
+//! Both directions live here, in the contract, so the migration step and the
+//! store that reads the migrated body share one definition.
+//!
 //! The registry (`tinybox-jail`) owns the index shape and keeps it in seconds
 //! (`created_at_unix`, `updated_at_unix`) next to a `schema_version`, because
 //! the same JSON is the legacy `index.json` file. The `box.jail_index` body
@@ -30,7 +33,7 @@ fn invalid(message: String) -> io::Error {
 ///
 /// [`io::ErrorKind::InvalidData`] when a time field is not a whole number of
 /// seconds that fits in milliseconds.
-pub(crate) fn to_body(mut index: Value) -> io::Result<Value> {
+pub fn to_body(mut index: Value) -> io::Result<Value> {
     if let Some(object) = index.as_object_mut() {
         object.remove("schema_version");
     }
@@ -51,7 +54,8 @@ pub(crate) fn to_body(mut index: Value) -> io::Result<Value> {
 }
 
 /// The registry's index JSON for a stored v2 body.
-pub(crate) fn from_body(mut body: Value) -> Value {
+#[must_use]
+pub fn from_body(mut body: Value) -> Value {
     for record in records_mut(&mut body) {
         for (seconds_field, ms_field) in TIMES {
             if let Some(ms) = record.remove(ms_field).and_then(|raw| raw.as_i64()) {
@@ -79,6 +83,6 @@ fn records_mut(index: &mut Value) -> impl Iterator<Item = &mut serde_json::Map<S
 }
 
 #[cfg(test)]
-#[path = "index_body_tests.rs"]
+#[path = "jail_index_tests.rs"]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests;

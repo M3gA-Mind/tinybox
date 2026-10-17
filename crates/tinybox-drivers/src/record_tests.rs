@@ -147,3 +147,23 @@ fn a_state_name_this_version_does_not_know_is_a_decode_error() {
     let body = json!({"state": "levitating", "spec": {}, "created_ms": null});
     assert!(serde_json::from_value::<BoxRecord>(body).is_err());
 }
+
+#[test]
+fn the_contracts_v1_migration_matches_the_record_encoding() {
+    let mut spec = base_spec(WorkspaceSource::LocalDir("/srv/w".into())).expect("spec");
+    spec.lifecycle = Lifecycle::Ephemeral {
+        ttl: Duration::from_secs(60),
+    };
+    spec.network = NetworkPolicy::Allowlist(EgressAllowlist::new(["a.test"], vec![443]));
+    spec.ports.insert(PortMapping {
+        guest: 80,
+        host: None,
+    });
+    let info = info_with(spec)
+        .expect("info")
+        .created_at(UNIX_EPOCH + Duration::from_millis(1_700_000_000_005));
+    let v1 = serde_json::to_value(&info).expect("v1 row");
+    let migrated = tinybox_bus::storage::box_v1::to_body(v1).expect("migrates");
+    let stored = serde_json::to_value(BoxRecord::try_from(&info).expect("record")).expect("json");
+    assert_eq!(migrated, stored);
+}

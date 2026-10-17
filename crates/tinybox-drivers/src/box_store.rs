@@ -8,7 +8,7 @@ use tinystoragedrivers_core::{
 };
 
 use crate::record::{BoxRecord, StateRecord};
-use crate::schema::{BODY_VERSION, BOX_COLLECTION};
+use tinybox_bus::storage::{BODY_VERSION, BOX_COLLECTION};
 
 /// Box records as documents, `box.boxes/<box id>`.
 ///
