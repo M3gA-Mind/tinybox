@@ -12,7 +12,7 @@ repository.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # Ports only (no backend, no I/O); the `Schema` type the host composes.
-tinystoragedrivers-core = { workspace = true, default-features = false }
+tinystoragedrivers-core.workspace = true
 
 [dev-dependencies]
 # Migration tests run the steps over `MemoryStorage`.

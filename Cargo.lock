@@ -1292,6 +1292,8 @@ version = "0.1.36"
 dependencies = [
  "serde",
  "serde_json",
+ "tinystoragedrivers-core",
+ "tokio",
 ]
 
 [[package]]
@@ -1346,6 +1348,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tinybox-bus",
  "tinybox-core",
  "tinybox-jail",
  "tinystoragedrivers-core",
