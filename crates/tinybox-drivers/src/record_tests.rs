@@ -154,7 +154,7 @@ fn the_contracts_v1_migration_matches_the_record_encoding() {
     spec.lifecycle = Lifecycle::Ephemeral {
         ttl: Duration::from_secs(60),
     };
-    spec.network = NetworkPolicy::Allowlist(EgressAllowlist::new(vec!["a.test".into()], vec![443]));
+    spec.network = NetworkPolicy::Allowlist(EgressAllowlist::new(["a.test"], vec![443]));
     spec.ports.insert(PortMapping {
         guest: 80,
         host: None,
