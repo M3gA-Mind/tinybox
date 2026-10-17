@@ -49,3 +49,66 @@ fn an_unknown_state_is_refused() {
     old["state"] = json!("Levitating");
     to_body(old).expect_err("unknown state");
 }
+
+#[test]
+fn the_other_sources_lifecycles_and_networks_convert() {
+    let cases = [
+        (
+            "source",
+            json!({"LocalDir": "/w"}),
+            json!({"kind": "local_dir", "path": "/w"}),
+        ),
+        (
+            "source",
+            json!({"OciImage": "img:1"}),
+            json!({"kind": "oci_image", "image": "img:1"}),
+        ),
+        (
+            "source",
+            json!({"Snapshot": "s1"}),
+            json!({"kind": "snapshot", "snapshot": "s1"}),
+        ),
+        (
+            "lifecycle",
+            json!({"Ephemeral": {"ttl": {"secs": 3, "nanos": 0}}}),
+            json!({"kind": "ephemeral", "ttl_ms": 3000}),
+        ),
+        ("network", json!("Denied"), json!({"kind": "denied"})),
+        ("network", json!("Egress"), json!({"kind": "egress"})),
+        (
+            "network",
+            json!({"Allowlist": {"hosts": ["a.test"], "ports": [443]}}),
+            json!({"kind": "allowlist", "hosts": ["a.test"], "ports": [443]}),
+        ),
+    ];
+    for (field, old, want) in cases {
+        let mut row = v1();
+        row["spec"][field] = old;
+        let body = to_body(row).expect("decodes");
+        assert_eq!(body["spec"][field], want);
+    }
+}
+
+#[test]
+fn every_state_has_its_snake_case_name() {
+    for (old, want) in [
+        ("Creating", "creating"),
+        ("Ready", "ready"),
+        ("Running", "running"),
+        ("Paused", "paused"),
+        ("Stopped", "stopped"),
+        ("Archived", "archived"),
+        ("Failed", "failed"),
+    ] {
+        let mut row = v1();
+        row["state"] = json!(old);
+        assert_eq!(to_body(row).expect("decodes")["state"], want);
+    }
+}
+
+#[test]
+fn a_box_without_a_creation_time_keeps_it_unknown() {
+    let mut row = v1();
+    row.as_object_mut().expect("row").remove("created_at");
+    assert_eq!(to_body(row).expect("decodes")["created_ms"], Value::Null);
+}
