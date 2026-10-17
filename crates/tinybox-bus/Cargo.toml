@@ -10,10 +10,13 @@ repository.workspace = true
 [dependencies]
 # The bus boundary contains data only; serialization is its sole dependency.
 serde.workspace = true
+serde_json.workspace = true
+# Ports only (no backend, no I/O); the `Schema` type the host composes.
+tinystoragedrivers-core = { workspace = true, default-features = false }
 
 [dev-dependencies]
-# Round-trip tests pin the serialized public vocabulary.
-serde_json.workspace = true
+# Migration tests run the steps over `MemoryStorage`.
+tokio = { workspace = true }
 
 [lints]
 workspace = true

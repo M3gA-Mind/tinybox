@@ -9,17 +9,20 @@
 //!
 //! A host grants the module exactly these items (`ScopeClass::Module`), so the
 //! grant is derived from [`storage_schema`] rather than restated. The steps
-//! bring v1 rows forward when the host runs `Registry::migrate`.
+//! bring v1 rows forward when the host runs `Registry::migrate`, and they are
+//! pure: they transform JSON and touch no storage.
+//!
+//! The implementation crate stores and loads the v2 bodies; the v1 shapes are
+//! decoded here by [`box_v1`] and [`jail_index`] so the contract owns both ends
+//! of the migration.
 
-use serde_json::Value;
-use tinybox_core::BoxInfo;
 use tinystoragedrivers_core::schema::{
     Owner, Schema, ScopeClass, SourceRecord, Step, TargetRecord,
 };
 use tinystoragedrivers_core::{Key, Result, StorageError};
 
-use crate::index_body;
-use crate::record::BoxRecord;
+pub mod box_v1;
+pub mod jail_index;
 
 /// The collection that holds one document per box, keyed by box id.
 pub const BOX_COLLECTION: &str = "box.boxes";
@@ -28,13 +31,13 @@ pub const BOX_COLLECTION: &str = "box.boxes";
 pub const JAIL_INDEX_COLLECTION: &str = "box.jail_index";
 
 /// The v1 name of [`BOX_COLLECTION`].
-const V1_BOX_COLLECTION: &str = "tinybox_boxes";
+pub const V1_BOX_COLLECTION: &str = "tinybox_boxes";
 
 /// The v1 name of [`JAIL_INDEX_COLLECTION`].
-const V1_JAIL_INDEX_COLLECTION: &str = "tinybox_jail_index";
+pub const V1_JAIL_INDEX_COLLECTION: &str = "tinybox_jail_index";
 
 /// The body version both collections are declared at.
-pub(crate) const BODY_VERSION: u32 = 2;
+pub const BODY_VERSION: u32 = 2;
 
 /// Everything tinybox stores, with the v1 to v2 migration steps.
 ///
@@ -70,28 +73,22 @@ pub fn storage_schema() -> Schema {
 /// A v1 box row (a serialized `BoxInfo`) as a v2 record under the same id.
 fn box_to_v2(source: SourceRecord) -> Result<TargetRecord> {
     let id = Key::of([source.id.as_str()])?;
-    let info: BoxInfo = serde_json::from_value(source.body).map_err(|error| {
+    let body = box_v1::to_body(source.body).map_err(|error| {
         StorageError::serialization(format!("v1 box `{}` does not decode: {error}", source.id))
     })?;
-    let record = BoxRecord::try_from(&info)
-        .map_err(|error| StorageError::serialization(error.to_string()))?;
-    Ok(TargetRecord::new(
-        BOX_COLLECTION,
-        id.as_str(),
-        serde_json::to_value(record)?,
-    ))
+    Ok(TargetRecord::new(BOX_COLLECTION, id.as_str(), body))
 }
 
 /// A v1 jail index row as a v2 record under the same id.
 fn jail_index_to_v2(source: SourceRecord) -> Result<TargetRecord> {
     let id = Key::of([source.id.as_str()])?;
-    let body: Value = index_body::to_body(source.body).map_err(|error| {
+    let body = jail_index::to_body(source.body).map_err(|error| {
         StorageError::serialization(format!("v1 jail index `{}`: {error}", source.id))
     })?;
     Ok(TargetRecord::new(JAIL_INDEX_COLLECTION, id.as_str(), body))
 }
 
 #[cfg(test)]
-#[path = "schema_tests.rs"]
+#[path = "mod_tests.rs"]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests;

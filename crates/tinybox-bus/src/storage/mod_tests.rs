@@ -1,5 +1,5 @@
 use super::*;
-use serde_json::json;
+use serde_json::{Value, json};
 use tinystoragedrivers_core::CollectionSpec;
 use tinystoragedrivers_core::schema::{Item, MigrateOptions, Registry};
 use tinystoragedrivers_core::{MemoryStorage, Precondition, Scope, ScopedStorage, StorageBackend};

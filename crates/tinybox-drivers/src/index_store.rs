@@ -9,8 +9,8 @@ use tinystoragedrivers_core::{
     Blocking, DocumentStore, ErrorKind, Key, Repo, StorageError, WriteOptions,
 };
 
-use crate::index_body;
-use crate::schema::{BODY_VERSION, JAIL_INDEX_COLLECTION};
+use tinybox_bus::storage::jail_index as index_body;
+use tinybox_bus::storage::{BODY_VERSION, JAIL_INDEX_COLLECTION};
 
 /// A jail registry's index as one document, `box.jail_index/<registry>`.
 ///
