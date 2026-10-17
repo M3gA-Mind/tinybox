@@ -54,6 +54,7 @@ pub fn to_body(mut index: Value) -> io::Result<Value> {
 }
 
 /// The registry's index JSON for a stored v2 body.
+#[must_use]
 pub fn from_body(mut body: Value) -> Value {
     for record in records_mut(&mut body) {
         for (seconds_field, ms_field) in TIMES {
