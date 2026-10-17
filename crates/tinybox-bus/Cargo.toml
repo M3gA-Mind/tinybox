@@ -22,6 +22,7 @@ default = []
 storage = ["dep:serde_json", "dep:tinystoragedrivers-core"]
 
 [dev-dependencies]
+serde_json.workspace = true
 # Migration tests run the steps over `MemoryStorage`.
 tokio = { workspace = true }
 
