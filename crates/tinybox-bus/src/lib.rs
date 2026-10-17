@@ -27,6 +27,7 @@ pub use shell_execution::ShellExecRequest;
 pub use shell_selection::{SelectShellRequest, ShellFlavor, ShellInvocation};
 
 mod stdio;
+pub mod storage;
 pub use stdio::{
     MAX_STDIO_BUFFER_BYTES, MAX_STDIO_PROCESSES, MAX_STDIO_READ_BYTES, MAX_STDIO_WAIT_MS,
     MAX_STDIO_WRITE_BYTES, STDIO_CLOSED, StdioChunk, StdioExit, StdioReadRequest,
