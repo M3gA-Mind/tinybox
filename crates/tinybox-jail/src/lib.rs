@@ -12,7 +12,8 @@
 //!
 //! | OS      | Backend       | Mechanism                                  |
 //! |---------|---------------|--------------------------------------------|
-//! | Linux   | landlock      | Kernel 5.13+ LSM, applied on a spawn thread |
+//! | Linux   | bubblewrap    | `bwrap` namespaces; process isolation      |
+//! | Linux   | landlock      | Fallback: kernel 5.13+ LSM, spawn thread   |
 //! | macOS   | seatbelt      | `sandbox-exec -p '<profile>' …`            |
 //! | Windows | (not compiled)| `AppContainer`, pending a `Child` bridge   |
 //! | other   | unsupported   | Spawning is rejected                       |
@@ -61,9 +62,13 @@ pub mod registry;
 // deliberately not compiled: it needs `unsafe` FFI the workspace forbids and
 // cannot yet return a waitable `std::process::Child`.
 #[cfg(target_os = "linux")]
+pub mod bwrap;
+#[cfg(target_os = "linux")]
 pub mod linux;
 pub mod macos;
 
+#[cfg(target_os = "linux")]
+pub use bwrap::{BWRAP_BACKEND_NAME, BubblewrapBackend};
 pub use jail::{Jail, JailBackend};
 #[cfg(target_os = "linux")]
 pub use linux::LandlockBackend;
