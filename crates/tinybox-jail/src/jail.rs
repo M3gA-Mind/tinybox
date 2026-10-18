@@ -32,6 +32,11 @@ pub struct Jail {
     /// can subtract them from a grant; everywhere else they are unreachable
     /// already because nothing grants them.
     pub deny_read: Vec<PathBuf>,
+    /// Optional hard CPU, memory, process and writable-disk limits.
+    ///
+    /// Backends include the corresponding constraints in preflight. A backend
+    /// that does not enforce every requested limit refuses before spawning.
+    pub resources: Option<tinybox_core::Resources>,
     /// Allow outbound network. Most agent tools need this; some risky tools
     /// (untrusted code execution) should disable it.
     pub allow_net: bool,
@@ -52,6 +57,7 @@ impl Jail {
             read_only: Vec::new(),
             read_write: Vec::new(),
             deny_read: Vec::new(),
+            resources: None,
             allow_net: true,
             allow_subprocess: true,
             label: label.into(),
@@ -101,6 +107,14 @@ impl Jail {
         }
         if !self.allow_subprocess {
             constraints.push(Constraint::Subprocess);
+        }
+        if self.resources.is_some() {
+            constraints.extend([
+                Constraint::Cpu,
+                Constraint::Memory,
+                Constraint::Pids,
+                Constraint::Disk,
+            ]);
         }
         constraints
     }

@@ -47,7 +47,32 @@ fn config() -> NativeJailConfig {
         enforcement: JailEnforcement::Enforced,
         require_process_isolation: false,
         deny_read: Vec::new(),
+        resources: None,
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn requested_native_resource_limits_are_refused_before_spawn()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.path().into());
+    let backend = Backend {
+        available: true,
+        suitable: false,
+        name: "fixture",
+        full: true,
+    };
+    let mut config = config();
+    config.resources = Some(tinybox_bus::NativeResourceLimits {
+        cpu_millis: 500,
+        memory_bytes: 1024 * 1024,
+        pids_max: 32,
+        disk_bytes: 1024 * 1024,
+    });
+    assert!(prepare(root.path(), &config, &command, &backend).is_err());
+    Ok(())
 }
 #[test]
 fn native_grants_reject_relative_parent_null_and_missing_paths() {

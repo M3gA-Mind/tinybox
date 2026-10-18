@@ -24,7 +24,8 @@ including default disk, must expect refusal. This change does not implement new
 OS resource controls.
 
 Directory jails expose `JailBackend::plan_check` and `require` for filesystem
-plus any requested network/subprocess denials. `spawn_required_with` and
+plus any requested network/subprocess denials and optional CPU, memory, pids,
+and disk limits. `spawn_required_with` and
 `spawn_required` run the hard check before starting a child. Existing
 `spawn_with(NoopBackend, ...)` is an explicit trusted passthrough; it is never
 selected automatically. Legacy Seatbelt spawn remains available but its

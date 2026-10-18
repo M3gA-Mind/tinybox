@@ -1,6 +1,22 @@
 //! Native directory-jail requests; enforcement remains inside the module.
 use serde::{Deserialize, Serialize};
 
+/// Optional hard resource limits for native jail execution.
+///
+/// The field names and units match `tinybox_core::Resources`. A native jail
+/// request that supplies these limits requires every limit to be enforced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeResourceLimits {
+    /// CPU allowance in thousandths of a core, so `1500` is one and a half.
+    pub cpu_millis: u32,
+    /// Maximum resident memory in bytes.
+    pub memory_bytes: u64,
+    /// Maximum number of processes and threads.
+    pub pids_max: u32,
+    /// Maximum writable filesystem size in bytes.
+    pub disk_bytes: u64,
+}
+
 /// Required treatment of the native provider's declared constraints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -33,6 +49,9 @@ pub struct NativeJailConfig {
     /// ignored. Added in contract 1.20; empty by default.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deny_read: Vec<String>,
+    /// Optional hard resource limits; omitted for compatibility with older requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<NativeResourceLimits>,
 }
 
 #[cfg(test)]
