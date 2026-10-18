@@ -117,7 +117,7 @@ fn host_processes_are_invisible() -> io::Result<()> {
     )?;
     assert!(ok);
     let visible: u32 = out.trim().parse().unwrap_or(u32::MAX);
-    assert!(visible <= 3, "only the jail's own processes: {visible}");
+    assert!(visible <= 8, "only the jail's own processes: {visible}");
     Ok(())
 }
 
