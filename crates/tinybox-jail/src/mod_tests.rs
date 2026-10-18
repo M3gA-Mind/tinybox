@@ -158,6 +158,53 @@ fn facade_refuses_each_zero_resource_limit_even_when_backend_claims_enforcement(
 }
 
 #[test]
+fn facade_refuses_denials_nested_under_backend_implicit_grants() -> std::io::Result<()> {
+    struct BaselineBackend {
+        baseline: std::path::PathBuf,
+    }
+
+    impl JailBackend for BaselineBackend {
+        fn implicit_grants(&self) -> Vec<std::path::PathBuf> {
+            vec![self.baseline.clone()]
+        }
+
+        fn name(&self) -> &'static str {
+            "baseline-test"
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn spawn(&self, _jail: &Jail, mut cmd: Command) -> std::io::Result<std::process::Child> {
+            cmd.spawn()
+        }
+    }
+
+    let root = tempfile::tempdir()?;
+    let baseline = root.path().join("implicit-baseline");
+    std::fs::create_dir(&baseline)?;
+    let marker = root.path().join("executed");
+    let mut jail = Jail::new(root.path(), "baseline-denial");
+    jail.deny_read.push(baseline.join("future-secret"));
+    let mut command = if cfg!(windows) {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "echo executed > executed"]);
+        command
+    } else {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf executed > executed"]);
+        command
+    };
+    command.current_dir(root.path());
+
+    let error = spawn_with(&BaselineBackend { baseline }, &jail, command).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(!marker.exists(), "backend must not spawn after denial conflict");
+    Ok(())
+}
+
+#[test]
 fn default_backend_returns_something() {
     let b = default_backend();
     assert_ne!(b.name().len(), 0);
