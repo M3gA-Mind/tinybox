@@ -7,6 +7,7 @@ use tinybox_bus::{JailEnforcement, NativeJailConfig};
 use tinybox_jail::{Jail, JailBackend};
 use tinybus::{Error, Result};
 
+/// Validate native jail policy and resolve every path before process admission.
 pub(super) fn prepare(
     root: &Path,
     config: &NativeJailConfig,
@@ -208,6 +209,7 @@ fn unavailable() -> Error {
     )
 }
 
+/// Create an owned collector only after the native jail passes preflight.
 pub(super) fn collector(
     root: &Path,
     config: &NativeJailConfig,
