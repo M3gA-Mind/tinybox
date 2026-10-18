@@ -147,7 +147,7 @@ fn canonicalize_prospective(path: &Path) -> std::io::Result<std::path::PathBuf> 
                 }
                 return Ok(canonical);
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
     }
