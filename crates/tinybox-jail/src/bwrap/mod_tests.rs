@@ -71,3 +71,63 @@ fn wrapped_command_keeps_program_args_and_explicit_env() -> io::Result<()> {
     assert_eq!(envs.len(), 1);
     Ok(())
 }
+
+fn fake_bwrap() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-bwrap.sh")
+}
+
+#[test]
+fn a_working_bwrap_makes_the_backend_available() {
+    let backend = BubblewrapBackend::with_program(fake_bwrap());
+    assert!(backend.is_available());
+    assert_eq!(backend.program(), Some(fake_bwrap().as_path()));
+    assert_eq!(
+        backend
+            .constraint_support()
+            .enforcement(Constraint::Network),
+        Enforcement::Enforced
+    );
+}
+
+#[test]
+fn a_bwrap_that_cannot_start_a_sandbox_is_unavailable() {
+    for program in ["/nonexistent/bwrap", "/bin/false"] {
+        let backend = BubblewrapBackend::with_program(program);
+        assert!(!backend.is_available(), "{program}");
+        assert_eq!(backend.program(), None);
+        assert_eq!(backend.isolation(), IsolationLevel::None);
+    }
+}
+
+#[test]
+fn spawn_runs_the_wrapped_command_through_the_launcher() -> io::Result<()> {
+    let backend = BubblewrapBackend::with_program(fake_bwrap());
+    let root = tempfile::tempdir()?;
+    let jail = Jail::new(root.path(), "t");
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg("exit 7");
+    assert_eq!(backend.spawn(&jail, cmd)?.wait()?.code(), Some(7));
+    Ok(())
+}
+
+#[test]
+fn spawn_captured_pipes_the_wrapper_and_forwards_env() -> io::Result<()> {
+    let backend = BubblewrapBackend::with_program(fake_bwrap());
+    let root = tempfile::tempdir()?;
+    let jail = Jail::new(root.path(), "t");
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg("printf %s \"$A\"").env("A", "hi");
+    let out = backend.spawn_captured(&jail, cmd)?.wait_with_output()?;
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "hi");
+    Ok(())
+}
+
+#[test]
+fn spawn_with_a_missing_root_is_not_found() {
+    let backend = BubblewrapBackend::with_program(fake_bwrap());
+    let kind = backend
+        .spawn(&Jail::new("/nonexistent/root", "t"), Command::new("true"))
+        .err()
+        .map(|e| e.kind());
+    assert_eq!(kind, Some(io::ErrorKind::NotFound));
+}

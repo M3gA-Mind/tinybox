@@ -3,7 +3,7 @@
 //! [`BubblewrapBackend`] runs the command under `bwrap` with fresh user, pid,
 //! ipc and uts namespaces (and a net namespace unless the jail allows
 //! network). The child sees a private mount tree holding only the baseline
-//! system paths in [`args`] plus the jail's grants, so it cannot read an
+//! system paths plus the jail's grants, so it cannot read an
 //! ungranted path, cannot see host processes, and dies with its parent. That
 //! is real process isolation, which Landlock alone does not provide, so this
 //! backend reports [`IsolationLevel::Kernel`] and is suitable for untrusted
