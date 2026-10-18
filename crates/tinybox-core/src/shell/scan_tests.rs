@@ -1,6 +1,6 @@
 //! Tests for the quote-aware shell scanners.
 //!
-//! Structural cases retained by TinyBox for generic shell scanning.
+//! Structural cases retained by `TinyBox` for generic shell scanning.
 
 use std::borrow::Cow;
 
