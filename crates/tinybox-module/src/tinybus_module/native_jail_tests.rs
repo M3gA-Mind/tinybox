@@ -230,22 +230,30 @@ fn denials_preserve_prospective_roots_and_refuse_unenforceable_overlaps()
         path(&token),
         path(&home.path().join(".aws")),
     ];
+    let canonical_home = home.path().canonicalize()?;
+    let mut expected = vec![
+        secrets.clone(),
+        token.clone(),
+        home.path().join(".aws"),
+        canonical_home.join(".ssh"),
+        canonical_home.join(".netrc"),
+        canonical_home.join(".aws"),
+    ];
+    expected.sort();
+    expected.dedup();
 
     // Outside every grant: retain absent roots so a later-created credential
     // store remains denied by the backend.
     for name in ["fixture", "seatbelt"] {
         let jail = prepare(&root, &config, &command, &backend(name))?;
-        assert_eq!(jail.deny_read.len(), 3);
-        assert!(jail.deny_read.contains(&secrets.canonicalize()?));
-        assert!(jail.deny_read.contains(&token.canonicalize()?));
-        assert!(jail.deny_read.contains(&home.path().join(".aws")));
+        assert_eq!(jail.deny_read, expected);
     }
 
     // Inside a read grant: only a backend that subtracts from grants keeps it.
     config.read_only = vec![path(home.path())];
     assert!(prepare(&root, &config, &command, &backend("fixture")).is_err());
     let jail = prepare(&root, &config, &command, &backend("seatbelt"))?;
-    assert_eq!(jail.deny_read.len(), 3);
+    assert_eq!(jail.deny_read, expected);
     config.deny_read = vec![path(&home.path().join(".future-credential-store"))];
     assert!(prepare(&root, &config, &command, &backend("fixture")).is_err());
     assert!(prepare(&root, &config, &command, &backend("seatbelt")).is_ok());
