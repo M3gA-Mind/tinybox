@@ -62,8 +62,8 @@ fn facade_refuses_resource_limits_before_spawning() -> std::io::Result<()> {
 }
 
 #[test]
-fn facade_refuses_each_zero_resource_limit_even_when_backend_claims_enforcement(
-) -> std::io::Result<()> {
+fn facade_refuses_each_zero_resource_limit_even_when_backend_claims_enforcement()
+-> std::io::Result<()> {
     use tinybox_core::{Constraint, ConstraintSupport, Enforcement, Error};
 
     struct FullyEnforcedBackend;
@@ -91,11 +91,7 @@ fn facade_refuses_each_zero_resource_limit_even_when_backend_claims_enforcement(
             })
         }
 
-        fn spawn(
-            &self,
-            _jail: &Jail,
-            mut cmd: Command,
-        ) -> std::io::Result<std::process::Child> {
+        fn spawn(&self, _jail: &Jail, mut cmd: Command) -> std::io::Result<std::process::Child> {
             cmd.spawn()
         }
     }
