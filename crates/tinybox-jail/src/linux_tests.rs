@@ -281,7 +281,7 @@ fn landlock_validation_keeps_future_baseline_roots_protected() -> io::Result<()>
     jail.deny_read
         .push(future_baseline.join("future-credential"));
 
-    let result = validate_baseline_denials(&jail, &[future_baseline]);
+    let result = jail.validate_denials(false, &[future_baseline]);
     assert_eq!(
         result.err().map(|error| error.kind()),
         Some(io::ErrorKind::InvalidInput),

@@ -130,30 +130,9 @@ impl JailBackend for LandlockBackend {
             .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error))?;
         let mut jail = jail.clone();
         jail.canonicalize()?;
-        jail.validate_denials(false)?;
-        validate_baseline_denials(&jail, &self.implicit_grants())?;
+        jail.validate_denials(false, &self.implicit_grants())?;
         imp::spawn(&jail, cmd)
     }
-}
-
-/// Reject denials that overlap paths the Landlock ruleset grants implicitly.
-fn validate_baseline_denials(jail: &Jail, baseline: &[std::path::PathBuf]) -> io::Result<()> {
-    let mut grants = Vec::new();
-    for grant in baseline {
-        grants.push(crate::registry::canonicalize_missing(grant)?);
-    }
-    for denied in &jail.deny_read {
-        if grants
-            .iter()
-            .any(|granted| denied.starts_with(granted) || granted.starts_with(denied))
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "denied path overlaps an implicit Landlock grant",
-            ));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(feature = "landlock")]
