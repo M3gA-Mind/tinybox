@@ -317,8 +317,8 @@ fn collector_builds_a_host_from_a_valid_native_jail()
 
     let backend = tinybox_jail::default_backend();
     let config = config();
-    let can_enforce = backend.is_available()
-        && prepare(root.path(), &config, &command, backend.as_ref()).is_ok();
+    let can_enforce =
+        backend.is_available() && prepare(root.path(), &config, &command, backend.as_ref()).is_ok();
     let result = collector(root.path(), &config, &command);
     if can_enforce {
         assert!(result.is_ok());
