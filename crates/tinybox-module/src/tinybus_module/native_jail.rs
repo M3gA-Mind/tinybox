@@ -187,8 +187,8 @@ pub(super) fn collector(
     root: &Path,
     config: &NativeJailConfig,
     command: &tinybox_core::ExecRequest,
+    backend: Arc<dyn JailBackend>,
 ) -> Result<Arc<tinybox_host::JailLocalHost>> {
-    let backend = tinybox_jail::default_backend();
     let jail = prepare(root, config, command, backend.as_ref())?;
     tinybox_host::JailLocalHost::with_backend(jail, backend, tinybox_bus::MAX_OUTPUT_BYTES)
         .map(Arc::new)
