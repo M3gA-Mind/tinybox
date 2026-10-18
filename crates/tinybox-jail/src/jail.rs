@@ -225,7 +225,8 @@ pub trait JailBackend: Send + Sync {
     /// Returns a typed refusal if any requested resource constraint is not
     /// fully enforced.
     fn require_resources(&self, jail: &Jail) -> tinybox_core::Result<()> {
-        if jail.resources.is_some() {
+        if let Some(resources) = jail.resources {
+            resources.validate()?;
             self.constraint_support()
                 .require(self.name(), &RESOURCE_CONSTRAINTS)?;
         }

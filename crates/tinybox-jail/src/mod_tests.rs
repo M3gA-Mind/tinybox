@@ -78,16 +78,24 @@ fn facade_refuses_each_zero_resource_limit_even_when_backend_claims_enforcement(
         }
 
         fn constraint_support(&self) -> ConstraintSupport {
-            ConstraintSupport::new([
-                (Constraint::Filesystem, Enforcement::Enforced),
-                (Constraint::Cpu, Enforcement::Enforced),
-                (Constraint::Memory, Enforcement::Enforced),
-                (Constraint::Pids, Enforcement::Enforced),
-                (Constraint::Disk, Enforcement::Enforced),
-            ])
+            [
+                Constraint::Filesystem,
+                Constraint::Cpu,
+                Constraint::Memory,
+                Constraint::Pids,
+                Constraint::Disk,
+            ]
+            .into_iter()
+            .fold(ConstraintSupport::NONE, |support, constraint| {
+                support.with(constraint, Enforcement::Enforced)
+            })
         }
 
-        fn spawn(&self, _jail: &Jail, cmd: Command) -> std::io::Result<std::process::Child> {
+        fn spawn(
+            &self,
+            _jail: &Jail,
+            mut cmd: Command,
+        ) -> std::io::Result<std::process::Child> {
             cmd.spawn()
         }
     }

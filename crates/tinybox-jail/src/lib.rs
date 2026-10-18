@@ -138,9 +138,13 @@ pub fn spawn_captured_with(
 }
 
 fn require_resources(backend: &dyn JailBackend, jail: &Jail) -> std::io::Result<()> {
-    backend
-        .require_resources(jail)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::Unsupported, error))
+    backend.require_resources(jail).map_err(|error| {
+        let kind = match error {
+            tinybox_core::Error::ZeroResourceLimit { .. } => std::io::ErrorKind::InvalidInput,
+            _ => std::io::ErrorKind::Unsupported,
+        };
+        std::io::Error::new(kind, error)
+    })
 }
 
 /// Spawn only after all jail constraints pass a hard preflight.
