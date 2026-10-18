@@ -79,8 +79,9 @@ pub use files::{
 /// 1.21 adds the interactive piped-stdio members `StartStdio`, `WriteStdio`,
 /// `ReadStdio`, `CloseStdin`, `KillStdio` and `StdioStatus`, which run one
 /// program inside a mandatory native jail and stream its stdin, stdout and
-/// stderr over the bus.
-pub const CONTRACT_VERSION: (u32, u32) = (1, 21);
+/// stderr over the bus. 1.22 adds optional hard resource limits to
+/// [`NativeJailConfig`].
+pub const CONTRACT_VERSION: (u32, u32) = (1, 22);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.

@@ -7,6 +7,23 @@ fn defaults_are_permissive() {
     assert!(j.allow_subprocess);
     assert_eq!(j.label, "x");
     assert_eq!(j.read_only.len(), 0);
+    assert_eq!(j.resources, None);
+}
+
+#[test]
+fn requested_resources_become_hard_constraints() {
+    let mut jail = Jail::new("/tmp", "x");
+    jail.resources = Some(tinybox_core::Resources::DEFAULT);
+    assert_eq!(
+        jail.constraints(),
+        vec![
+            tinybox_core::Constraint::Filesystem,
+            tinybox_core::Constraint::Cpu,
+            tinybox_core::Constraint::Memory,
+            tinybox_core::Constraint::Pids,
+            tinybox_core::Constraint::Disk,
+        ]
+    );
 }
 
 #[test]

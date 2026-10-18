@@ -37,6 +37,127 @@ fn missing_root_errors() {
 }
 
 #[test]
+fn facade_refuses_resource_limits_before_spawning() -> std::io::Result<()> {
+    let root = tempfile::tempdir()?;
+    let marker = root.path().join("executed");
+    let mut jail = Jail::new(root.path(), "resources");
+    jail.resources = Some(tinybox_core::Resources::DEFAULT);
+    let mut command = if cfg!(windows) {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "echo executed > executed"]);
+        command
+    } else {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf executed > executed"]);
+        command
+    };
+    command.current_dir(root.path());
+    let error = spawn_with(&NoopBackend, &jail, command).err();
+    assert_eq!(
+        error.map(|error| error.kind()),
+        Some(std::io::ErrorKind::Unsupported)
+    );
+    assert!(!marker.exists());
+    Ok(())
+}
+
+#[test]
+fn facade_refuses_each_zero_resource_limit_even_when_backend_claims_enforcement()
+-> std::io::Result<()> {
+    use tinybox_core::{Constraint, ConstraintSupport, Enforcement, Error};
+
+    struct FullyEnforcedBackend;
+
+    impl JailBackend for FullyEnforcedBackend {
+        fn name(&self) -> &'static str {
+            "fully-enforced-test"
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn constraint_support(&self) -> ConstraintSupport {
+            [
+                Constraint::Filesystem,
+                Constraint::Cpu,
+                Constraint::Memory,
+                Constraint::Pids,
+                Constraint::Disk,
+            ]
+            .into_iter()
+            .fold(ConstraintSupport::NONE, |support, constraint| {
+                support.with(constraint, Enforcement::Enforced)
+            })
+        }
+
+        fn spawn(&self, _jail: &Jail, mut cmd: Command) -> std::io::Result<std::process::Child> {
+            cmd.spawn()
+        }
+    }
+
+    let root = tempfile::tempdir()?;
+    let marker = root.path().join("executed");
+    let cases = [
+        (
+            "cpu_millis",
+            tinybox_core::Resources {
+                cpu_millis: 0,
+                ..tinybox_core::Resources::DEFAULT
+            },
+        ),
+        (
+            "memory_bytes",
+            tinybox_core::Resources {
+                memory_bytes: 0,
+                ..tinybox_core::Resources::DEFAULT
+            },
+        ),
+        (
+            "pids_max",
+            tinybox_core::Resources {
+                pids_max: 0,
+                ..tinybox_core::Resources::DEFAULT
+            },
+        ),
+        (
+            "disk_bytes",
+            tinybox_core::Resources {
+                disk_bytes: 0,
+                ..tinybox_core::Resources::DEFAULT
+            },
+        ),
+    ];
+
+    for (limit, resources) in cases {
+        let jail = Jail {
+            resources: Some(resources),
+            ..Jail::new(root.path(), "invalid-resources")
+        };
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("cmd");
+            command.args(["/C", "echo executed > executed"]);
+            command
+        } else {
+            let mut command = Command::new("sh");
+            command.args(["-c", "printf executed > executed"]);
+            command
+        };
+        command.current_dir(root.path());
+
+        let error = spawn_with(&FullyEnforcedBackend, &jail, command).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(matches!(
+            error.get_ref().and_then(|source| source.downcast_ref::<Error>()),
+            Some(Error::ZeroResourceLimit { limit: invalid_limit }) if *invalid_limit == limit
+        ));
+        assert!(!marker.exists());
+    }
+
+    Ok(())
+}
+
+#[test]
 fn default_backend_returns_something() {
     let b = default_backend();
     assert_ne!(b.name().len(), 0);
