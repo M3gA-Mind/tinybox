@@ -298,6 +298,12 @@ fn prospective_denials_resolve_existing_aliases_and_refuse_dangling_symlinks()
     let roots = denials(&[prospective.to_string_lossy().into_owned()])?;
     assert!(roots.contains(&prospective));
     assert!(roots.contains(&target.join(".ssh")));
+
+    let first_loop = dir.path().join("loop-a");
+    let second_loop = dir.path().join("loop-b");
+    symlink(&second_loop, &first_loop)?;
+    symlink(&first_loop, &second_loop)?;
+    assert!(denials(&[first_loop.to_string_lossy().into_owned()]).is_err());
     Ok(())
 }
 
