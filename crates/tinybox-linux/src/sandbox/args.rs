@@ -7,10 +7,7 @@
 //! the pure argument builders.
 
 use std::path::Path;
-use std::process::Command;
-use std::sync::OnceLock;
-
-use tinybox_core::{BoxSpec, Capability, Error, ExecRequest, Resources, Result, WorkspaceSource};
+use tinybox_core::{BoxSpec, Error, ExecRequest, Resources, Result, WorkspaceSource};
 
 use super::NAME;
 
@@ -75,7 +72,12 @@ fn unsupported(kind: &'static str) -> Error {
 /// Returns [`Error::EmptyCommand`] when the request names no program, and
 /// [`Error::UnsupportedWorkspaceSource`] when the spec names a source this
 /// backend cannot bind.
-pub(super) fn exec(spec: &BoxSpec, request: &ExecRequest, limits: bool) -> Result<Vec<String>> {
+pub(super) fn exec(
+    spec: &BoxSpec,
+    request: &ExecRequest,
+    limits: bool,
+    supports_expand_environment: bool,
+) -> Result<Vec<String>> {
     if request.argv.is_empty() {
         return Err(Error::EmptyCommand {
             sandbox: NAME.to_owned(),
@@ -83,7 +85,7 @@ pub(super) fn exec(spec: &BoxSpec, request: &ExecRequest, limits: bool) -> Resul
     }
 
     let mut argv = if limits {
-        cgroup_prefix(&spec.resources, systemd_supports_expand_environment()?)
+        cgroup_prefix(&spec.resources, supports_expand_environment)
     } else {
         Vec::new()
     };
