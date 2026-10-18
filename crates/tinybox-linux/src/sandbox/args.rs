@@ -7,7 +7,7 @@
 //! the pure argument builders.
 
 use std::path::Path;
-use tinybox_core::{BoxSpec, Error, ExecRequest, Resources, Result, WorkspaceSource};
+use tinybox_core::{BoxSpec, Capability, Error, ExecRequest, Resources, Result, WorkspaceSource};
 
 use super::NAME;
 
