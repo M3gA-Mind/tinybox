@@ -162,6 +162,18 @@ impl JailBackend for BubblewrapBackend {
     }
 
     fn spawn(&self, jail: &Jail, cmd: Command) -> io::Result<Child> {
+        self.launch(jail, &cmd, false)
+    }
+
+    fn spawn_captured(&self, jail: &Jail, cmd: Command) -> io::Result<Child> {
+        self.launch(jail, &cmd, true)
+    }
+}
+
+impl BubblewrapBackend {
+    /// Preflight, rebuild the command as `bwrap`, and spawn it. Pipes must be
+    /// set on the wrapper, not the original command, which is discarded.
+    fn launch(&self, jail: &Jail, cmd: &Command, captured: bool) -> io::Result<Child> {
         let Some(program) = self.program.as_deref() else {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -177,7 +189,14 @@ impl JailBackend for BubblewrapBackend {
             .require(self.name(), &unmet)
             .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error))?;
         log::debug!("[cwd_jail:bwrap] spawning label={}", jail.label);
-        prepare_command(program, jail, &cmd)?.spawn()
+        let mut wrapper = prepare_command(program, jail, cmd)?;
+        if captured {
+            wrapper
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+        }
+        wrapper.spawn()
     }
 }
 
