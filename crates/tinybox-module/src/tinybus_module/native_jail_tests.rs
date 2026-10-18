@@ -315,20 +315,13 @@ fn collector_builds_a_host_from_a_valid_native_jail()
     let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
     command.cwd = Some(root.path().to_path_buf());
 
-    let backend = tinybox_jail::default_backend();
-    let config = config();
-    let can_enforce =
-        backend.is_available() && prepare(root.path(), &config, &command, backend.as_ref()).is_ok();
-    let result = collector(root.path(), &config, &command);
-    if can_enforce {
-        assert!(result.is_ok());
-    } else {
-        assert!(matches!(
-            result,
-            Err(tinybus::Error::MethodFailed { ref name, .. })
-                if name == tinybox_bus::UNSUPPORTED_OPERATION
-        ));
-    }
+    let backend: Arc<dyn JailBackend> = Arc::new(Backend {
+        available: true,
+        suitable: true,
+        name: "fixture",
+        full: true,
+    });
+    let _collector = collector(root.path(), &config(), &command, backend)?;
     Ok(())
 }
 
