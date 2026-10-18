@@ -208,6 +208,13 @@ fn command_analysis_wire_facts_round_trip_without_host_policy() -> Result<(), se
 }
 
 #[test]
+fn contract_two_drops_command_classification_but_keeps_structural_shell_analysis() {
+    assert_eq!(CONTRACT_VERSION, (2, 0));
+    assert!(!METHODS.contains(&"AnalyzeCommand"));
+    assert!(METHODS.contains(&"AnalyzeShell"));
+}
+
+#[test]
 fn workspace_file_transfers_are_chunked_typed_and_bounded() -> Result<(), serde_json::Error> {
     assert_eq!(MAX_FILE_CHUNK_BYTES, 64 * 1024);
     assert_eq!(MAX_FILE_TRANSFERS_PER_RESOURCE, 8);
