@@ -46,7 +46,10 @@ pub(super) fn prepare(
     // workspace; that is a host error, not a weaker jail.
     if jail.deny_read.iter().any(|denied| {
         jail.root.starts_with(denied)
-            || jail.read_write.iter().any(|granted| overlaps(denied, granted))
+            || jail
+                .read_write
+                .iter()
+                .any(|granted| overlaps(denied, granted))
     }) {
         return Err(invalid());
     }
@@ -54,7 +57,9 @@ pub(super) fn prepare(
     // can keep the denial; outside them nothing grants the path anyway.
     if !backend.carves_denials()
         && jail.deny_read.iter().any(|denied| {
-            jail.read_only.iter().any(|granted| overlaps(denied, granted))
+            jail.read_only
+                .iter()
+                .any(|granted| overlaps(denied, granted))
         })
     {
         return Err(unavailable());

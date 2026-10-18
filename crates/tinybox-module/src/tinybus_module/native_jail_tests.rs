@@ -268,3 +268,41 @@ fn denials_preserve_prospective_roots_and_refuse_unenforceable_overlaps()
     }
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn landlock_keeps_a_denied_path_unreadable_when_created_after_preflight()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let backend = tinybox_jail::LandlockBackend::new();
+    if !backend.is_available() {
+        eprintln!("skipped: Landlock is not supported by this kernel");
+        return Ok(());
+    }
+    let home = tempfile::tempdir()?;
+    let root = home.path().join("project");
+    std::fs::create_dir(&root)?;
+    let credential = home.path().join(".future-store").join("token");
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.clone());
+    let mut native = config();
+    native.deny_read = vec![
+        home.path()
+            .join(".future-store")
+            .to_string_lossy()
+            .into_owned(),
+    ];
+    let jail = prepare(&root, &native, &command, &backend)?;
+    assert!(jail.deny_read.contains(&home.path().join(".future-store")));
+
+    std::fs::create_dir(home.path().join(".future-store"))?;
+    std::fs::write(&credential, "secret")?;
+    let mut child = backend.spawn(&jail, {
+        let mut shell = std::process::Command::new("/bin/sh");
+        shell
+            .arg("-c")
+            .arg(format!("cat '{}' >/dev/null", credential.display()));
+        shell
+    })?;
+    assert!(!child.wait()?.success());
+    Ok(())
+}
