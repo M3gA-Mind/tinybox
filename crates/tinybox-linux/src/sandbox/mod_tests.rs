@@ -44,7 +44,34 @@ impl Host for RecordingHost {
 
     async fn run(&self, request: &ExecRequest) -> Result<ExecOutput> {
         self.seen().push(request.argv.clone());
+        if request.argv == ["systemd-run", "--help"] {
+            return Ok(ExecOutput::new(
+                0,
+                b"--expand-environment=BOOL".to_vec(),
+                Vec::new(),
+            ));
+        }
         Ok(ExecOutput::new(0, b"ran".to_vec(), Vec::new()))
+    }
+}
+
+#[derive(Debug, Default)]
+struct FailedProbeHost {
+    seen: Mutex<Vec<Vec<String>>>,
+}
+
+#[async_trait]
+impl Host for FailedProbeHost {
+    fn name(&self) -> &'static str {
+        "failed-probe"
+    }
+
+    async fn run(&self, request: &ExecRequest) -> Result<ExecOutput> {
+        self.seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request.argv.clone());
+        Ok(ExecOutput::new(1, Vec::new(), b"probe failed".to_vec()))
     }
 }
 
@@ -300,10 +327,7 @@ async fn limits_wrap_the_sandbox_in_a_systemd_scope() -> Result<()> {
     assert_eq!(argv.first().map(String::as_str), Some("systemd-run"));
     assert!(has(&argv, "--user"));
     assert!(has(&argv, "--scope"));
-    assert_eq!(
-        has(&argv, "--expand-environment=no"),
-        args::systemd_supports_expand_environment()?
-    );
+    assert!(has(&argv, "--expand-environment=no"));
     let properties = argv
         .iter()
         .enumerate()
@@ -361,6 +385,32 @@ fn systemd_environment_flag_probe_distinguishes_legacy_and_fails_closed() {
             capability: tinybox_core::Capability::ResourceLimits,
         })
     );
+}
+
+#[tokio::test]
+async fn failed_systemd_option_probe_refuses_without_launching_workload() -> Result<()> {
+    let host = Arc::new(FailedProbeHost::default());
+    let sandbox = NamespaceSandbox::new(host.clone(), Arc::new(MemoryStore::new()))
+        .with_cgroup_limits();
+    let info = sandbox.create(&spec()?).await?;
+
+    let error = sandbox
+        .exec(&info.id, &ExecRequest::new(["echo", "must not run"]))
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        Error::Unsupported {
+            sandbox: NAME.to_owned(),
+            capability: Capability::ResourceLimits,
+        }
+    );
+    assert_eq!(
+        *host.seen.lock().unwrap_or_else(PoisonError::into_inner),
+        [vec!["systemd-run".to_owned(), "--help".to_owned()]]
+    );
+    Ok(())
 }
 
 #[tokio::test]

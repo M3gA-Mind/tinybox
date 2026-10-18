@@ -140,29 +140,6 @@ pub(super) fn cgroup_prefix(
     argv
 }
 
-/// Whether `systemd-run` accepts the scope environment-expansion switch.
-///
-/// The option was added in systemd v254, while older releases deliberately
-/// preserve scope arguments without expansion. Feature-detect it so limits
-/// remain available on those older releases.
-pub(super) fn systemd_supports_expand_environment() -> Result<bool> {
-    static SUPPORTS_FLAG: OnceLock<std::result::Result<bool, ()>> = OnceLock::new();
-    match *SUPPORTS_FLAG.get_or_init(|| {
-        let output = Command::new("systemd-run")
-            .arg("--help")
-            .output()
-            .map_err(|_| ())?;
-        parse_expand_environment_help(output.status.success(), &output.stdout, &output.stderr)
-            .map_err(|_| ())
-    }) {
-        Ok(supported) => Ok(supported),
-        Err(()) => Err(Error::Unsupported {
-            sandbox: NAME.to_owned(),
-            capability: Capability::ResourceLimits,
-        }),
-    }
-}
-
 pub(super) fn parse_expand_environment_help(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<bool> {
     if !success {
         return Err(Error::Unsupported {
