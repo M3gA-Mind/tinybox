@@ -279,7 +279,7 @@ fn landlock_validation_keeps_future_baseline_roots_protected() -> io::Result<()>
     let future_baseline = root.path().join("baseline-created-after-preflight");
     let mut jail = jail_for(root.path());
     jail.deny_read
-        .push(future_baseline.join("future-credential").to_path_buf());
+        .push(future_baseline.join("future-credential"));
 
     let result = validate_baseline_denials(&jail, &[future_baseline]);
     assert_eq!(
