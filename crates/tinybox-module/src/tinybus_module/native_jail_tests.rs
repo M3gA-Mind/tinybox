@@ -309,6 +309,18 @@ fn prospective_denials_resolve_existing_aliases_and_refuse_dangling_symlinks()
 
 #[cfg(unix)]
 #[test]
+fn collector_builds_a_host_from_a_valid_native_jail()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.path().to_path_buf());
+
+    let _collector = collector(root.path(), &config(), &command)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn spawn_rejects_a_prospective_denial_symlinked_into_the_jail()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::os::unix::fs::symlink;
