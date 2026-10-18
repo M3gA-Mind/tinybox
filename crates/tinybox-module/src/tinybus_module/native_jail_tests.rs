@@ -315,7 +315,17 @@ fn collector_builds_a_host_from_a_valid_native_jail()
     let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
     command.cwd = Some(root.path().to_path_buf());
 
-    let _collector = collector(root.path(), &config(), &command)?;
+    let backend = tinybox_jail::default_backend();
+    let result = collector(root.path(), &config(), &command);
+    if backend.is_available() {
+        assert!(result.is_ok());
+    } else {
+        assert!(matches!(
+            result,
+            Err(tinybus::Error::MethodFailed { ref name, .. })
+                if name == tinybox_bus::UNSUPPORTED_OPERATION
+        ));
+    }
     Ok(())
 }
 
