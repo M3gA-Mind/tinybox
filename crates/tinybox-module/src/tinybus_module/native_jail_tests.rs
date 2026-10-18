@@ -532,13 +532,19 @@ fn landlock_keeps_a_denied_path_unreadable_when_created_after_preflight()
 
     std::fs::create_dir(home.path().join(".future-store"))?;
     std::fs::write(&credential, "secret")?;
-    let mut child = backend.spawn(&jail, {
+    let allowed = root.join("allowed.txt");
+    std::fs::write(&allowed, "allowed-read-control\n")?;
+    let output = tinybox_jail::spawn_captured_with(&backend, &jail, {
         let mut shell = std::process::Command::new("/bin/sh");
+        shell.arg("-c").arg(format!(
+            "cat '{}' && cat '{}' >/dev/null",
+            allowed.display(),
+            credential.display()
+        ));
         shell
-            .arg("-c")
-            .arg(format!("cat '{}' >/dev/null", credential.display()));
-        shell
-    })?;
-    assert!(!child.wait()?.success());
+    })?
+    .wait_with_output()?;
+    assert_eq!(output.stdout, b"allowed-read-control\n");
+    assert!(!output.status.success());
     Ok(())
 }
