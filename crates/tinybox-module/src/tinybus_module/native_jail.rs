@@ -45,9 +45,8 @@ pub(super) fn prepare(
     // A denial over the root or a writable grant would leave the command no
     // workspace; that is a host error, not a weaker jail.
     if jail.deny_read.iter().any(|denied| {
-        std::iter::once(&jail.root)
-            .chain(&jail.read_write)
-            .any(|granted| granted.starts_with(denied))
+        denied != &jail.root && jail.root.starts_with(denied)
+            || jail.read_write.iter().any(|granted| overlaps(denied, granted))
     }) {
         return Err(invalid());
     }
@@ -55,10 +54,7 @@ pub(super) fn prepare(
     // can keep the denial; outside them nothing grants the path anyway.
     if !backend.carves_denials()
         && jail.deny_read.iter().any(|denied| {
-            std::iter::once(&jail.root)
-                .chain(&jail.read_only)
-                .chain(&jail.read_write)
-                .any(|granted| denied.starts_with(granted))
+            jail.read_only.iter().any(|granted| overlaps(denied, granted))
         })
     {
         return Err(unavailable());
@@ -96,9 +92,8 @@ fn grants(paths: &[String]) -> Result<Vec<std::path::PathBuf>> {
         })
         .collect()
 }
-/// Denied paths, validated like grants; a path that does not exist cannot be
-/// read and is dropped, an existing one is canonicalized so the backend matches
-/// the real location behind a symlink.
+/// Keep lexical prospective paths as well as canonical aliases for existing
+/// ancestors. Missing credential stores must remain denied if created later.
 fn denials(paths: &[String]) -> Result<Vec<std::path::PathBuf>> {
     let mut denied = Vec::new();
     for value in paths {
@@ -112,13 +107,49 @@ fn denials(paths: &[String]) -> Result<Vec<std::path::PathBuf>> {
         {
             return Err(invalid());
         }
-        match path.canonicalize() {
-            Ok(path) => denied.push(path),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        denied.push(path.to_path_buf());
+        match canonicalize_prospective(path) {
+            Ok(canonical) if canonical != path => denied.push(canonical),
+            Ok(_) => {}
             Err(_) => return Err(invalid()),
         }
     }
+    denied.sort();
+    denied.dedup();
     Ok(denied)
+}
+
+fn canonicalize_prospective(path: &Path) -> std::io::Result<std::path::PathBuf> {
+    match path.canonicalize() {
+        Ok(canonical) => return Ok(canonical),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let mut ancestor = path;
+    let mut suffix = Vec::new();
+    loop {
+        let name = ancestor.file_name().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "no existing path ancestor")
+        })?;
+        suffix.push(name.to_os_string());
+        ancestor = ancestor.parent().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "no existing path ancestor")
+        })?;
+        match ancestor.canonicalize() {
+            Ok(mut canonical) => {
+                for component in suffix.iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok(canonical);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn overlaps(left: &Path, right: &Path) -> bool {
+    left.starts_with(right) || right.starts_with(left)
 }
 fn invalid() -> Error {
     super::resources::failure(
