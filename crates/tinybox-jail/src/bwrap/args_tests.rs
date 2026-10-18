@@ -153,7 +153,6 @@ fn grants_that_replace_a_private_mount_are_rejected() -> io::Result<()> {
 #[test]
 fn a_grant_under_tmp_is_still_allowed() -> io::Result<()> {
     let root = tempfile::tempdir()?;
-    assert!(root.path().starts_with("/tmp") || !root.path().starts_with("/proc"));
     assert!(build(&jail(root.path())).is_ok());
     Ok(())
 }

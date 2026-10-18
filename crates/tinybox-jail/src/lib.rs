@@ -141,10 +141,12 @@ pub fn spawn_captured_with(
 /// Spawn only after all jail constraints pass a hard preflight.
 ///
 /// This strict entry point rejects the explicitly trusted no-op backend and
-/// Seatbelt's partial filesystem policy. Landlock can satisfy filesystem-only
-/// requests, but offers no process isolation and is unsuitable for arbitrary
-/// untrusted code. Availability and actual policy application are also checked
-/// by the backend when spawning.
+/// any backend that cannot enforce a requested constraint (Seatbelt's partial
+/// filesystem policy, Landlock's missing network and subprocess denial).
+/// Whether a backend isolates *processes* well enough for untrusted code is a
+/// separate question: ask [`JailBackend::is_suitable_for_untrusted_jail`].
+/// Availability and actual policy application are also checked by the backend
+/// when spawning.
 ///
 /// # Errors
 /// Returns `Unsupported` before spawning for partial or unsupported constraints,

@@ -181,6 +181,27 @@ pub trait JailBackend: Send + Sync {
                 == tinybox_core::Enforcement::Enforced
     }
 
+    /// Process isolation this backend provides for one specific `jail`.
+    ///
+    /// Defaults to [`isolation`](Self::isolation). A backend whose isolation
+    /// depends on the configuration (a shared network namespace when
+    /// `allow_net` is set) lowers it here. Hosts deciding whether to run
+    /// untrusted code should use
+    /// [`is_suitable_for_untrusted_jail`](Self::is_suitable_for_untrusted_jail).
+    fn isolation_for(&self, _jail: &Jail) -> tinybox_core::IsolationLevel {
+        self.isolation()
+    }
+
+    /// Per-configuration form of
+    /// [`is_suitable_for_untrusted_code`](Self::is_suitable_for_untrusted_code).
+    fn is_suitable_for_untrusted_jail(&self, jail: &Jail) -> bool {
+        self.isolation_for(jail) >= tinybox_core::IsolationLevel::Kernel
+            && self
+                .constraint_support()
+                .enforcement(tinybox_core::Constraint::Filesystem)
+                == tinybox_core::Enforcement::Enforced
+    }
+
     /// Inspect all hard constraints a directory jail requests.
     fn plan_check(&self, jail: &Jail) -> tinybox_core::PlanCheck {
         self.constraint_support().plan_check(&jail.constraints())
