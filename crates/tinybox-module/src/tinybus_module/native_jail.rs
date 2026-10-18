@@ -55,26 +55,34 @@ pub(super) fn prepare(
         return Err(invalid());
     }
     // A denial over the root or a writable grant would leave the command no
-    // workspace; that is a host error, not a weaker jail.
+    // workspace; a denial nested inside a writable grant is safe only for a
+    // backend that applies denials after its write allows.
     if jail.deny_read.iter().any(|denied| {
         jail.root.starts_with(denied)
-            || jail
-                .read_write
-                .iter()
-                .any(|granted| overlaps(denied, granted))
+            || jail.read_write.iter().any(|granted| {
+                granted.starts_with(denied)
+                    || (!backend.carves_denials() && denied.starts_with(granted))
+            })
     }) {
         return Err(invalid());
     }
-    // Inside the root or a grant, only a backend that subtracts from grants
-    // can keep the denial; outside them nothing grants the path anyway.
-    if !backend.carves_denials()
-        && jail.deny_read.iter().any(|denied| {
+    if !backend.carves_denials() {
+        let mut implicit_grants = Vec::new();
+        for grant in backend.implicit_grants() {
+            match grant.canonicalize() {
+                Ok(canonical) => implicit_grants.push(canonical),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(unavailable()),
+            }
+        }
+        if jail.deny_read.iter().any(|denied| {
             std::iter::once(&jail.root)
                 .chain(&jail.read_only)
+                .chain(&implicit_grants)
                 .any(|granted| overlaps(denied, granted))
-        })
-    {
-        return Err(unavailable());
+        }) {
+            return Err(unavailable());
+        }
     }
     backend
         .require_resources(&jail)
@@ -94,6 +102,7 @@ pub(super) fn prepare(
     }
     Ok(jail)
 }
+/// Validate and canonicalize each existing absolute grant path.
 fn grants(paths: &[String]) -> Result<Vec<std::path::PathBuf>> {
     paths
         .iter()
@@ -113,7 +122,7 @@ fn grants(paths: &[String]) -> Result<Vec<std::path::PathBuf>> {
         .collect()
 }
 /// Keep lexical prospective paths as well as canonical aliases for existing
-/// ancestors. Missing credential stores must remain denied if created later.
+/// ancestors so a later-created credential store remains denied.
 fn denials(paths: &[String]) -> Result<Vec<std::path::PathBuf>> {
     let mut denied = Vec::new();
     for value in paths {
@@ -139,6 +148,7 @@ fn denials(paths: &[String]) -> Result<Vec<std::path::PathBuf>> {
     Ok(denied)
 }
 
+/// Resolve a denial through existing aliases while preserving missing suffixes.
 fn canonicalize_prospective(path: &Path) -> std::io::Result<std::path::PathBuf> {
     match path.canonicalize() {
         Ok(canonical) => return Ok(canonical),
@@ -182,6 +192,7 @@ fn canonicalize_prospective(path: &Path) -> std::io::Result<std::path::PathBuf> 
     }
 }
 
+/// Return whether either path contains the other by path components.
 fn overlaps(left: &Path, right: &Path) -> bool {
     left.starts_with(right) || right.starts_with(left)
 }

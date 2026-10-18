@@ -196,6 +196,16 @@ impl Jail {
 /// `AppContainer` requires custom `CreateProcess` flags that `std`'s
 /// `Command::spawn` does not expose.
 pub trait JailBackend: Send + Sync {
+    /// Paths the backend implicitly grants in addition to explicit jail roots.
+    ///
+    /// Callers enforcing hard denials use these paths to detect overlaps that
+    /// the backend's allow rules would otherwise override. Backends should
+    /// report every recursively granted baseline path; the default means the
+    /// backend has no implicit filesystem grants.
+    fn implicit_grants(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
     /// Whether [`Jail::deny_read`] is enforced even inside the root or a grant.
     /// Allow-list backends (Landlock, `AppContainer`) cannot subtract from a
     /// grant, so they keep the default `false`.

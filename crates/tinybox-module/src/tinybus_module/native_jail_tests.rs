@@ -42,6 +42,30 @@ impl JailBackend for Backend {
         Err(std::io::Error::other("preflight fixture never spawns"))
     }
 }
+
+struct BaselineBackend(Backend, std::path::PathBuf);
+impl JailBackend for BaselineBackend {
+    fn name(&self) -> &'static str {
+        self.0.name
+    }
+    fn is_available(&self) -> bool {
+        self.0.available
+    }
+    fn constraint_support(&self) -> tinybox_core::ConstraintSupport {
+        self.0.constraint_support()
+    }
+    fn implicit_grants(&self) -> Vec<std::path::PathBuf> {
+        vec![self.1.clone()]
+    }
+    fn spawn(
+        &self,
+        jail: &Jail,
+        cmd: std::process::Command,
+    ) -> std::io::Result<std::process::Child> {
+        self.0.spawn(jail, cmd)
+    }
+}
+
 fn config() -> NativeJailConfig {
     NativeJailConfig {
         read_only: vec![],
@@ -304,11 +328,55 @@ fn denials_preserve_prospective_roots_and_refuse_unenforceable_overlaps()
     assert!(prepare(&root, &config, &command, &backend("seatbelt")).is_err());
     config.read_write.clear();
 
+    // Seatbelt's final deny rule can carve a nested path out of a writable
+    // grant, but it cannot preserve the grant if the denial contains it.
+    config.read_write = vec![path(home.path())];
+    config.deny_read = vec![path(&secrets)];
+    assert!(prepare(&root, &config, &command, &backend("seatbelt")).is_ok());
+    config.deny_read = vec![path(home.path())];
+    assert!(prepare(&root, &config, &command, &backend("seatbelt")).is_err());
+    config.read_write.clear();
+
     // Malformed denials are refused like malformed grants.
     for bad in ["relative", "/usr/../etc", "/bad\0path"] {
         config.deny_read = vec![bad.into()];
         assert!(prepare(&root, &config, &command, &backend("seatbelt")).is_err());
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn allow_list_backend_rejects_denials_over_implicit_baseline_grants()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path().join("workspace");
+    let baseline = temp.path().join("implicit-read-root");
+    let alias = temp.path().join("implicit-read-alias");
+    std::fs::create_dir(&root)?;
+    std::fs::create_dir(&baseline)?;
+    std::os::unix::fs::symlink(&baseline, &alias)?;
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.clone());
+    let mut config = config();
+    config.deny_read = vec![
+        baseline
+            .join("future-credential")
+            .to_string_lossy()
+            .into_owned(),
+    ];
+
+    let backend = BaselineBackend(
+        Backend {
+            available: true,
+            suitable: false,
+            name: "allow-list",
+            full: true,
+        },
+        alias,
+    );
+
+    assert!(prepare(&root, &config, &command, &backend).is_err());
     Ok(())
 }
 

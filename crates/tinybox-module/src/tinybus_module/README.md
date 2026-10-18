@@ -254,10 +254,12 @@ requiring the process-isolation security floor sets `require_process_isolation`.
 The host retains approval policy and chooses the credential paths; it sends them
 as `deny_read` (1.20). The module retains prospective paths and resolves them
 against current filesystem aliases both at preflight and immediately before
-spawn. It refuses a denial covering the root or a writable grant, and refuses
-canonicalized overlap with the root or a grant when the backend cannot subtract
-denials. Seatbelt denies them last in its profile; Landlock and `AppContainer`
-deny paths outside their allow-lists.
+spawn. It refuses a denial covering the root or a writable grant. Seatbelt can
+carve a nested denial out of a writable grant; allow-list backends refuse any
+overlap they cannot subtract. Landlock reports its implicit system and device
+baseline grants so credential denials cannot be overridden by those grants;
+direct Landlock backend calls repeat this check at spawn. Paths outside every
+grant remain default-denied on allow-list backends.
 
 The jail owns a separate native collector for each execution. Output replay,
 Cancel, ReleaseOutput, Close and Shutdown use the same retained cleanup barriers
