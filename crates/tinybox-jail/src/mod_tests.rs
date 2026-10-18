@@ -201,7 +201,10 @@ fn facade_refuses_denials_nested_under_backend_implicit_grants() -> std::io::Res
 
     let error = spawn_with(&BaselineBackend { baseline }, &jail, command).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert!(!marker.exists(), "backend must not spawn after denial conflict");
+    assert!(
+        !marker.exists(),
+        "backend must not spawn after denial conflict"
+    );
     Ok(())
 }
 
