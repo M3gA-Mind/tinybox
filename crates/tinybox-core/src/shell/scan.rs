@@ -162,23 +162,14 @@ pub fn contains_unquoted_char(command: &str, target: char) -> bool {
 
 /// Blank out the body of every **quoted-delimiter** heredoc in `command`.
 ///
-/// A command classifier and structural guards scan the raw command string, so
-/// until now a heredoc body was read as live shell text. That is wrong for a
-/// quoted delimiter: in `cat > f << 'EOF' … EOF` the shell performs no
-/// expansion inside the body, so an `&`, a `` ` `` or a `$(` there is data.
-/// Measured consequence : a recipe document was
-/// refused as "background (&) is not allowed" because four dinner titles read
-/// "Chicken & Spinach".
+/// A quoted delimiter makes the heredoc body data: the shell does not expand
+/// operators or substitutions inside it. This helper blanks those body lines
+/// while preserving line counts and the surrounding command text.
 ///
-/// An **unquoted** delimiter (`<< EOF`) is deliberately left alone — expansion
-/// *is* live inside that body, so `$(rm -rf ~)` there really would execute and
-/// must keep tripping the guard.
+/// An **unquoted** delimiter (`<< EOF`) is deliberately left alone because the
+/// shell still expands substitutions in that body.
 ///
-/// Body lines are replaced by empty lines rather than removed, so line counts,
-/// the surrounding command text and the `>` of the redirect are all preserved:
-/// a heredoc write still classifies as a write and still
-/// prompts. Returns [`Cow::Borrowed`] when the command has no quoted heredoc,
-/// which is the overwhelmingly common case.
+/// Returns [`Cow::Borrowed`] when the command has no quoted heredoc.
 #[must_use]
 pub fn strip_quoted_heredoc_bodies(command: &str) -> Cow<'_, str> {
     if !command.contains("<<") {

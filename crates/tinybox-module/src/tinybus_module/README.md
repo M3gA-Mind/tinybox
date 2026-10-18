@@ -229,11 +229,11 @@ Spawn/Cancel cycles impose no lifetime admission limit and keep no history sets.
 Collected commands use LimitedLocalHost with a combined 1 MiB stdout/stderr
 budget enforced during reading; overflow fails rather than truncating output.
 
-AnalyzeShell removes quoted heredoc bodies before segment analysis. Its
-redirection fact ignores all heredoc bodies, while hidden-execution analysis
-retains expansion-aware behavior for unquoted bodies. It returns segments and
-hidden-execution/redirection facts. Authorization,
-credential/path restrictions, and access-tier decisions remain host policy.
+AnalyzeShell removes quoted heredoc bodies before segment analysis and ignores
+all heredoc bodies when scanning for output redirection. It returns only live
+segments and a redirection fact; it makes no authorization or command-policy
+decision. Authorization, credential/path restrictions, and access-tier
+decisions remain host policy.
 Errors use the stable dotted names declared in `tinybox-bus`; backend failures
 retain the underlying diagnostic without exposing native handles.
 
