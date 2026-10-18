@@ -162,7 +162,7 @@ impl Jail {
         carves_denials: bool,
         implicit_grants: &[PathBuf],
     ) -> std::io::Result<()> {
-        if carves_denials {
+        if carves_denials || self.deny_read.is_empty() {
             return Ok(());
         }
         let implicit_grants = implicit_grants
