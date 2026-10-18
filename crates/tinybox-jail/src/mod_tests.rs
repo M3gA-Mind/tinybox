@@ -294,7 +294,8 @@ fn facade_refuses_denials_when_implicit_grant_is_dangling() -> std::io::Result<(
         spawned: spawned.clone(),
     };
     let mut jail = Jail::new(root.path(), "denial-with-dangling-baseline");
-    jail.deny_read.push(denial_root.path().join("future-denial"));
+    jail.deny_read
+        .push(denial_root.path().join("future-denial"));
 
     let error = spawn_with(&backend, &jail, Command::new("true")).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
