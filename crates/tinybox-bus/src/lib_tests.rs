@@ -277,8 +277,8 @@ fn shell_selection_wire_defaults_preserve_safe_pipeline_behavior() -> Result<(),
         serde_json::from_value::<ShellInvocation>(value)?,
         invocation
     );
-    assert_eq!(METHODS[31], "ResolveLocalGrants");
-    assert_eq!(METHODS[32], "SelectShell");
+    assert_eq!(METHODS[30], "ResolveLocalGrants");
+    assert_eq!(METHODS[31], "SelectShell");
     assert!(!is_compatible((1, 9)));
     Ok(())
 }
@@ -370,7 +370,7 @@ fn named_members_resolve_to_the_method_catalogue_in_order() {
 
 #[test]
 fn docker_policy_validation_is_a_standalone_appended_member() -> Result<(), serde_json::Error> {
-    assert_eq!(METHODS[35], "ValidateDockerPolicy");
+    assert_eq!(METHODS[34], "ValidateDockerPolicy");
     assert_eq!(names::VALIDATE_DOCKER_POLICY, "ValidateDockerPolicy");
     let request: DockerPolicyRequest = serde_json::from_value(serde_json::json!({}))?;
     assert_eq!(request, DockerPolicyRequest::default());

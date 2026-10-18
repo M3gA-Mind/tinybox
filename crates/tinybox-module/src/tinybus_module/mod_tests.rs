@@ -485,11 +485,11 @@ async fn an_unknown_method_is_rejected() -> tinybus::Result<()> {
 
     let client = Connection::connect(bus.connect().await?).await?;
     let proxy = client.proxy(INTERFACE, OBJECT_PATH, INTERFACE)?;
-    let result = proxy.call::<String>("Snapshot", ()).await;
+    let result = proxy.call::<String>("AnalyzeCommand", ("echo hello",)).await;
 
     assert!(
         result.is_err(),
-        "a method outside the declared surface should be refused"
+        "the removed command-policy method must not be present in contract 2.0"
     );
     Ok(())
 }

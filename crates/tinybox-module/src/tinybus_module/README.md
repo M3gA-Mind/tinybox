@@ -420,3 +420,7 @@ the previous request behavior. Supplying limits makes each one a hard
 preflight requirement; native jail backends currently declare those controls
 unsupported and refuse before starting the child. See
 `docs/specs/contract-1-22.md`.
+
+Version 2.0 removes TinyBox command classification and execution-policy results
+after the contract 1.22 deprecation window. Hosts must reject modules from a
+different contract major. See `docs/specs/contract-2-0.md`.
