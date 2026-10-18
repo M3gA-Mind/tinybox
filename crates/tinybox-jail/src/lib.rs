@@ -99,7 +99,9 @@ pub fn default_backend() -> Arc<dyn JailBackend> {
 pub fn spawn(jail: &Jail, cmd: Command) -> std::io::Result<Child> {
     let mut jail = jail.clone();
     jail.canonicalize()?;
-    default_backend().spawn(&jail, cmd)
+    let backend = default_backend();
+    jail.validate_denials(backend.carves_denials())?;
+    backend.spawn(&jail, cmd)
 }
 
 /// Same as [`spawn`] but with a caller-supplied backend. Useful in
@@ -116,6 +118,7 @@ pub fn spawn(jail: &Jail, cmd: Command) -> std::io::Result<Child> {
 pub fn spawn_with(backend: &dyn JailBackend, jail: &Jail, cmd: Command) -> std::io::Result<Child> {
     let mut jail = jail.clone();
     jail.canonicalize()?;
+    jail.validate_denials(backend.carves_denials())?;
     backend.spawn(&jail, cmd)
 }
 
@@ -130,6 +133,7 @@ pub fn spawn_captured_with(
 ) -> std::io::Result<Child> {
     let mut jail = jail.clone();
     jail.canonicalize()?;
+    jail.validate_denials(backend.carves_denials())?;
     backend.spawn_captured(&jail, cmd)
 }
 

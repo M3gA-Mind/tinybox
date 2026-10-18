@@ -124,6 +124,34 @@ impl Jail {
                 *p = c;
             }
         }
+        self.deny_read = self
+            .deny_read
+            .iter()
+            .map(|path| crate::registry_path::canonicalize_missing(path))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        self.deny_read.sort();
+        self.deny_read.dedup();
+        Ok(())
+    }
+
+    /// Refuse denials that an allow-list backend cannot preserve after path
+    /// canonicalization.
+    pub(crate) fn validate_denials(&self, carves_denials: bool) -> std::io::Result<()> {
+        if carves_denials {
+            return Ok(());
+        }
+        for denied in &self.deny_read {
+            if std::iter::once(&self.root)
+                .chain(&self.read_only)
+                .chain(&self.read_write)
+                .any(|granted| denied.starts_with(granted) || granted.starts_with(denied))
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "denied path overlaps an allow-list grant",
+                ));
+            }
+        }
         Ok(())
     }
 

@@ -327,12 +327,9 @@ fn spawn_rejects_a_prospective_denial_symlinked_into_the_jail()
     let jail = prepare(&root, &native, &command, &backend)?;
 
     symlink(&credential, &prospective)?;
-    let error = tinybox_jail::spawn_captured_with(
-        &backend,
-        &jail,
-        std::process::Command::new("true"),
-    )
-    .err();
+    let error =
+        tinybox_jail::spawn_captured_with(&backend, &jail, std::process::Command::new("true"))
+            .err();
     assert_eq!(
         error.map(|error| error.kind()),
         Some(std::io::ErrorKind::InvalidInput)
