@@ -424,7 +424,7 @@ async fn live_systemd_scope_preserves_shell_dollar_literals() -> Result<()> {
             &ExecRequest::new([
                 "/bin/sh",
                 "-c",
-                "printf '%s\\n' '$cgroup_path'",
+                "printf '%s\\n' '${cgroup_path}'",
             ]),
         )
         .await?;
@@ -437,7 +437,7 @@ async fn live_systemd_scope_preserves_shell_dollar_literals() -> Result<()> {
             message: output.stderr_lossy().trim().to_owned(),
         });
     }
-    assert_eq!(output.stdout_lossy(), "$cgroup_path\n");
+    assert_eq!(output.stdout_lossy(), "${cgroup_path}\n");
     Ok(())
 }
 
