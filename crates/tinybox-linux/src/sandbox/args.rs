@@ -98,7 +98,7 @@ pub(super) fn exec(spec: &BoxSpec, request: &ExecRequest, limits: bool) -> Resul
 /// also why limits are opt-in: a machine with no systemd user session cannot
 /// provide them, and a sandbox that accepted a memory cap it could not apply
 /// would be claiming something untrue.
-fn cgroup_prefix(resources: &Resources, supports_expand_environment: bool) -> Vec<String> {
+pub(super) fn cgroup_prefix(resources: &Resources, supports_expand_environment: bool) -> Vec<String> {
     let mut argv = vec![
         "systemd-run".to_owned(),
         "--user".to_owned(),
@@ -140,7 +140,7 @@ fn cgroup_prefix(resources: &Resources, supports_expand_environment: bool) -> Ve
 /// The option was added in systemd v254, while older releases deliberately
 /// preserve scope arguments without expansion. Feature-detect it so limits
 /// remain available on those older releases.
-fn systemd_supports_expand_environment() -> bool {
+pub(super) fn systemd_supports_expand_environment() -> bool {
     static SUPPORTS_FLAG: OnceLock<bool> = OnceLock::new();
     *SUPPORTS_FLAG.get_or_init(|| {
         Command::new("systemd-run")

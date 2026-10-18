@@ -300,7 +300,10 @@ async fn limits_wrap_the_sandbox_in_a_systemd_scope() -> Result<()> {
     assert_eq!(argv.first().map(String::as_str), Some("systemd-run"));
     assert!(has(&argv, "--user"));
     assert!(has(&argv, "--scope"));
-    assert!(has(&argv, "--expand-environment=no"));
+    assert_eq!(
+        has(&argv, "--expand-environment=no"),
+        args::systemd_supports_expand_environment()
+    );
     let properties = argv
         .iter()
         .enumerate()
@@ -323,6 +326,24 @@ async fn limits_wrap_the_sandbox_in_a_systemd_scope() -> Result<()> {
     // The sandbox still runs inside the scope.
     assert!(has(&argv, "bwrap"));
     Ok(())
+}
+
+#[test]
+fn systemd_scope_environment_flag_is_added_only_when_supported() {
+    let resources = Resources {
+        cpu_millis: 1_000,
+        memory_bytes: 64 * 1024 * 1024,
+        pids_max: 16,
+        disk_bytes: 1024 * 1024,
+    };
+
+    let supported = args::cgroup_prefix(&resources, true);
+    assert!(has(&supported, "--expand-environment=no"));
+    assert_eq!(supported.get(3).map(String::as_str), Some("--expand-environment=no"));
+
+    let legacy = args::cgroup_prefix(&resources, false);
+    assert!(!has(&legacy, "--expand-environment=no"));
+    assert_eq!(legacy.get(3).map(String::as_str), Some("--quiet"));
 }
 
 #[tokio::test]
