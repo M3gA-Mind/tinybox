@@ -296,8 +296,11 @@ fn prospective_denials_resolve_existing_aliases_and_refuse_dangling_symlinks()
     symlink(&target, &alias)?;
     let prospective = alias.join(".ssh");
     let roots = denials(&[prospective.to_string_lossy().into_owned()])?;
+    let mut expected = vec![prospective.clone(), target.canonicalize()?.join(".ssh")];
+    expected.sort();
+    expected.dedup();
     assert!(roots.contains(&prospective));
-    assert!(roots.contains(&target.join(".ssh")));
+    assert_eq!(roots, expected);
 
     let first_loop = dir.path().join("loop-a");
     let second_loop = dir.path().join("loop-b");
