@@ -27,10 +27,11 @@ pub struct Jail {
     /// must write to without it landing inside the root (e.g. a per-call
     /// output-capture directory). Grant the narrowest directory that works.
     pub read_write: Vec<PathBuf>,
-    /// Paths the child may neither read nor write, even inside the root or a
-    /// grant. Only a backend that [`carves_denials`](JailBackend::carves_denials)
-    /// can subtract them from a grant; everywhere else they are unreachable
-    /// already because nothing grants them.
+    /// Paths the child may neither read nor write. A backend that
+    /// [`carves_denials`](JailBackend::carves_denials) subtracts them from
+    /// grants; allow-list backends deny paths outside grants by default. The
+    /// native module rejects overlaps that an allow-list backend cannot enforce.
+    /// Missing paths are retained so backend rules can cover later creation.
     pub deny_read: Vec<PathBuf>,
     /// Allow outbound network. Most agent tools need this; some risky tools
     /// (untrusted code execution) should disable it.
