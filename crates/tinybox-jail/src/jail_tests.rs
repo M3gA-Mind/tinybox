@@ -96,8 +96,7 @@ fn canonicalize_keeps_missing_read_write_as_is() {
 
 #[cfg(unix)]
 #[test]
-fn canonicalize_deduplicates_denials_that_resolve_through_symlink_aliases()
--> std::io::Result<()> {
+fn canonicalize_deduplicates_denials_that_resolve_through_symlink_aliases() -> std::io::Result<()> {
     use std::os::unix::fs::symlink;
     let root = tempfile::tempdir()?;
     let store = tempfile::tempdir()?;

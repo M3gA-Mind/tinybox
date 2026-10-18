@@ -127,7 +127,7 @@ impl Jail {
         self.deny_read = self
             .deny_read
             .iter()
-            .map(|path| crate::registry_path::canonicalize_missing(path))
+            .map(|path| crate::registry::canonicalize_missing(path))
             .collect::<std::io::Result<Vec<_>>>()?;
         self.deny_read.sort();
         self.deny_read.dedup();
