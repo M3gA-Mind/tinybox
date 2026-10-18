@@ -41,8 +41,6 @@ pub use policy::{DockerPolicyReport, DockerPolicyRequest};
 mod event;
 pub use event::{DenialKind, EgressAllowlist, LimitKind, SandboxEvent};
 
-mod shell;
-pub use shell::{CommandAnalysis, CommandClass, CommandSegment};
 mod files;
 pub use files::{
     AbortFileWriteRequest, BeginFileReadRequest, BeginFileWriteRequest, FileChunk, FileReadInfo,
@@ -81,7 +79,10 @@ pub use files::{
 /// program inside a mandatory native jail and stream its stdin, stdout and
 /// stderr over the bus. 1.22 adds optional hard resource limits to
 /// [`NativeJailConfig`].
-pub const CONTRACT_VERSION: (u32, u32) = (1, 22);
+/// 2.0 removes TinyBox-owned command policy classification and the
+/// `AnalyzeShell.hidden_execution` policy signal. Generic shell structure facts
+/// and transport helpers remain.
+pub const CONTRACT_VERSION: (u32, u32) = (2, 0);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.
@@ -154,8 +155,6 @@ pub mod names {
     pub const CLOSE_FORWARD: &str = "CloseForward";
     /// Wire name of the `JailStatus` member.
     pub const JAIL_STATUS: &str = "JailStatus";
-    /// Wire name of the `AnalyzeCommand` member.
-    pub const ANALYZE_COMMAND: &str = "AnalyzeCommand";
     /// Wire name of the `BeginFileRead` member.
     pub const BEGIN_FILE_READ: &str = "BeginFileRead";
     /// Wire name of the `ReadFileChunk` member.
@@ -228,7 +227,6 @@ pub const METHODS: &[&str] = &[
     names::FORWARD,
     names::CLOSE_FORWARD,
     names::JAIL_STATUS,
-    names::ANALYZE_COMMAND,
     names::BEGIN_FILE_READ,
     names::READ_FILE_CHUNK,
     names::FINISH_FILE_READ,
@@ -683,8 +681,6 @@ pub struct ProcessRef {
 pub struct ShellAnalysis {
     /// Live shell segments after quoted heredoc bodies are removed.
     pub segments: Vec<String>,
-    /// Whether shell syntax can execute hidden commands.
-    pub hidden_execution: bool,
     /// Whether an unquoted redirect occurs outside heredoc data.
     pub redirection: bool,
 }
