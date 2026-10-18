@@ -155,8 +155,8 @@ impl Jail {
         Ok(())
     }
 
-    /// Refuse denials that an allow-list backend cannot preserve after path
-    /// canonicalization.
+    /// Refuse denials that a non-carving backend cannot preserve against its
+    /// explicit and implicit grants after path canonicalization.
     pub(crate) fn validate_denials(
         &self,
         carves_denials: bool,

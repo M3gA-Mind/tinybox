@@ -276,7 +276,10 @@ fn raw_landlock_spawn_refuses_a_deny_root_that_overlaps_implicit_baseline_access
 #[test]
 fn landlock_validation_keeps_future_baseline_roots_protected() -> io::Result<()> {
     let root = tempfile::tempdir()?;
-    let future_baseline = root.path().join("baseline-created-after-preflight");
+    let baseline_root = tempfile::tempdir()?;
+    let future_baseline = baseline_root
+        .path()
+        .join("baseline-created-after-preflight");
     let mut jail = jail_for(root.path());
     jail.deny_read
         .push(future_baseline.join("future-credential"));
