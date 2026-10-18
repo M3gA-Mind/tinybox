@@ -274,13 +274,22 @@ fn denials_preserve_prospective_roots_and_refuse_unenforceable_overlaps()
 
 #[cfg(unix)]
 #[test]
-fn prospective_denials_fail_closed_for_dangling_symlinks()
+fn prospective_denials_resolve_existing_aliases_and_refuse_dangling_symlinks()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::os::unix::fs::symlink;
     let dir = tempfile::tempdir()?;
     let link = dir.path().join("credential-link");
     symlink(dir.path().join("future-target"), &link)?;
     assert!(denials(&[link.to_string_lossy().into_owned()]).is_err());
+
+    let target = dir.path().join("real-home");
+    std::fs::create_dir(&target)?;
+    let alias = dir.path().join("home-alias");
+    symlink(&target, &alias)?;
+    let prospective = alias.join(".ssh");
+    let roots = denials(&[prospective.to_string_lossy().into_owned()])?;
+    assert!(roots.contains(&prospective));
+    assert!(roots.contains(&target.join(".ssh")));
     Ok(())
 }
 

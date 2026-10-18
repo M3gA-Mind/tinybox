@@ -135,8 +135,13 @@ fn canonicalize_prospective(path: &Path) -> std::io::Result<std::path::PathBuf> 
     loop {
         match std::fs::symlink_metadata(ancestor) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
-                // A dangling link has no stable canonical target to protect.
-                return Err(std::io::Error::other("credential denial crosses a symlink"));
+                // Resolve existing aliases for prospective descendants, but
+                // refuse dangling links and loops that have no stable target.
+                let mut canonical = ancestor.canonicalize()?;
+                for component in suffix.iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok(canonical);
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
