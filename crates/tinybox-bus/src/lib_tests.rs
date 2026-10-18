@@ -131,6 +131,7 @@ fn version_and_capability_wire_snapshot_preserve_contract_compatibility()
 -> Result<(), serde_json::Error> {
     assert_eq!(CONTRACT_VERSION, (1, 22));
     assert!(is_compatible(CONTRACT_VERSION));
+    assert!(!is_compatible((1, 21)));
     assert!(!is_compatible((1, 8)));
     assert!(!is_compatible((1, 7)));
     assert!(!is_compatible((1, 6)));

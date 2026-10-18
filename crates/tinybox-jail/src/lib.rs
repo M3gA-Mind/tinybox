@@ -99,7 +99,9 @@ pub fn default_backend() -> Arc<dyn JailBackend> {
 pub fn spawn(jail: &Jail, cmd: Command) -> std::io::Result<Child> {
     let mut jail = jail.clone();
     jail.canonicalize()?;
-    default_backend().spawn(&jail, cmd)
+    let backend = default_backend();
+    require_resources(backend.as_ref(), &jail)?;
+    backend.spawn(&jail, cmd)
 }
 
 /// Same as [`spawn`] but with a caller-supplied backend. Useful in
@@ -116,6 +118,7 @@ pub fn spawn(jail: &Jail, cmd: Command) -> std::io::Result<Child> {
 pub fn spawn_with(backend: &dyn JailBackend, jail: &Jail, cmd: Command) -> std::io::Result<Child> {
     let mut jail = jail.clone();
     jail.canonicalize()?;
+    require_resources(backend, &jail)?;
     backend.spawn(&jail, cmd)
 }
 
@@ -130,7 +133,14 @@ pub fn spawn_captured_with(
 ) -> std::io::Result<Child> {
     let mut jail = jail.clone();
     jail.canonicalize()?;
+    require_resources(backend, &jail)?;
     backend.spawn_captured(&jail, cmd)
+}
+
+fn require_resources(backend: &dyn JailBackend, jail: &Jail) -> std::io::Result<()> {
+    backend
+        .require_resources(jail)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::Unsupported, error))
 }
 
 /// Spawn only after all jail constraints pass a hard preflight.

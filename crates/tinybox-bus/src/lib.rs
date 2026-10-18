@@ -19,7 +19,7 @@ mod grants;
 pub use grants::{LocalGrantConfig, LocalGrants, ProtectedPaths, ResolveLocalGrantsRequest};
 
 mod jail;
-pub use jail::{JailEnforcement, NativeJailConfig, NativeResourceLimits};
+pub use jail::{JailEnforcement, NativeJailConfig};
 
 mod shell_execution;
 mod shell_selection;

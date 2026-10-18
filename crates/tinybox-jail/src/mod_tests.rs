@@ -37,6 +37,31 @@ fn missing_root_errors() {
 }
 
 #[test]
+fn facade_refuses_resource_limits_before_spawning() -> std::io::Result<()> {
+    let root = tempfile::tempdir()?;
+    let marker = root.path().join("executed");
+    let mut jail = Jail::new(root.path(), "resources");
+    jail.resources = Some(tinybox_core::Resources::DEFAULT);
+    let mut command = if cfg!(windows) {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "echo executed > executed"]);
+        command
+    } else {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf executed > executed"]);
+        command
+    };
+    command.current_dir(root.path());
+    let error = spawn_with(&NoopBackend, &jail, command).err();
+    assert_eq!(
+        error.map(|error| error.kind()),
+        Some(std::io::ErrorKind::Unsupported)
+    );
+    assert!(!marker.exists());
+    Ok(())
+}
+
+#[test]
 fn default_backend_returns_something() {
     let b = default_backend();
     assert_ne!(b.name().len(), 0);

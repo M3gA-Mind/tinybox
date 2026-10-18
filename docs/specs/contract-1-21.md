@@ -34,9 +34,6 @@ The environment is a safe snapshot of the module's own (`PATH`, `HOME`, `TERM`,
 `LANG`, `LC_ALL`, `LC_CTYPE`, `USER`, `SHELL`, `TMPDIR`) plus the request's
 `env`; nothing else of the module's environment reaches the child.
 
-Contract 1.22 adds optional `NativeJailConfig.resources`, with `cpu_millis`,
-`memory_bytes`, `pids_max`, and `disk_bytes` using the units of
-`tinybox_core::Resources`. Omitting the field preserves the 1.21 behavior.
-Supplying it makes every listed limit a hard preflight requirement; native
-backends that do not declare enforcement refuse before spawning. The native
-jail currently does not implement these resource controls.
+Contract 1.22 adds optional native jail resource limits. A host must bind to a
+module that advertises contract 1.22 before sending that field; see
+[`contract-1-22.md`](contract-1-22.md).

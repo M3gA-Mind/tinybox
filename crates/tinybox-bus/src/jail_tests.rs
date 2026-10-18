@@ -56,7 +56,7 @@ fn native_resource_limits_are_optional_typed_and_round_trip() -> Result<(), serd
     let config: NativeJailConfig = serde_json::from_value(request.clone())?;
     assert_eq!(
         config.resources,
-        Some(NativeResourceLimits {
+        Some(crate::ResourceLimits {
             cpu_millis: 500,
             memory_bytes: 1_048_576,
             pids_max: 32,

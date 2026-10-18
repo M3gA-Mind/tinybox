@@ -75,6 +75,9 @@ pub(super) fn prepare(
     {
         return Err(unavailable());
     }
+    backend
+        .require_resources(&jail)
+        .map_err(|_| unavailable())?;
     match config.enforcement {
         JailEnforcement::Enforced => backend.require(&jail).map_err(|_| unavailable())?,
         JailEnforcement::Declared => {

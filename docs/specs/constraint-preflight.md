@@ -36,6 +36,9 @@ enforcement probe can establish them. `isolation()` reports `None`: the
 Seatbelt launcher is the mechanism used, not proof that the host actually
 isolates the workload.
 
+Resource limits always require `Enforcement::Enforced`, including when a
+caller accepts declared filesystem, network, or subprocess enforcement.
+
 Landlock implements filesystem rules only (no network ABI rules or process
 isolation). A filesystem-only strict jail may spawn, but
 `is_suitable_for_untrusted_code` is false. Both direct and facade Landlock

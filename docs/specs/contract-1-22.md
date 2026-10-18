@@ -1,6 +1,7 @@
 # Contract 1.22: native jail resource limits
 
-Contract 1.22 adds the optional `resources` member to `NativeJailConfig`:
+Contract 1.22 adds the optional `resources` member to `NativeJailConfig`. It
+uses the existing `tinybox_bus::ResourceLimits` type:
 
 ```json
 {
@@ -11,9 +12,15 @@ Contract 1.22 adds the optional `resources` member to `NativeJailConfig`:
 }
 ```
 
-The fields and units match `tinybox_core::Resources`. When omitted, a request
-retains the behavior of contract 1.21. When supplied, all four values must be
-positive and each corresponding hard constraint must pass backend preflight.
-The native jail currently advertises none of these resource controls, so a
-request containing limits is refused before process startup. This contract
-addition does not claim to enforce native CPU, memory, process or disk limits.
+The fields and units match the `Create` request's resource vocabulary. When
+omitted, a request retains the behavior of contract 1.21. When supplied, all
+four values must be positive and each corresponding hard constraint must pass
+backend preflight, including when the request uses declared enforcement for
+filesystem, network, or subprocess policy.
+
+Hosts must bind only to a module advertising contract 1.22 before sending the
+new field. Older modules may ignore unknown JSON fields, so sending it without
+the compatibility check can silently lose the requested limits. The native
+jail currently enforces none of these resource controls; it refuses a request
+containing limits before process startup. This addition does not claim to
+enforce native CPU, memory, process or disk limits.

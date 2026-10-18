@@ -8,6 +8,13 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
+const RESOURCE_CONSTRAINTS: [tinybox_core::Constraint; 4] = [
+    tinybox_core::Constraint::Cpu,
+    tinybox_core::Constraint::Memory,
+    tinybox_core::Constraint::Pids,
+    tinybox_core::Constraint::Disk,
+];
+
 /// Declarative description of a directory jail.
 ///
 /// One `root` (read/write), zero or more extra `read_write` paths, zero or
@@ -209,7 +216,25 @@ pub trait JailBackend: Send + Sync {
             .require(self.name(), &jail.constraints())
     }
 
-    /// Spawn `cmd` under the jail described by `jail`. Backends own how the
+    /// Require full enforcement for every resource limit present on a jail.
+    ///
+    /// Resource limits are hard requirements even when the caller accepts
+    /// declared filesystem, network, or subprocess enforcement.
+    ///
+    /// # Errors
+    /// Returns a typed refusal if any requested resource constraint is not
+    /// fully enforced.
+    fn require_resources(&self, jail: &Jail) -> tinybox_core::Result<()> {
+        if jail.resources.is_some() {
+            self.constraint_support()
+                .require(self.name(), &RESOURCE_CONSTRAINTS)?;
+        }
+        Ok(())
+    }
+
+    /// Spawn `cmd` under the jail described by `jail`. Callers must run
+    /// [`JailBackend::require_resources`] before calling this method when
+    /// `jail.resources` is present. Backends own how the
     /// jail is materialized (Landlock ruleset, sandbox-exec wrapper,
     /// `AppContainer` profile + restricted token).
     ///
@@ -220,6 +245,8 @@ pub trait JailBackend: Send + Sync {
 
     /// Spawn with module-owned stdin, stdout, and stderr pipes.
     /// Wrapping providers must apply these pipes to their actual launcher.
+    /// Callers must run [`JailBackend::require_resources`] first when
+    /// `jail.resources` is present.
     /// # Errors
     /// Returns the provider's confinement or native startup error.
     fn spawn_captured(&self, jail: &Jail, mut cmd: Command) -> std::io::Result<Child> {
