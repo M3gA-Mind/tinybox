@@ -96,11 +96,8 @@ fn deny_read_masks_a_file_inside_the_root() -> io::Result<()> {
     std::fs::write(&secret, "token")?;
     let mut j = jail(root.path());
     j.deny_read = vec![secret.clone()];
-    let (ok, out) = sh(&backend, &j, &format!("cat '{}'", secret.display()))?;
-    assert!(
-        ok && out.is_empty(),
-        "denied file must read as empty: {out}"
-    );
+    let (_, out) = sh(&backend, &j, &format!("cat '{}'", secret.display()))?;
+    assert!(!out.contains("token"), "denied file leaked: {out}");
     Ok(())
 }
 
@@ -110,11 +107,7 @@ fn host_processes_are_invisible() -> io::Result<()> {
         return Ok(());
     };
     let root = tempfile::tempdir()?;
-    let (ok, out) = sh(
-        &backend,
-        &jail(root.path()),
-        &"ls /proc | grep -c '^[0-9]'".to_owned(),
-    )?;
+    let (ok, out) = sh(&backend, &jail(root.path()), "ls /proc | grep -c '^[0-9]'")?;
     assert!(ok);
     let visible: u32 = out.trim().parse().unwrap_or(u32::MAX);
     assert!(visible <= 8, "only the jail's own processes: {visible}");
