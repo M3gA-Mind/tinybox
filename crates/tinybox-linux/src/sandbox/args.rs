@@ -1,11 +1,14 @@
 //! Building the `bwrap` command line, and the cgroup wrapper around it.
 //!
-//! Pure functions, as with the Docker backend: what a sandbox binds, unshares,
-//! and limits *is* the security boundary, so every one of those decisions
-//! should be a value a test can assert on rather than something that only
-//! happens at runtime.
+//! Command construction, as with the Docker backend: what a sandbox binds,
+//! unshares, and limits *is* the security boundary, so every one of those
+//! decisions should be a value a test can assert on rather than something that
+//! only happens at runtime. Runtime capability probes are kept separate from
+//! the pure argument builders.
 
 use std::path::Path;
+use std::process::Command;
+use std::sync::OnceLock;
 
 use tinybox_core::{BoxSpec, Error, ExecRequest, Resources, Result, WorkspaceSource};
 
@@ -80,7 +83,7 @@ pub(super) fn exec(spec: &BoxSpec, request: &ExecRequest, limits: bool) -> Resul
     }
 
     let mut argv = if limits {
-        cgroup_prefix(&spec.resources)
+        cgroup_prefix(&spec.resources, systemd_supports_expand_environment())
     } else {
         Vec::new()
     };
@@ -95,15 +98,11 @@ pub(super) fn exec(spec: &BoxSpec, request: &ExecRequest, limits: bool) -> Resul
 /// also why limits are opt-in: a machine with no systemd user session cannot
 /// provide them, and a sandbox that accepted a memory cap it could not apply
 /// would be claiming something untrue.
-fn cgroup_prefix(resources: &Resources) -> Vec<String> {
-    vec![
+fn cgroup_prefix(resources: &Resources, supports_expand_environment: bool) -> Vec<String> {
+    let mut argv = vec![
         "systemd-run".to_owned(),
         "--user".to_owned(),
         "--scope".to_owned(),
-        // The shell receives the command as an argument, but systemd expands
-        // `${VAR}` references in that argument before the shell can interpret
-        // its own quoting. Keep arbitrary user commands byte-for-byte intact.
-        "--expand-environment=no".to_owned(),
         // Without this, systemd narrates every scope it creates onto stderr and
         // the noise ends up interleaved with the command's own output.
         "--quiet".to_owned(),
@@ -124,7 +123,37 @@ fn cgroup_prefix(resources: &Resources) -> Vec<String> {
         "--property".to_owned(),
         format!("TasksMax={}", resources.pids_max),
         "--".to_owned(),
-    ]
+    ];
+    if supports_expand_environment {
+        // The shell receives the command as an argument, but newer systemd
+        // releases expand `${VAR}` references before the shell can interpret
+        // its own quoting. Keep arbitrary user commands byte-for-byte intact.
+        // This option was added in v254; older releases do not expand scope
+        // command arguments by default, so omitting it preserves compatibility.
+        argv.splice(3..3, ["--expand-environment=no".to_owned()]);
+    }
+    argv
+}
+
+/// Whether `systemd-run` accepts the scope environment-expansion switch.
+///
+/// The option was added in systemd v254, while older releases deliberately
+/// preserve scope arguments without expansion. Feature-detect it so limits
+/// remain available on those older releases.
+fn systemd_supports_expand_environment() -> bool {
+    static SUPPORTS_FLAG: OnceLock<bool> = OnceLock::new();
+    *SUPPORTS_FLAG.get_or_init(|| {
+        Command::new("systemd-run")
+            .arg("--help")
+            .output()
+            .is_ok_and(|output| {
+                output.status.success()
+                    && (output.stdout.windows(b"--expand-environment".len())
+                        .any(|window| window == b"--expand-environment")
+                        || output.stderr.windows(b"--expand-environment".len())
+                            .any(|window| window == b"--expand-environment"))
+            })
+    })
 }
 
 /// The `bwrap` invocation itself.
