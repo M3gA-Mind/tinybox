@@ -150,11 +150,7 @@ impl Sandbox for NamespaceSandbox {
                 .host
                 .run(&ExecRequest::new(["systemd-run", "--help"]).with_env("LC_ALL", "C"))
                 .await?;
-            args::parse_expand_environment_help(
-                probe.succeeded(),
-                &probe.stdout,
-                &probe.stderr,
-            )?
+            args::parse_expand_environment_help(probe.succeeded(), &probe.stdout, &probe.stderr)?
         } else {
             false
         };

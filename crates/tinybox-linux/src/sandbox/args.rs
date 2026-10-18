@@ -140,7 +140,11 @@ pub(super) fn cgroup_prefix(
     argv
 }
 
-pub(super) fn parse_expand_environment_help(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<bool> {
+pub(super) fn parse_expand_environment_help(
+    success: bool,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<bool> {
     if !success {
         return Err(Error::Unsupported {
             sandbox: NAME.to_owned(),

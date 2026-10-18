@@ -376,8 +376,7 @@ fn systemd_scope_environment_flag_is_added_only_when_supported() {
 #[test]
 fn systemd_environment_flag_probe_distinguishes_legacy_and_fails_closed() {
     assert!(!args::parse_expand_environment_help(true, b"--help", b"").unwrap());
-    assert!(args::parse_expand_environment_help(true, b"--expand-environment=BOOL", b"")
-        .unwrap());
+    assert!(args::parse_expand_environment_help(true, b"--expand-environment=BOOL", b"").unwrap());
     assert_eq!(
         args::parse_expand_environment_help(false, b"--expand-environment=BOOL", b""),
         Err(Error::Unsupported {
@@ -390,8 +389,8 @@ fn systemd_environment_flag_probe_distinguishes_legacy_and_fails_closed() {
 #[tokio::test]
 async fn failed_systemd_option_probe_refuses_without_launching_workload() -> Result<()> {
     let host = Arc::new(FailedProbeHost::default());
-    let sandbox = NamespaceSandbox::new(host.clone(), Arc::new(MemoryStore::new()))
-        .with_cgroup_limits();
+    let sandbox =
+        NamespaceSandbox::new(host.clone(), Arc::new(MemoryStore::new())).with_cgroup_limits();
     let info = sandbox.create(&spec()?).await?;
 
     let error = sandbox
