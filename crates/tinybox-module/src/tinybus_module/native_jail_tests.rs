@@ -206,7 +206,7 @@ fn declared_enforcement_rejects_each_unsupported_requested_constraint()
 // `prepare` refuses every native jail off Unix before reading any path.
 #[cfg(unix)]
 #[test]
-fn denials_are_canonicalized_and_refused_where_a_backend_cannot_keep_them()
+fn denials_preserve_prospective_roots_and_refuse_unenforceable_overlaps()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let home = tempfile::tempdir()?;
     let root = home.path().join("project");
@@ -231,20 +231,24 @@ fn denials_are_canonicalized_and_refused_where_a_backend_cannot_keep_them()
         path(&home.path().join(".aws")),
     ];
 
-    // Outside every grant: any backend keeps it; the absent path is dropped.
+    // Outside every grant: retain absent roots so a later-created credential
+    // store remains denied by the backend.
     for name in ["fixture", "seatbelt"] {
         let jail = prepare(&root, &config, &command, &backend(name))?;
-        assert_eq!(
-            jail.deny_read,
-            vec![secrets.canonicalize()?, token.canonicalize()?]
-        );
+        assert_eq!(jail.deny_read.len(), 3);
+        assert!(jail.deny_read.contains(&secrets.canonicalize()?));
+        assert!(jail.deny_read.contains(&token.canonicalize()?));
+        assert!(jail.deny_read.contains(&home.path().join(".aws")));
     }
 
     // Inside a read grant: only a backend that subtracts from grants keeps it.
     config.read_only = vec![path(home.path())];
     assert!(prepare(&root, &config, &command, &backend("fixture")).is_err());
     let jail = prepare(&root, &config, &command, &backend("seatbelt"))?;
-    assert_eq!(jail.deny_read.len(), 2);
+    assert_eq!(jail.deny_read.len(), 3);
+    config.deny_read = vec![path(&home.path().join(".future-credential-store"))];
+    assert!(prepare(&root, &config, &command, &backend("fixture")).is_err());
+    assert!(prepare(&root, &config, &command, &backend("seatbelt")).is_ok());
     config.read_only.clear();
 
     // A denial over the root or a writable grant is refused everywhere.
