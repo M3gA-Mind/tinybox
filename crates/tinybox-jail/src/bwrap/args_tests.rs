@@ -3,7 +3,9 @@
 use super::*;
 
 fn strings(argv: &[OsString]) -> Vec<String> {
-    argv.iter().map(|a| a.to_string_lossy().into_owned()).collect()
+    argv.iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect()
 }
 
 fn has_triple(argv: &[String], kind: &str, path: &Path) -> bool {
@@ -64,7 +66,11 @@ fn ungranted_paths_and_whole_etc_are_never_mounted() -> io::Result<()> {
     let root = tempfile::tempdir()?;
     let other = tempfile::tempdir()?;
     let argv = strings(&jail_args(&jail(root.path()), None)?);
-    assert!(!argv.iter().any(|a| *a == other.path().display().to_string()));
+    assert!(
+        !argv
+            .iter()
+            .any(|a| *a == other.path().display().to_string())
+    );
     assert!(!has_triple(&argv, "--ro-bind-try", Path::new("/etc")));
     assert!(!has_triple(&argv, "--ro-bind", Path::new("/")));
     Ok(())
@@ -118,9 +124,17 @@ fn chdir_defaults_to_root_and_honours_the_command_cwd() -> io::Result<()> {
     let sub = root.path().join("sub");
     let default = strings(&jail_args(&jail(root.path()), None)?);
     let root_s = root.path().display().to_string();
-    assert!(default.windows(2).any(|w| w[0] == "--chdir" && w[1] == root_s));
+    assert!(
+        default
+            .windows(2)
+            .any(|w| w[0] == "--chdir" && w[1] == root_s)
+    );
     let custom = strings(&jail_args(&jail(root.path()), Some(&sub))?);
     let sub_s = sub.display().to_string();
-    assert!(custom.windows(2).any(|w| w[0] == "--chdir" && w[1] == sub_s));
+    assert!(
+        custom
+            .windows(2)
+            .any(|w| w[0] == "--chdir" && w[1] == sub_s)
+    );
     Ok(())
 }

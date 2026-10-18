@@ -134,11 +134,7 @@ pub(super) fn jail_args(jail: &Jail, cwd: Option<&Path>) -> io::Result<Vec<OsStr
             }
             Ok(_) => push(
                 &mut argv,
-                &[
-                    "--ro-bind".as_ref(),
-                    "/dev/null".as_ref(),
-                    deny.as_os_str(),
-                ],
+                &["--ro-bind".as_ref(), "/dev/null".as_ref(), deny.as_os_str()],
             ),
             // Nothing there to hide.
             Err(_) => {}
@@ -147,10 +143,7 @@ pub(super) fn jail_args(jail: &Jail, cwd: Option<&Path>) -> io::Result<Vec<OsStr
 
     push(
         &mut argv,
-        &[
-            "--chdir".as_ref(),
-            cwd.unwrap_or(&jail.root).as_os_str(),
-        ],
+        &["--chdir".as_ref(), cwd.unwrap_or(&jail.root).as_os_str()],
     );
     Ok(argv)
 }

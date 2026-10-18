@@ -1381,6 +1381,7 @@ dependencies = [
  "tempfile",
  "tinybox-bus",
  "tinybox-core",
+ "tinybox-linux",
  "windows-sys 0.61.2",
 ]
 

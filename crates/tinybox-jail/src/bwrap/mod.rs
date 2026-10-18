@@ -108,10 +108,7 @@ fn probe(program: &std::path::Path) -> bool {
         .stderr(std::process::Stdio::null())
         .status()
         .is_ok_and(|status| status.success());
-    log::debug!(
-        "[cwd_jail:bwrap] probe of {} -> {ok}",
-        program.display()
-    );
+    log::debug!("[cwd_jail:bwrap] probe of {} -> {ok}", program.display());
     ok
 }
 
@@ -121,7 +118,10 @@ fn prepare_command(program: &std::path::Path, jail: &Jail, cmd: &Command) -> io:
     // Fail closed for environment authority: nothing is inherited.
     wrapper.env_clear();
     wrapper.args(args::jail_args(jail, cmd.get_current_dir())?);
-    wrapper.arg("--").arg(cmd.get_program()).args(cmd.get_args());
+    wrapper
+        .arg("--")
+        .arg(cmd.get_program())
+        .args(cmd.get_args());
     for (key, value) in cmd.get_envs() {
         if let Some(value) = value {
             wrapper.env(key, value);

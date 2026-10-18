@@ -3,9 +3,9 @@
 #![cfg(target_os = "linux")]
 
 use std::io;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
-use tinybox_jail::{BubblewrapBackend, Jail, JailBackend, spawn_required_with};
+use tinybox_jail::{BubblewrapBackend, Jail, JailBackend, spawn_captured_with};
 
 fn backend() -> Option<BubblewrapBackend> {
     let backend = BubblewrapBackend::new();
@@ -16,13 +16,20 @@ fn backend() -> Option<BubblewrapBackend> {
     Some(backend)
 }
 
+/// Hard preflight, then spawn with owned pipes (the wrapper cannot see the
+/// original command's stdio) and collect the output.
+fn run(backend: &BubblewrapBackend, jail: &Jail, cmd: Command) -> io::Result<std::process::Output> {
+    backend
+        .require(jail)
+        .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error))?;
+    spawn_captured_with(backend, jail, cmd)?.wait_with_output()
+}
+
 /// Runs `script` under `sh -c` inside `jail`; returns (success, stdout).
 fn sh(backend: &BubblewrapBackend, jail: &Jail, script: &str) -> io::Result<(bool, String)> {
     let mut cmd = Command::new("/bin/sh");
     cmd.arg("-c").arg(script);
-    let child = spawn_required_with(backend, jail, cmd)?;
-    let _ = Stdio::null();
-    let out = child.wait_with_output()?;
+    let out = run(backend, jail, cmd)?;
     Ok((
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -90,7 +97,10 @@ fn deny_read_masks_a_file_inside_the_root() -> io::Result<()> {
     let mut j = jail(root.path());
     j.deny_read = vec![secret.clone()];
     let (ok, out) = sh(&backend, &j, &format!("cat '{}'", secret.display()))?;
-    assert!(ok && out.is_empty(), "denied file must read as empty: {out}");
+    assert!(
+        ok && out.is_empty(),
+        "denied file must read as empty: {out}"
+    );
     Ok(())
 }
 
@@ -129,15 +139,16 @@ fn network_namespace_is_empty_when_denied() -> io::Result<()> {
 }
 
 #[test]
-fn child_dies_with_its_wrapper_environment_cleared() -> io::Result<()> {
+fn parent_environment_is_not_inherited() -> io::Result<()> {
     let Some(backend) = backend() else {
         return Ok(());
     };
     let root = tempfile::tempdir()?;
     let mut cmd = Command::new("/bin/sh");
-    cmd.arg("-c").arg("printf %s \"$A-${HOME:-none}\"").env("A", "1");
-    let child = spawn_required_with(&backend, &jail(root.path()), cmd)?;
-    let out = child.wait_with_output()?;
+    cmd.arg("-c")
+        .arg("printf %s \"$A-${HOME:-none}\"")
+        .env("A", "1");
+    let out = run(&backend, &jail(root.path()), cmd)?;
     assert_eq!(String::from_utf8_lossy(&out.stdout), "1-none");
     Ok(())
 }
