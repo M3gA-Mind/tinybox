@@ -302,7 +302,7 @@ async fn limits_wrap_the_sandbox_in_a_systemd_scope() -> Result<()> {
     assert!(has(&argv, "--scope"));
     assert_eq!(
         has(&argv, "--expand-environment=no"),
-        args::systemd_supports_expand_environment()
+        args::systemd_supports_expand_environment()?
     );
     let properties = argv
         .iter()
@@ -347,6 +347,20 @@ fn systemd_scope_environment_flag_is_added_only_when_supported() {
     let legacy = args::cgroup_prefix(&resources, false);
     assert!(!has(&legacy, "--expand-environment=no"));
     assert_eq!(legacy.get(3).map(String::as_str), Some("--quiet"));
+}
+
+#[test]
+fn systemd_environment_flag_probe_distinguishes_legacy_and_fails_closed() {
+    assert!(!args::parse_expand_environment_help(true, b"--help", b"").unwrap());
+    assert!(args::parse_expand_environment_help(true, b"--expand-environment=BOOL", b"")
+        .unwrap());
+    assert_eq!(
+        args::parse_expand_environment_help(false, b"--expand-environment=BOOL", b""),
+        Err(Error::Unsupported {
+            sandbox: NAME.to_owned(),
+            capability: tinybox_core::Capability::ResourceLimits,
+        })
+    );
 }
 
 #[tokio::test]

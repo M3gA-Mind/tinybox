@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
 
-use tinybox_core::{BoxSpec, Error, ExecRequest, Resources, Result, WorkspaceSource};
+use tinybox_core::{BoxSpec, Capability, Error, ExecRequest, Resources, Result, WorkspaceSource};
 
 use super::NAME;
 
@@ -83,7 +83,7 @@ pub(super) fn exec(spec: &BoxSpec, request: &ExecRequest, limits: bool) -> Resul
     }
 
     let mut argv = if limits {
-        cgroup_prefix(&spec.resources, systemd_supports_expand_environment())
+        cgroup_prefix(&spec.resources, systemd_supports_expand_environment()?)
     } else {
         Vec::new()
     };
@@ -143,24 +143,35 @@ pub(super) fn cgroup_prefix(
 /// The option was added in systemd v254, while older releases deliberately
 /// preserve scope arguments without expansion. Feature-detect it so limits
 /// remain available on those older releases.
-pub(super) fn systemd_supports_expand_environment() -> bool {
-    static SUPPORTS_FLAG: OnceLock<bool> = OnceLock::new();
-    *SUPPORTS_FLAG.get_or_init(|| {
-        Command::new("systemd-run")
+pub(super) fn systemd_supports_expand_environment() -> Result<bool> {
+    static SUPPORTS_FLAG: OnceLock<std::result::Result<bool, ()>> = OnceLock::new();
+    match *SUPPORTS_FLAG.get_or_init(|| {
+        let output = Command::new("systemd-run")
             .arg("--help")
             .output()
-            .is_ok_and(|output| {
-                output.status.success()
-                    && (output
-                        .stdout
-                        .windows(b"--expand-environment".len())
-                        .any(|window| window == b"--expand-environment")
-                        || output
-                            .stderr
-                            .windows(b"--expand-environment".len())
-                            .any(|window| window == b"--expand-environment"))
-            })
-    })
+            .map_err(|_| ())?;
+        parse_expand_environment_help(output.status.success(), &output.stdout, &output.stderr)
+            .map_err(|_| ())
+    }) {
+        Ok(supported) => Ok(supported),
+        Err(()) => Err(Error::Unsupported {
+            sandbox: NAME.to_owned(),
+            capability: Capability::ResourceLimits,
+        }),
+    }
+}
+
+pub(super) fn parse_expand_environment_help(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<bool> {
+    if !success {
+        return Err(Error::Unsupported {
+            sandbox: NAME.to_owned(),
+            capability: Capability::ResourceLimits,
+        });
+    }
+    const FLAG: &[u8] = b"--expand-environment";
+    Ok([stdout, stderr]
+        .into_iter()
+        .any(|stream| stream.windows(FLAG.len()).any(|window| window == FLAG)))
 }
 
 /// The `bwrap` invocation itself.
