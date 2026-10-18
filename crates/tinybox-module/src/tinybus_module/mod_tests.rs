@@ -485,7 +485,9 @@ async fn an_unknown_method_is_rejected() -> tinybus::Result<()> {
 
     let client = Connection::connect(bus.connect().await?).await?;
     let proxy = client.proxy(INTERFACE, OBJECT_PATH, INTERFACE)?;
-    let result = proxy.call::<String>("AnalyzeCommand", ("echo hello",)).await;
+    let result = proxy
+        .call::<String>("AnalyzeCommand", ("echo hello",))
+        .await;
 
     assert!(
         result.is_err(),
