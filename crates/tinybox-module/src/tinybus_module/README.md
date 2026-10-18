@@ -65,11 +65,15 @@ facts, and module-owned forwarding. Version 1.3 adds `JailStatus`, which reports
 the detected native directory-jail backend's availability, process isolation,
 and filesystem, network, and subprocess enforcement. The module probes the
 backend; the host applies its own policy to the returned facts. This version is independent of
-package/artifact releases. Version 1.4 adds `AnalyzeCommand`, returning generic
-classification, executor/environment signals, expansion, background execution,
-and literal tokens. Hosts continue to own path resolution, allowlists, approval
-gates, and policy-disabled behavior. `AnalyzeShell` retains its arity and result.
-Describe remains unchanged.
+package/artifact releases. Version 1.4 adds `AnalyzeCommand`, which returns
+command classes and executor and environment-guard signals alongside parsed
+shell structure. The command classes, executor list, environment guard, and
+`AnalyzeShell.hidden_execution` are deprecated policy vocabulary: command
+policy belongs to TinySecurity. Contract 1.22 is the final one-release
+deprecation window for these fields and method. The next contract major removes
+them; hosts must bind to the matching major and must not rely on this legacy
+vocabulary for policy. Generic shell structure scanning and shell transport
+helpers remain. Describe remains unchanged.
 
 Version 1.5 adds bounded file transfer for mounted directory workspaces.
 Reserve `FileRead(resource)` or `FileWrite(resource)` before opening a transfer.
