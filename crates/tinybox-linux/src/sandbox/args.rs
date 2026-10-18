@@ -100,6 +100,10 @@ fn cgroup_prefix(resources: &Resources) -> Vec<String> {
         "systemd-run".to_owned(),
         "--user".to_owned(),
         "--scope".to_owned(),
+        // The shell receives the command as an argument, but systemd expands
+        // `${VAR}` references in that argument before the shell can interpret
+        // its own quoting. Keep arbitrary user commands byte-for-byte intact.
+        "--expand-environment=no".to_owned(),
         // Without this, systemd narrates every scope it creates onto stderr and
         // the noise ends up interleaved with the command's own output.
         "--quiet".to_owned(),

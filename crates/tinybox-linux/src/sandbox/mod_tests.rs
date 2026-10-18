@@ -300,6 +300,7 @@ async fn limits_wrap_the_sandbox_in_a_systemd_scope() -> Result<()> {
     assert_eq!(argv.first().map(String::as_str), Some("systemd-run"));
     assert!(has(&argv, "--user"));
     assert!(has(&argv, "--scope"));
+    assert!(has(&argv, "--expand-environment=no"));
     let properties = argv
         .iter()
         .enumerate()
