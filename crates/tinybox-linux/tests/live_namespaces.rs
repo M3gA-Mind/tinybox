@@ -421,11 +421,7 @@ async fn live_systemd_scope_preserves_shell_dollar_literals() -> Result<()> {
     let output = sandbox
         .exec(
             &info.id,
-            &ExecRequest::new([
-                "/bin/sh",
-                "-c",
-                "printf '%s\\n' '${cgroup_path}'",
-            ]),
+            &ExecRequest::new(["/bin/sh", "-c", "printf '%s\\n' '${cgroup_path}'"]),
         )
         .await?;
     sandbox.destroy(&info.id).await?;

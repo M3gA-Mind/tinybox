@@ -98,7 +98,10 @@ pub(super) fn exec(spec: &BoxSpec, request: &ExecRequest, limits: bool) -> Resul
 /// also why limits are opt-in: a machine with no systemd user session cannot
 /// provide them, and a sandbox that accepted a memory cap it could not apply
 /// would be claiming something untrue.
-pub(super) fn cgroup_prefix(resources: &Resources, supports_expand_environment: bool) -> Vec<String> {
+pub(super) fn cgroup_prefix(
+    resources: &Resources,
+    supports_expand_environment: bool,
+) -> Vec<String> {
     let mut argv = vec![
         "systemd-run".to_owned(),
         "--user".to_owned(),
@@ -148,9 +151,13 @@ pub(super) fn systemd_supports_expand_environment() -> bool {
             .output()
             .is_ok_and(|output| {
                 output.status.success()
-                    && (output.stdout.windows(b"--expand-environment".len())
+                    && (output
+                        .stdout
+                        .windows(b"--expand-environment".len())
                         .any(|window| window == b"--expand-environment")
-                        || output.stderr.windows(b"--expand-environment".len())
+                        || output
+                            .stderr
+                            .windows(b"--expand-environment".len())
                             .any(|window| window == b"--expand-environment"))
             })
     })

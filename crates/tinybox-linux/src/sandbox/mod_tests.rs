@@ -339,7 +339,10 @@ fn systemd_scope_environment_flag_is_added_only_when_supported() {
 
     let supported = args::cgroup_prefix(&resources, true);
     assert!(has(&supported, "--expand-environment=no"));
-    assert_eq!(supported.get(3).map(String::as_str), Some("--expand-environment=no"));
+    assert_eq!(
+        supported.get(3).map(String::as_str),
+        Some("--expand-environment=no")
+    );
 
     let legacy = args::cgroup_prefix(&resources, false);
     assert!(!has(&legacy, "--expand-environment=no"));
