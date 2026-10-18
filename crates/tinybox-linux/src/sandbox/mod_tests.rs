@@ -374,7 +374,7 @@ fn systemd_scope_environment_flag_is_added_only_when_supported() {
 }
 
 #[test]
-fn systemd_environment_flag_probe_distinguishes_legacy_and_fails_closed() -> Result<()> {
+fn systemd_environment_flag_probe_distinguishes_legacy_and_fails_closed() {
     assert_eq!(
         args::parse_expand_environment_help(true, b"--help", b""),
         Ok(false)
@@ -390,7 +390,6 @@ fn systemd_environment_flag_probe_distinguishes_legacy_and_fails_closed() -> Res
             capability: tinybox_core::Capability::ResourceLimits,
         })
     );
-    Ok(())
 }
 
 #[tokio::test]
