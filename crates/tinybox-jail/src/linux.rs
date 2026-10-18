@@ -140,11 +140,7 @@ impl JailBackend for LandlockBackend {
 fn validate_baseline_denials(jail: &Jail, baseline: &[std::path::PathBuf]) -> io::Result<()> {
     let mut grants = Vec::new();
     for grant in baseline {
-        match grant.canonicalize() {
-            Ok(canonical) => grants.push(canonical),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
+        grants.push(crate::registry::canonicalize_missing(grant)?);
     }
     for denied in &jail.deny_read {
         if grants

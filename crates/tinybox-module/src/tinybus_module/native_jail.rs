@@ -69,9 +69,8 @@ pub(super) fn prepare(
     if !backend.carves_denials() {
         let mut implicit_grants = Vec::new();
         for grant in backend.implicit_grants() {
-            match grant.canonicalize() {
+            match canonicalize_prospective(&grant) {
                 Ok(canonical) => implicit_grants.push(canonical),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(_) => return Err(unavailable()),
             }
         }
