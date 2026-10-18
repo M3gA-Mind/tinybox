@@ -123,6 +123,8 @@ pub(super) fn jail_args(jail: &Jail, cwd: Option<&Path>) -> io::Result<Vec<OsStr
     let grants: Vec<&PathBuf> = std::iter::once(&jail.root)
         .chain(&jail.read_write)
         .chain(&jail.read_only)
+        // A grant swallowed by a denial is not mounted, so it cannot be carved.
+        .filter(|grant| !denied_above(grant))
         .collect();
     for deny in &jail.deny_read {
         if !under_any(deny, &grants) {
