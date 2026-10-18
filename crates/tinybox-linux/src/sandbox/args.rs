@@ -21,6 +21,7 @@ pub const WORKSPACE_MOUNT: &str = "/workspace";
 /// user can read; this exposes the system's programs and libraries and nothing
 /// else.
 const USR: &str = "/usr";
+const SYSTEMD_EXPAND_ENVIRONMENT_FLAG: &[u8] = b"--expand-environment";
 
 /// Files a normal command expects to exist.
 ///
@@ -151,10 +152,11 @@ pub(super) fn parse_expand_environment_help(
             capability: Capability::ResourceLimits,
         });
     }
-    const FLAG: &[u8] = b"--expand-environment";
-    Ok([stdout, stderr]
-        .into_iter()
-        .any(|stream| stream.windows(FLAG.len()).any(|window| window == FLAG)))
+    Ok([stdout, stderr].into_iter().any(|stream| {
+        stream
+            .windows(SYSTEMD_EXPAND_ENVIRONMENT_FLAG.len())
+            .any(|window| window == SYSTEMD_EXPAND_ENVIRONMENT_FLAG)
+    }))
 }
 
 /// The `bwrap` invocation itself.
