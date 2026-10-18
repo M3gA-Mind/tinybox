@@ -182,7 +182,8 @@ fn facade_refuses_denials_nested_under_backend_implicit_grants() -> std::io::Res
     }
 
     let root = tempfile::tempdir()?;
-    let baseline = root.path().join("implicit-baseline");
+    let baseline_root = tempfile::tempdir()?;
+    let baseline = baseline_root.path().join("implicit-baseline");
     std::fs::create_dir(&baseline)?;
     let marker = root.path().join("executed");
     let mut jail = Jail::new(root.path(), "baseline-denial");
