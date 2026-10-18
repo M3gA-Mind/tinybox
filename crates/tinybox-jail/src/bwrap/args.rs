@@ -1,8 +1,16 @@
 //! Pure construction of the `bwrap` command line for a [`Jail`].
 //!
 //! What a sandbox binds and unshares *is* the security boundary, so every
-//! decision here is a value a test can assert on. The only I/O is `lstat`-style
-//! metadata reads (is a baseline path a symlink, is a denied path a directory).
+//! decision here is a value a test can assert on. The only I/O is metadata
+//! reads (is a baseline path a symlink, is a denied path a directory).
+//!
+//! # Mount model
+//!
+//! Baseline system paths and the jail's grants are one list of mounts. They are
+//! emitted shallowest path first so a nested read-only grant lands on top of
+//! the writable grant that contains it (a later mount wins). `deny_read` is
+//! applied to that whole list, baseline included: a mount at or below a denied
+//! path is dropped, and a denied path inside a surviving mount is masked.
 
 use std::ffi::OsString;
 use std::io;
@@ -29,124 +37,206 @@ pub(super) const ETC_ENTRIES: &[&str] = &[
     "/etc/ld.so.cache",
     "/etc/ld.so.conf",
     "/etc/ld.so.conf.d",
+    "/etc/alternatives",
     "/etc/ssl",
     "/etc/ca-certificates",
     "/etc/pki",
 ];
 
-fn push(argv: &mut Vec<OsString>, parts: &[&std::ffi::OsStr]) {
-    argv.extend(parts.iter().map(|part| (*part).to_os_string()));
+/// Switches that depend on the `bwrap` build or the host, decided by the probe.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Options {
+    /// Pass `--disable-userns` (bubblewrap 0.8+): the child cannot create
+    /// nested user namespaces, which closes the usual escape route to a
+    /// capability-bearing namespace.
+    pub disable_userns: bool,
 }
 
-fn flag(argv: &mut Vec<OsString>, name: &str) {
-    argv.push(name.into());
+#[derive(Debug)]
+enum Kind {
+    /// A symlink created inside the sandbox root (merged-`/usr` layouts).
+    Symlink(PathBuf),
+    Bind {
+        writable: bool,
+    },
 }
 
-fn bind(argv: &mut Vec<OsString>, kind: &str, path: &Path) {
-    push(argv, &[kind.as_ref(), path.as_os_str(), path.as_os_str()]);
+#[derive(Debug)]
+struct Mount {
+    path: PathBuf,
+    kind: Kind,
 }
 
-/// Whether `path` lies at or below any of `roots`.
-fn under_any(path: &Path, roots: &[&PathBuf]) -> bool {
-    roots.iter().any(|root| path.starts_with(root))
+impl Mount {
+    fn is_bind(&self) -> bool {
+        matches!(self.kind, Kind::Bind { .. })
+    }
+
+    fn writable(&self) -> bool {
+        matches!(self.kind, Kind::Bind { writable: true })
+    }
+
+    /// Sort key: shallow first; at equal depth a read-only mount goes last so
+    /// it wins over a writable one on the same path.
+    fn order(&self) -> (usize, bool) {
+        (self.path.components().count(), !self.writable())
+    }
+}
+
+fn os(s: &str) -> OsString {
+    s.into()
+}
+
+/// Whether a grant would replace one of the sandbox's private mounts.
+fn replaces_private_mount(path: &Path) -> bool {
+    path == Path::new("/")
+        || path == Path::new("/tmp")
+        || path.starts_with("/proc")
+        || path.starts_with("/dev")
 }
 
 /// Everything after the `bwrap` program name and before the `--` separator.
 ///
 /// - new user, pid, ipc, uts (and cgroup where supported) namespaces; a new
-///   network namespace unless `jail.allow_net`;
+///   network namespace unless `jail.allow_net`; optionally `--disable-userns`;
 /// - `--die-with-parent` and `--new-session`;
-/// - a private `/proc`, `/dev` and `/tmp`, then the baseline system paths;
-/// - the root and `read_write` grants writable, `read_only` grants read-only,
-///   each at its own host path;
-/// - `deny_read` paths subtracted last: a path equal to or above a grant drops
-///   that grant, a path inside a grant is masked (`--tmpfs` for a directory,
-///   `/dev/null` for a file). Anything outside every grant is simply never
-///   mounted.
+/// - a private `/proc`, `/dev` and `/tmp`;
+/// - baseline system paths and the root, `read_write` and `read_only` grants,
+///   shallowest first (see the module docs);
+/// - `deny_read` subtracted last.
 ///
 /// # Errors
-/// Returns `NotFound` when the root or a `read_write` grant does not exist.
-pub(super) fn jail_args(jail: &Jail, cwd: Option<&Path>) -> io::Result<Vec<OsString>> {
-    let mut argv: Vec<OsString> = Vec::new();
-    for name in [
-        "--unshare-user",
-        "--unshare-pid",
-        "--unshare-ipc",
-        "--unshare-uts",
-        "--unshare-cgroup-try",
-    ] {
-        flag(&mut argv, name);
-    }
-    if !jail.allow_net {
-        flag(&mut argv, "--unshare-net");
-    }
-    flag(&mut argv, "--die-with-parent");
-    flag(&mut argv, "--new-session");
-
-    // `/tmp` first: a grant living under it (a scratch root) is bound on top.
-    push(&mut argv, &["--proc".as_ref(), "/proc".as_ref()]);
-    push(&mut argv, &["--dev".as_ref(), "/dev".as_ref()]);
-    push(&mut argv, &["--tmpfs".as_ref(), "/tmp".as_ref()]);
-
+/// - `NotFound` when the root or a `read_write` grant does not exist;
+/// - `InvalidInput` for a grant that is `/`, `/tmp`, or at or under `/proc` or
+///   `/dev` (it would replace a private mount and expose the host's), and for
+///   a `deny_read` entry nested more than one level inside a writable mount
+///   (the child could rename a parent directory and walk around the mask).
+pub(super) fn jail_args(
+    jail: &Jail,
+    cwd: Option<&Path>,
+    options: Options,
+) -> io::Result<Vec<OsString>> {
+    let mut mounts: Vec<Mount> = Vec::new();
     for dir in SYSTEM_DIRS {
-        let path = Path::new(dir);
-        match std::fs::read_link(path) {
-            Ok(target) => push(
-                &mut argv,
-                &["--symlink".as_ref(), target.as_os_str(), path.as_os_str()],
-            ),
-            Err(_) => bind(&mut argv, "--ro-bind-try", path),
-        }
+        let path = PathBuf::from(dir);
+        mounts.push(match std::fs::read_link(&path) {
+            Ok(target) => Mount {
+                path,
+                kind: Kind::Symlink(target),
+            },
+            Err(_) => Mount {
+                path,
+                kind: Kind::Bind { writable: false },
+            },
+        });
     }
     for entry in ETC_ENTRIES {
-        bind(&mut argv, "--ro-bind-try", Path::new(entry));
+        mounts.push(Mount {
+            path: PathBuf::from(entry),
+            kind: Kind::Bind { writable: false },
+        });
     }
 
-    let denied: Vec<&PathBuf> = jail.deny_read.iter().collect();
-    let denied_above = |path: &Path| denied.iter().any(|deny| path.starts_with(deny));
-
-    for path in jail.read_only.iter().filter(|p| !denied_above(p)) {
-        bind(&mut argv, "--ro-bind-try", path);
-    }
-    for path in std::iter::once(&jail.root).chain(&jail.read_write) {
-        if !path.exists() {
+    for (path, writable) in std::iter::once((&jail.root, true))
+        .chain(jail.read_write.iter().map(|p| (p, true)))
+        .chain(jail.read_only.iter().map(|p| (p, false)))
+    {
+        if replaces_private_mount(path) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "jail grant {} would replace a private sandbox mount (/, /tmp, /proc, /dev)",
+                    path.display()
+                ),
+            ));
+        }
+        if writable && !path.exists() {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 format!("jail path {} does not exist", path.display()),
             ));
         }
-        if !denied_above(path) {
-            bind(&mut argv, "--bind", path);
+        mounts.push(Mount {
+            path: path.clone(),
+            kind: Kind::Bind { writable },
+        });
+    }
+
+    // A mount at or below a denied path is never mounted.
+    mounts.retain(|m| !jail.deny_read.iter().any(|deny| m.path.starts_with(deny)));
+    mounts.sort_by_key(Mount::order);
+
+    let mut argv: Vec<OsString> = ["--unshare-user", "--unshare-pid", "--unshare-ipc"]
+        .into_iter()
+        .map(os)
+        .collect();
+    argv.extend(["--unshare-uts", "--unshare-cgroup-try"].map(os));
+    if !jail.allow_net {
+        argv.push(os("--unshare-net"));
+    }
+    if options.disable_userns {
+        argv.push(os("--disable-userns"));
+    }
+    argv.extend(["--die-with-parent", "--new-session"].map(os));
+
+    // `/tmp` first: a grant living under it (a scratch root) is bound on top.
+    for (flag, path) in [("--proc", "/proc"), ("--dev", "/dev"), ("--tmpfs", "/tmp")] {
+        argv.extend([os(flag), os(path)]);
+    }
+
+    for mount in &mounts {
+        match &mount.kind {
+            Kind::Symlink(target) => argv.extend([
+                os("--symlink"),
+                target.clone().into_os_string(),
+                mount.path.clone().into_os_string(),
+            ]),
+            Kind::Bind { writable } => argv.extend([
+                os(if *writable { "--bind" } else { "--ro-bind-try" }),
+                mount.path.clone().into_os_string(),
+                mount.path.clone().into_os_string(),
+            ]),
         }
     }
 
-    let grants: Vec<&PathBuf> = std::iter::once(&jail.root)
-        .chain(&jail.read_write)
-        .chain(&jail.read_only)
-        // A grant swallowed by a denial is not mounted, so it cannot be carved.
-        .filter(|grant| !denied_above(grant))
-        .collect();
     for deny in &jail.deny_read {
-        if !under_any(deny, &grants) {
+        // The deepest surviving mount that holds the denied path decides.
+        let Some(holder) = mounts
+            .iter()
+            .filter(|m| m.is_bind() && deny.starts_with(&m.path))
+            .max_by_key(|m| m.path.components().count())
+        else {
             continue;
+        };
+        if holder.writable() && deny.parent() != Some(holder.path.as_path()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "deny_read {} is nested inside writable grant {}; the child could rename \
+                     a parent directory and bypass the mask (deny a direct child of the grant, \
+                     or make the grant read-only)",
+                    deny.display(),
+                    holder.path.display()
+                ),
+            ));
         }
         match std::fs::metadata(deny) {
-            Ok(meta) if meta.is_dir() => {
-                push(&mut argv, &["--tmpfs".as_ref(), deny.as_os_str()]);
-            }
-            Ok(_) => push(
-                &mut argv,
-                &["--ro-bind".as_ref(), "/dev/null".as_ref(), deny.as_os_str()],
-            ),
-            // Nothing there to hide.
+            Ok(meta) if meta.is_dir() => argv.extend([os("--tmpfs"), deny.clone().into_os_string()]),
+            Ok(_) => argv.extend([
+                os("--ro-bind"),
+                os("/dev/null"),
+                deny.clone().into_os_string(),
+            ]),
+            // Nothing there to hide. A path created after spawn is NOT
+            // protected; deny paths must exist when the jail starts.
             Err(_) => {}
         }
     }
 
-    push(
-        &mut argv,
-        &["--chdir".as_ref(), cwd.unwrap_or(&jail.root).as_os_str()],
-    );
+    argv.extend([
+        os("--chdir"),
+        cwd.unwrap_or(&jail.root).as_os_str().to_os_string(),
+    ]);
     Ok(argv)
 }
 
