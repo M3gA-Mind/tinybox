@@ -374,9 +374,15 @@ fn systemd_scope_environment_flag_is_added_only_when_supported() {
 }
 
 #[test]
-fn systemd_environment_flag_probe_distinguishes_legacy_and_fails_closed() {
-    assert!(!args::parse_expand_environment_help(true, b"--help", b"").unwrap());
-    assert!(args::parse_expand_environment_help(true, b"--expand-environment=BOOL", b"").unwrap());
+fn systemd_environment_flag_probe_distinguishes_legacy_and_fails_closed() -> Result<()> {
+    assert_eq!(
+        args::parse_expand_environment_help(true, b"--help", b""),
+        Ok(false)
+    );
+    assert_eq!(
+        args::parse_expand_environment_help(true, b"--expand-environment=BOOL", b""),
+        Ok(true)
+    );
     assert_eq!(
         args::parse_expand_environment_help(false, b"--expand-environment=BOOL", b""),
         Err(Error::Unsupported {
@@ -384,6 +390,7 @@ fn systemd_environment_flag_probe_distinguishes_legacy_and_fails_closed() {
             capability: tinybox_core::Capability::ResourceLimits,
         })
     );
+    Ok(())
 }
 
 #[tokio::test]
@@ -393,17 +400,16 @@ async fn failed_systemd_option_probe_refuses_without_launching_workload() -> Res
         NamespaceSandbox::new(host.clone(), Arc::new(MemoryStore::new())).with_cgroup_limits();
     let info = sandbox.create(&spec()?).await?;
 
-    let error = sandbox
+    let result = sandbox
         .exec(&info.id, &ExecRequest::new(["echo", "must not run"]))
-        .await
-        .unwrap_err();
+        .await;
 
     assert_eq!(
-        error,
-        Error::Unsupported {
+        result,
+        Err(Error::Unsupported {
             sandbox: NAME.to_owned(),
             capability: Capability::ResourceLimits,
-        }
+        })
     );
     assert_eq!(
         *host.seen.lock().unwrap_or_else(PoisonError::into_inner),
