@@ -250,6 +250,9 @@ fn denials_preserve_prospective_roots_and_refuse_unenforceable_overlaps()
     assert!(prepare(&root, &config, &command, &backend("fixture")).is_err());
     assert!(prepare(&root, &config, &command, &backend("seatbelt")).is_ok());
     config.read_only.clear();
+    config.deny_read = vec![path(&root.join(".future-credential-store"))];
+    assert!(prepare(&root, &config, &command, &backend("fixture")).is_err());
+    assert!(prepare(&root, &config, &command, &backend("seatbelt")).is_ok());
 
     // A denial over the root or a writable grant is refused everywhere.
     for denied in [path(home.path()), path(&root)] {
