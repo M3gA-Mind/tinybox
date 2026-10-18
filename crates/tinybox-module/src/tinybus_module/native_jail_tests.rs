@@ -285,6 +285,8 @@ fn landlock_keeps_a_denied_path_unreadable_when_created_after_preflight()
     let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
     command.cwd = Some(root.clone());
     let mut native = config();
+    native.allow_net = true;
+    native.allow_subprocess = true;
     native.deny_read = vec![
         home.path()
             .join(".future-store")
