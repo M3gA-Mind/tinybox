@@ -57,9 +57,11 @@ pub(super) fn prepare(
     // A denial over the root or a writable grant would leave the command no
     // workspace; that is a host error, not a weaker jail.
     if jail.deny_read.iter().any(|denied| {
-        std::iter::once(&jail.root)
-            .chain(&jail.read_write)
-            .any(|granted| granted.starts_with(denied))
+        jail.root.starts_with(denied)
+            || jail
+                .read_write
+                .iter()
+                .any(|granted| overlaps(denied, granted))
     }) {
         return Err(invalid());
     }
@@ -69,8 +71,7 @@ pub(super) fn prepare(
         && jail.deny_read.iter().any(|denied| {
             std::iter::once(&jail.root)
                 .chain(&jail.read_only)
-                .chain(&jail.read_write)
-                .any(|granted| denied.starts_with(granted))
+                .any(|granted| overlaps(denied, granted))
         })
     {
         return Err(unavailable());
@@ -111,9 +112,8 @@ fn grants(paths: &[String]) -> Result<Vec<std::path::PathBuf>> {
         })
         .collect()
 }
-/// Denied paths, validated like grants; a path that does not exist cannot be
-/// read and is dropped, an existing one is canonicalized so the backend matches
-/// the real location behind a symlink.
+/// Keep lexical prospective paths as well as canonical aliases for existing
+/// ancestors. Missing credential stores must remain denied if created later.
 fn denials(paths: &[String]) -> Result<Vec<std::path::PathBuf>> {
     let mut denied = Vec::new();
     for value in paths {
@@ -127,13 +127,63 @@ fn denials(paths: &[String]) -> Result<Vec<std::path::PathBuf>> {
         {
             return Err(invalid());
         }
-        match path.canonicalize() {
-            Ok(path) => denied.push(path),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        denied.push(path.to_path_buf());
+        match canonicalize_prospective(path) {
+            Ok(canonical) if canonical != path => denied.push(canonical),
+            Ok(_) => {}
             Err(_) => return Err(invalid()),
         }
     }
+    denied.sort();
+    denied.dedup();
     Ok(denied)
+}
+
+fn canonicalize_prospective(path: &Path) -> std::io::Result<std::path::PathBuf> {
+    match path.canonicalize() {
+        Ok(canonical) => return Ok(canonical),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let mut ancestor = path;
+    let mut suffix = Vec::new();
+    loop {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                // Resolve existing aliases for prospective descendants, but
+                // refuse dangling links and loops that have no stable target.
+                let mut canonical = ancestor.canonicalize()?;
+                for component in suffix.iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok(canonical);
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        let name = ancestor.file_name().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "no existing path ancestor")
+        })?;
+        suffix.push(name.to_os_string());
+        ancestor = ancestor.parent().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "no existing path ancestor")
+        })?;
+        match ancestor.canonicalize() {
+            Ok(mut canonical) => {
+                for component in suffix.iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok(canonical);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn overlaps(left: &Path, right: &Path) -> bool {
+    left.starts_with(right) || right.starts_with(left)
 }
 fn invalid() -> Error {
     super::resources::failure(
@@ -152,8 +202,8 @@ pub(super) fn collector(
     root: &Path,
     config: &NativeJailConfig,
     command: &tinybox_core::ExecRequest,
+    backend: Arc<dyn JailBackend>,
 ) -> Result<Arc<tinybox_host::JailLocalHost>> {
-    let backend = tinybox_jail::default_backend();
     let jail = prepare(root, config, command, backend.as_ref())?;
     tinybox_host::JailLocalHost::with_backend(jail, backend, tinybox_bus::MAX_OUTPUT_BYTES)
         .map(Arc::new)

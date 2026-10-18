@@ -252,11 +252,12 @@ partial constraints; `Declared` requires an explicit host decision using
 `JailStatus`. Neither mode admits the no-op or unavailable backend. A caller
 requiring the process-isolation security floor sets `require_process_isolation`.
 The host retains approval policy and chooses the credential paths; it sends them
-as `deny_read` (1.20), which the module canonicalizes (dropping paths that do not
-exist) and refuses when a denial covers the root or a writable grant, or lies
-inside the root or a grant on a backend that cannot subtract from grants.
-Seatbelt denies them last in its profile; Landlock and `AppContainer` never grant
-them.
+as `deny_read` (1.20). The module retains prospective paths and resolves them
+against current filesystem aliases both at preflight and immediately before
+spawn. It refuses a denial covering the root or a writable grant, and refuses
+canonicalized overlap with the root or a grant when the backend cannot subtract
+denials. Seatbelt denies them last in its profile; Landlock and `AppContainer`
+deny paths outside their allow-lists.
 
 The jail owns a separate native collector for each execution. Output replay,
 Cancel, ReleaseOutput, Close and Shutdown use the same retained cleanup barriers

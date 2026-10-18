@@ -238,7 +238,7 @@ fn declared_enforcement_rejects_each_unsupported_requested_constraint()
 // `prepare` refuses every native jail off Unix before reading any path.
 #[cfg(unix)]
 #[test]
-fn denials_are_canonicalized_and_refused_where_a_backend_cannot_keep_them()
+fn denials_preserve_prospective_roots_and_refuse_unenforceable_overlaps()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let home = tempfile::tempdir()?;
     let root = home.path().join("project");
@@ -262,22 +262,37 @@ fn denials_are_canonicalized_and_refused_where_a_backend_cannot_keep_them()
         path(&token),
         path(&home.path().join(".aws")),
     ];
+    let canonical_home = home.path().canonicalize()?;
+    let mut expected = vec![
+        secrets.clone(),
+        token.clone(),
+        home.path().join(".aws"),
+        canonical_home.join(".ssh"),
+        canonical_home.join(".netrc"),
+        canonical_home.join(".aws"),
+    ];
+    expected.sort();
+    expected.dedup();
 
-    // Outside every grant: any backend keeps it; the absent path is dropped.
+    // Outside every grant: retain absent roots so a later-created credential
+    // store remains denied by the backend.
     for name in ["fixture", "seatbelt"] {
         let jail = prepare(&root, &config, &command, &backend(name))?;
-        assert_eq!(
-            jail.deny_read,
-            vec![secrets.canonicalize()?, token.canonicalize()?]
-        );
+        assert_eq!(jail.deny_read, expected);
     }
 
     // Inside a read grant: only a backend that subtracts from grants keeps it.
     config.read_only = vec![path(home.path())];
     assert!(prepare(&root, &config, &command, &backend("fixture")).is_err());
     let jail = prepare(&root, &config, &command, &backend("seatbelt"))?;
-    assert_eq!(jail.deny_read.len(), 2);
+    assert_eq!(jail.deny_read, expected);
+    config.deny_read = vec![path(&home.path().join(".future-credential-store"))];
+    assert!(prepare(&root, &config, &command, &backend("fixture")).is_err());
+    assert!(prepare(&root, &config, &command, &backend("seatbelt")).is_ok());
     config.read_only.clear();
+    config.deny_read = vec![path(&root.join(".future-credential-store"))];
+    assert!(prepare(&root, &config, &command, &backend("fixture")).is_err());
+    assert!(prepare(&root, &config, &command, &backend("seatbelt")).is_ok());
 
     // A denial over the root or a writable grant is refused everywhere.
     for denied in [path(home.path()), path(&root)] {
@@ -294,5 +309,137 @@ fn denials_are_canonicalized_and_refused_where_a_backend_cannot_keep_them()
         config.deny_read = vec![bad.into()];
         assert!(prepare(&root, &config, &command, &backend("seatbelt")).is_err());
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn prospective_denials_resolve_existing_aliases_and_refuse_dangling_symlinks()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir()?;
+    let link = dir.path().join("credential-link");
+    symlink(dir.path().join("future-target"), &link)?;
+    assert!(denials(&[link.to_string_lossy().into_owned()]).is_err());
+
+    let target = dir.path().join("real-home");
+    std::fs::create_dir(&target)?;
+    let alias = dir.path().join("home-alias");
+    symlink(&target, &alias)?;
+    let prospective = alias.join(".ssh");
+    let roots = denials(&[prospective.to_string_lossy().into_owned()])?;
+    let mut expected = vec![prospective.clone(), target.canonicalize()?.join(".ssh")];
+    expected.sort();
+    expected.dedup();
+    assert!(roots.contains(&prospective));
+    assert_eq!(roots, expected);
+
+    let first_loop = dir.path().join("loop-a");
+    let second_loop = dir.path().join("loop-b");
+    symlink(&second_loop, &first_loop)?;
+    symlink(&first_loop, &second_loop)?;
+    assert!(denials(&[first_loop.to_string_lossy().into_owned()]).is_err());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn collector_builds_a_host_from_a_valid_native_jail()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.path().to_path_buf());
+
+    let backend: Arc<dyn JailBackend> = Arc::new(Backend {
+        available: true,
+        suitable: true,
+        name: "fixture",
+        full: true,
+    });
+    let _collector = collector(root.path(), &config(), &command, backend)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn spawn_rejects_a_prospective_denial_symlinked_into_the_jail()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::symlink;
+    let home = tempfile::tempdir()?;
+    let root = home.path().join("project");
+    std::fs::create_dir(&root)?;
+    let credential = root.join("credential");
+    std::fs::write(&credential, b"secret")?;
+    let prospective = home.path().join(".credential-store");
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.clone());
+    let backend = Backend {
+        available: true,
+        suitable: false,
+        name: "fixture",
+        full: true,
+    };
+    let mut native = config();
+    native.allow_net = true;
+    native.allow_subprocess = true;
+    native.deny_read = vec![path_string(&prospective)];
+    let jail = prepare(&root, &native, &command, &backend)?;
+
+    symlink(&credential, &prospective)?;
+    let error =
+        tinybox_jail::spawn_captured_with(&backend, &jail, std::process::Command::new("true"))
+            .err();
+    assert_eq!(
+        error.map(|error| error.kind()),
+        Some(std::io::ErrorKind::InvalidInput)
+    );
+    Ok(())
+}
+
+fn path_string(path: &std::path::Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn landlock_keeps_a_denied_path_unreadable_when_created_after_preflight()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let backend = tinybox_jail::LandlockBackend::new();
+    if !backend.is_available() {
+        eprintln!("skipped: Landlock is not supported by this kernel");
+        return Ok(());
+    }
+    let home = tempfile::tempdir()?;
+    let root = home.path().join("project");
+    std::fs::create_dir(&root)?;
+    let credential = home.path().join(".future-store").join("token");
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.clone());
+    let mut native = config();
+    native.allow_net = true;
+    native.allow_subprocess = true;
+    native.deny_read = vec![
+        home.path()
+            .join(".future-store")
+            .to_string_lossy()
+            .into_owned(),
+    ];
+    let mut uncarvable_root_child = native.clone();
+    uncarvable_root_child.deny_read =
+        vec![root.join(".future-store").to_string_lossy().into_owned()];
+    assert!(prepare(&root, &uncarvable_root_child, &command, &backend).is_err());
+    let jail = prepare(&root, &native, &command, &backend)?;
+    assert!(jail.deny_read.contains(&home.path().join(".future-store")));
+
+    std::fs::create_dir(home.path().join(".future-store"))?;
+    std::fs::write(&credential, "secret")?;
+    let mut child = backend.spawn(&jail, {
+        let mut shell = std::process::Command::new("/bin/sh");
+        shell
+            .arg("-c")
+            .arg(format!("cat '{}' >/dev/null", credential.display()));
+        shell
+    })?;
+    assert!(!child.wait()?.success());
     Ok(())
 }
