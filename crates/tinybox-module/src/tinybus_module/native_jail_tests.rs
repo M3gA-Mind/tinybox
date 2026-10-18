@@ -382,6 +382,37 @@ fn allow_list_backend_rejects_denials_over_implicit_baseline_grants()
 
 #[cfg(unix)]
 #[test]
+fn allow_list_preflight_keeps_future_implicit_grants_protected()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path().join("workspace");
+    let future_baseline = temp.path().join("baseline-created-before-spawn");
+    std::fs::create_dir(&root)?;
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.clone());
+    let mut config = config();
+    config.deny_read = vec![
+        future_baseline
+            .join("future-credential")
+            .to_string_lossy()
+            .into_owned(),
+    ];
+    let backend = BaselineBackend(
+        Backend {
+            available: true,
+            suitable: false,
+            name: "allow-list",
+            full: true,
+        },
+        future_baseline,
+    );
+
+    assert!(prepare(&root, &config, &command, &backend).is_err());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn prospective_denials_resolve_existing_aliases_and_refuse_dangling_symlinks()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::os::unix::fs::symlink;

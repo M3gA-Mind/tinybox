@@ -273,6 +273,23 @@ fn raw_landlock_spawn_refuses_a_deny_root_that_overlaps_implicit_baseline_access
     Ok(())
 }
 
+#[test]
+fn landlock_validation_keeps_future_baseline_roots_protected() -> io::Result<()> {
+    let root = tempfile::tempdir()?;
+    let future_baseline = root.path().join("baseline-created-after-preflight");
+    let mut jail = jail_for(root.path());
+    jail.deny_read
+        .push(future_baseline.join("future-credential").to_path_buf());
+
+    let result = validate_baseline_denials(&jail, &[future_baseline]);
+    assert_eq!(
+        result.err().map(|error| error.kind()),
+        Some(io::ErrorKind::InvalidInput),
+        "a prospective baseline grant could appear before Landlock opens its rules"
+    );
+    Ok(())
+}
+
 /// File grants must enforce fully without granting their parent directory.
 #[test]
 fn individual_file_grants_preserve_read_only_and_read_write_access() -> io::Result<()> {
