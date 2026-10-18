@@ -45,7 +45,7 @@ pub(super) fn prepare(
     // A denial over the root or a writable grant would leave the command no
     // workspace; that is a host error, not a weaker jail.
     if jail.deny_read.iter().any(|denied| {
-        denied != &jail.root && jail.root.starts_with(denied)
+        jail.root.starts_with(denied)
             || jail.read_write.iter().any(|granted| overlaps(denied, granted))
     }) {
         return Err(invalid());
