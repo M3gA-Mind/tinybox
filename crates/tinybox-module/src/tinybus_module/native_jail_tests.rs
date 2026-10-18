@@ -317,6 +317,10 @@ fn landlock_keeps_a_denied_path_unreadable_when_created_after_preflight()
             .to_string_lossy()
             .into_owned(),
     ];
+    let mut uncarvable_root_child = native.clone();
+    uncarvable_root_child.deny_read =
+        vec![root.join(".future-store").to_string_lossy().into_owned()];
+    assert!(prepare(&root, &uncarvable_root_child, &command, &backend).is_err());
     let jail = prepare(&root, &native, &command, &backend)?;
     assert!(jail.deny_read.contains(&home.path().join(".future-store")));
 
