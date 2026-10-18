@@ -1,7 +1,7 @@
 //! Legacy command-analysis vocabulary retained for contract 1.x compatibility.
 //!
 //! Since contract 1.22, hosts must not use these values to make execution-policy,
-//! authorization, allowlist, approval, or protected-path decisions. TinySecurity
+//! authorization, allowlist, approval, or protected-path decisions. `TinySecurity`
 //! owns command policy. Contract 2.0 removes this vocabulary; generic shell
 //! transport and structural scanning remain separate capabilities.
 
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// Legacy command categories retained for contract 1.x wire compatibility.
 ///
 /// Deprecated since contract 1.22: this category is not an authorization or
-/// permission result and must not drive host policy. TinySecurity owns command
+/// permission result and must not drive host policy. `TinySecurity` owns command
 /// policy. Contract 2.0 removes this type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -30,7 +30,7 @@ pub enum CommandClass {
 /// Legacy analysis fields for one live shell segment, retained for contract 1.x.
 ///
 /// Deprecated since contract 1.22. These fields are scanner output, not inputs
-/// for host authorization or execution policy; TinySecurity owns command policy.
+/// for host authorization or execution policy; `TinySecurity` owns command policy.
 /// Contract 2.0 removes this type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandSegment {
@@ -58,7 +58,7 @@ pub struct CommandSegment {
 ///
 /// Deprecated since contract 1.22. Hosts must not use this output for
 /// allowlists, approvals, protected-path checks, authorization, or other
-/// execution policy. TinySecurity owns command policy. Contract 2.0 removes
+/// execution policy. `TinySecurity` owns command policy. Contract 2.0 removes
 /// this type; generic shell scanning remains available independently.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 // These independent syntax facts may coexist; they are not mutually exclusive states.
