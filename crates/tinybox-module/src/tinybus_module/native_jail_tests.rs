@@ -272,6 +272,18 @@ fn denials_preserve_prospective_roots_and_refuse_unenforceable_overlaps()
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn prospective_denials_fail_closed_for_dangling_symlinks()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir()?;
+    let link = dir.path().join("credential-link");
+    symlink(dir.path().join("future-target"), &link)?;
+    assert!(denials(&[link.to_string_lossy().into_owned()]).is_err());
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn landlock_keeps_a_denied_path_unreadable_when_created_after_preflight()

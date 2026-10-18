@@ -57,8 +57,8 @@ pub(super) fn prepare(
     // can keep the denial; outside them nothing grants the path anyway.
     if !backend.carves_denials()
         && jail.deny_read.iter().any(|denied| {
-            jail.read_only
-                .iter()
+            std::iter::once(&jail.root)
+                .chain(&jail.read_only)
                 .any(|granted| overlaps(denied, granted))
         })
     {
@@ -133,6 +133,15 @@ fn canonicalize_prospective(path: &Path) -> std::io::Result<std::path::PathBuf> 
     let mut ancestor = path;
     let mut suffix = Vec::new();
     loop {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                // A dangling link has no stable canonical target to protect.
+                return Err(std::io::Error::other("credential denial crosses a symlink"));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
         let name = ancestor.file_name().ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, "no existing path ancestor")
         })?;
