@@ -56,7 +56,7 @@ The interface is `ai.tinyhumans.tinybox.Box` at
 | KillStdio | ProcessRef | () |
 | StdioStatus | ProcessRef | StdioStatus |
 
-Capabilities advertises contract version 1.21; 1.0 denotes the original
+Capabilities advertises contract version 1.22; 1.0 denotes the original
 discovery-only surface. Hosts require equal majors and a module minor at least
 as new as their vocabulary, using `tinybox_bus::is_compatible`. Version 1.1
 added reserved resource/process ownership and terminal shutdown; 1.2 adds host
@@ -408,3 +408,10 @@ backpressures the child instead of dropping bytes. `CloseStdin` delivers end of
 input, `StdioStatus` reports `running` and the exit, and `KillStdio` doubles as
 release (an unknown process is already gone). See
 `docs/specs/contract-1-21.md`.
+
+Version 1.22 adds optional `NativeJailConfig::resources` with the same CPU,
+memory, process and writable-disk fields as box resources. Omitted limits retain
+the previous request behavior. Supplying limits makes each one a hard
+preflight requirement; native jail backends currently declare those controls
+unsupported and refuse before starting the child. See
+`docs/specs/contract-1-22.md`.

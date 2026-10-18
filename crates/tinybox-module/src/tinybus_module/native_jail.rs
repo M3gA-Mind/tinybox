@@ -42,6 +42,18 @@ pub(super) fn prepare(
     jail.read_only = grants(&config.read_only)?;
     jail.read_write = grants(&config.read_write)?;
     jail.deny_read = denials(&config.deny_read)?;
+    jail.resources = config.resources.map(|limits| tinybox_core::Resources {
+        cpu_millis: limits.cpu_millis,
+        memory_bytes: limits.memory_bytes,
+        pids_max: limits.pids_max,
+        disk_bytes: limits.disk_bytes,
+    });
+    if jail
+        .resources
+        .is_some_and(|limits| limits.validate().is_err())
+    {
+        return Err(invalid());
+    }
     // A denial over the root or a writable grant would leave the command no
     // workspace; that is a host error, not a weaker jail.
     if jail.deny_read.iter().any(|denied| {
@@ -63,6 +75,9 @@ pub(super) fn prepare(
     {
         return Err(unavailable());
     }
+    backend
+        .require_resources(&jail)
+        .map_err(|_| unavailable())?;
     match config.enforcement {
         JailEnforcement::Enforced => backend.require(&jail).map_err(|_| unavailable())?,
         JailEnforcement::Declared => {

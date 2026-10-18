@@ -30,6 +30,10 @@ impl JailBackend for Backend {
                 .with(Constraint::Filesystem, Enforcement::Enforced)
                 .with(Constraint::Network, Enforcement::Enforced)
                 .with(Constraint::Subprocess, Enforcement::Enforced)
+                .with(Constraint::Cpu, Enforcement::BestEffort)
+                .with(Constraint::Memory, Enforcement::BestEffort)
+                .with(Constraint::Pids, Enforcement::BestEffort)
+                .with(Constraint::Disk, Enforcement::BestEffort)
         } else {
             ConstraintSupport::NONE.with(Constraint::Filesystem, Enforcement::BestEffort)
         }
@@ -47,7 +51,35 @@ fn config() -> NativeJailConfig {
         enforcement: JailEnforcement::Enforced,
         require_process_isolation: false,
         deny_read: Vec::new(),
+        resources: None,
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn requested_native_resource_limits_are_refused_before_spawn()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.path().into());
+    let backend = Backend {
+        available: true,
+        suitable: false,
+        name: "fixture",
+        full: true,
+    };
+    let mut config = config();
+    config.enforcement = JailEnforcement::Declared;
+    config.resources = Some(tinybox_bus::ResourceLimits {
+        cpu_millis: 500,
+        memory_bytes: 1024 * 1024,
+        pids_max: 32,
+        disk_bytes: 1024 * 1024,
+    });
+    // Declared enforcement accepts best-effort filesystem constraints, but a
+    // resource budget remains a hard requirement and must refuse before spawn.
+    assert!(prepare(root.path(), &config, &command, &backend).is_err());
+    Ok(())
 }
 #[test]
 fn native_grants_reject_relative_parent_null_and_missing_paths() {
