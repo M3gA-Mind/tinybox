@@ -301,6 +301,49 @@ fn prospective_denials_resolve_existing_aliases_and_refuse_dangling_symlinks()
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn spawn_rejects_a_prospective_denial_symlinked_into_the_jail()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::symlink;
+    let home = tempfile::tempdir()?;
+    let root = home.path().join("project");
+    std::fs::create_dir(&root)?;
+    let credential = root.join("credential");
+    std::fs::write(&credential, b"secret")?;
+    let prospective = home.path().join(".credential-store");
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.clone());
+    let backend = Backend {
+        available: true,
+        suitable: false,
+        name: "fixture",
+        full: true,
+    };
+    let mut native = config();
+    native.allow_net = true;
+    native.allow_subprocess = true;
+    native.deny_read = vec![path_string(&prospective)];
+    let jail = prepare(&root, &native, &command, &backend)?;
+
+    symlink(&credential, &prospective)?;
+    let error = tinybox_jail::spawn_captured_with(
+        &backend,
+        &jail,
+        std::process::Command::new("true"),
+    )
+    .err();
+    assert_eq!(
+        error.map(|error| error.kind()),
+        Some(std::io::ErrorKind::InvalidInput)
+    );
+    Ok(())
+}
+
+fn path_string(path: &std::path::Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn landlock_keeps_a_denied_path_unreadable_when_created_after_preflight()
