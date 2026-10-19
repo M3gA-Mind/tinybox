@@ -1311,3 +1311,181 @@ async fn concurrent_preparations_share_a_bounded_admission_budget()
     );
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendants()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use std::{
+        os::unix::fs::FileTypeExt,
+        process::Command,
+        time::Duration,
+    };
+
+    let bus_available = std::env::var("DBUS_SESSION_BUS_ADDRESS")
+        .ok()
+        .and_then(|address| address.strip_prefix("unix:path=").map(str::to_owned))
+        .is_some_and(|path| std::fs::metadata(path).is_ok_and(|metadata| metadata.file_type().is_socket()));
+    let scope_available = Command::new("systemd-run")
+        .args([
+            "--user", "--scope", "--quiet", "--property=MemoryMax=67108864",
+            "--property=MemorySwapMax=0", "--property=OOMPolicy=continue",
+            "--property=CPUQuota=100%", "--property=TasksMax=16", "--", "/bin/true",
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+    let namespaces_available = Command::new("bwrap")
+        .args([
+            "--unshare-user", "--unshare-pid", "--unshare-net", "--ro-bind", "/usr",
+            "/usr", "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib64", "/lib64",
+            "--", "/usr/bin/true",
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+    let available = bus_available && scope_available && namespaces_available;
+    if std::env::var_os("TINYBOX_REQUIRE_NATIVE_RESOURCE_TESTS").is_some() {
+        assert!(available, "required native resource runtime is unavailable");
+    }
+    if !available {
+        eprintln!("skipped: rootless systemd scope and bubblewrap namespaces are unavailable");
+        return Ok(());
+    }
+
+    let root = tempfile::tempdir()?;
+    let pid_file = root.path().join("detached-descendant");
+    let python = "import os,time,sys\nfirst=os.fork()\nif first == 0:\n os.setsid()\n second=os.fork()\n if second == 0:\n  with open(sys.argv[1],'w') as f: f.write(f'{os.getpid()} {os.stat(\"/proc/self/ns/pid\").st_ino}')\n  while True: time.sleep(1)\n os._exit(0)\nos.waitpid(first,0)\nwhile not os.path.exists(sys.argv[1]) or os.path.getsize(sys.argv[1]) == 0: time.sleep(0.01)\nprint('stdout-ready',flush=True)\nprint('stderr-ready',file=sys.stderr,flush=True)\ntime.sleep(600)";
+    let resources = Resources::default();
+    let resource = resources.reserve(ReserveRequest::Resource).await?;
+    resources
+        .create(CreateRequest {
+            resource: resource.clone(),
+            backend: "passthrough".into(),
+            workspace: Workspace::Directory(root.path().display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let process_id = resources
+        .reserve(ReserveRequest::Process(resource.clone()))
+        .await?;
+    let process = ProcessRef {
+        resource: resource.clone(),
+        process: process_id,
+    };
+    resources
+        .start_jailed_exec_with_resources(
+            SpawnRequest {
+                process: process.process.clone(),
+                command: ExecRequest {
+                    resource: resource.clone(),
+                    argv: vec![
+                        "python3".into(),
+                        "-c".into(),
+                        python.into(),
+                        pid_file.display().to_string(),
+                    ],
+                    cwd: Some(root.path().into()),
+                    env: Default::default(),
+                    stdin: None,
+                },
+            },
+            tinybox_bus::NativeJailRequest {
+                jail: tinybox_bus::NativeJailConfig {
+                    read_only: vec![],
+                    read_write: vec![],
+                    allow_net: false,
+                    allow_subprocess: true,
+                    enforcement: tinybox_bus::JailEnforcement::Enforced,
+                    require_process_isolation: true,
+                    deny_read: vec![],
+                    resources: None,
+                },
+                resources: Some(tinybox_bus::NativeJailResourceRequest {
+                    cpu_millis: Some(1000),
+                    memory_bytes: Some(64 * 1024 * 1024),
+                    pids_max: Some(16),
+                    disk_bytes: None,
+                }),
+            },
+        )
+        .await?;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let (detached_pid, namespace_inode) = loop {
+        let batch = resources.read_output(&process, 0).await?;
+        let collect = |stream| {
+            batch
+                .chunks
+                .iter()
+                .filter(|chunk| chunk.stream == stream)
+                .flat_map(|chunk| chunk.bytes.iter().copied())
+                .collect::<Vec<_>>()
+        };
+        let stdout = collect(tinybox_bus::OutputStream::Stdout);
+        let stderr = collect(tinybox_bus::OutputStream::Stderr);
+        let has_stdout = stdout.windows(b"stdout-ready".len()).any(|w| w == b"stdout-ready");
+        let has_stderr = stderr.windows(b"stderr-ready".len()).any(|w| w == b"stderr-ready");
+        if has_stdout && has_stderr && std::fs::metadata(&pid_file).is_ok() {
+            let identity = std::fs::read_to_string(&pid_file)?;
+            let mut identity = identity.split_whitespace();
+            break (
+                identity.next().ok_or("missing detached PID")?.parse::<i32>()?,
+                identity.next().ok_or("missing PID namespace")?.parse::<u64>()?,
+            );
+        }
+        if batch.state != ExecutionState::Running || tokio::time::Instant::now() >= deadline {
+            return Err(format!("native bus exec failed before output: {batch:?}").into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    assert!(
+        process_in_namespace(detached_pid, namespace_inode)?,
+        "fixture descendant was not visible before bus cancellation"
+    );
+    resources.cancel(&process).await?;
+    let cancelled = resources.read_output(&process, 0).await?;
+    assert_eq!(cancelled.state, ExecutionState::Cancelled);
+    assert!(
+        cancelled.chunks.iter().any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stdout)
+            && cancelled.chunks.iter().any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stderr),
+        "cancellation must preserve both output streams"
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while process_in_namespace(detached_pid, namespace_inode)? {
+        if tokio::time::Instant::now() >= deadline {
+            return Err("bus cancellation left a detached namespace process alive".into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    resources.release_output(&process).await?;
+    resources.close(&resource).await?;
+    resources.shutdown().await?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn process_in_namespace(pid: i32, namespace_inode: u64) -> std::io::Result<bool> {
+    for entry in std::fs::read_dir("/proc")? {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_name().to_string_lossy().bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(status) = std::fs::read_to_string(entry.path().join("status")) else { continue };
+        let Ok(namespace) = std::fs::read_link(entry.path().join("ns/pid")) else { continue };
+        let same_pid = status
+            .lines()
+            .find_map(|line| line.strip_prefix("NSpid:"))
+            .and_then(|pids| pids.split_whitespace().last())
+            .and_then(|pid| pid.parse::<i32>().ok())
+            == Some(pid);
+        let same_namespace = namespace
+            .to_string_lossy()
+            .strip_prefix("pid:[")
+            .and_then(|inode| inode.strip_suffix(']'))
+            .and_then(|inode| inode.parse::<u64>().ok())
+            == Some(namespace_inode);
+        if same_pid && same_namespace {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
