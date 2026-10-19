@@ -5,7 +5,10 @@
 //! then confirms the boundary actually holds against a real kernel — this file
 //! pins the intent, that one pins the reality.
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
+};
 
 use async_trait::async_trait;
 use tinybox_core::{
@@ -344,8 +347,7 @@ async fn fractional_cpu_quota_is_not_rounded_down_to_zero() -> Result<()> {
 }
 
 #[test]
-fn native_jail_command_keeps_limits_and_target_environment_after_namespace_setup()
--> Result<()> {
+fn native_jail_command_keeps_limits_and_target_environment_after_namespace_setup() -> Result<()> {
     let root = tempfile::tempdir()?;
     let cwd = root.path().join("work");
     std::fs::create_dir(&cwd)?;
@@ -370,7 +372,10 @@ fn native_jail_command_keeps_limits_and_target_environment_after_namespace_setup
     assert!(has(&argv, "--property=MemoryMax=67108864"));
     assert!(has(&argv, "--property=MemorySwapMax=0"));
     assert!(has(&argv, "--property=TasksMax=16"));
-    assert!(has(&argv, "--property=RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK"));
+    assert!(has(
+        &argv,
+        "--property=RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK"
+    ));
     assert!(has(&argv, "--unshare-cgroup"));
     assert!(has(&argv, "--unshare-net"));
     assert!(has(&argv, "--tmpfs"));
@@ -379,8 +384,15 @@ fn native_jail_command_keeps_limits_and_target_environment_after_namespace_setup
     assert!(has(&argv, "--ro-bind"));
     assert!(has(&argv, grant.to_str().ok_or("grant path is not UTF-8")?));
     assert!(has(&argv, "BASH_ENV"));
-    let systemd_end = argv.iter().position(|part| part == "--").ok_or("missing systemd delimiter")?;
-    assert!(!argv[..systemd_end].iter().any(|part| part.contains("BASH_ENV")));
+    let systemd_end = argv
+        .iter()
+        .position(|part| part == "--")
+        .ok_or("missing systemd delimiter")?;
+    assert!(
+        !argv[..systemd_end]
+            .iter()
+            .any(|part| part.contains("BASH_ENV"))
+    );
     Ok(())
 }
 
