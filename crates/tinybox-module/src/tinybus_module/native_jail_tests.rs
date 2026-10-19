@@ -169,7 +169,6 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
             "--property=MemoryMax=67108864",
             "--property=MemorySwapMax=0",
             "--property=TasksMax=16",
-            "--property=RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK",
             "--",
             "/bin/true",
         ])
