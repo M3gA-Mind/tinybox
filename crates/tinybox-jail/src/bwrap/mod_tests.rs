@@ -1,20 +1,32 @@
 //! Tests for the bubblewrap backend that need no working `bwrap`.
 
 use super::*;
+use std::os::unix::fs::PermissionsExt as _;
 
-fn unavailable() -> BubblewrapBackend {
-    BubblewrapBackend { program: None }
+fn fake_bwrap() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-bwrap.sh")
 }
 
 fn available() -> BubblewrapBackend {
-    BubblewrapBackend {
-        program: Some(PathBuf::from("/nonexistent/bwrap")),
+    BubblewrapBackend::unverified("/nonexistent/bwrap", true)
+}
+
+fn verified(program: &str) -> Verified {
+    Verified {
+        program: program.into(),
+        disable_userns: true,
     }
+}
+
+fn argv_of(cmd: &Command) -> Vec<String> {
+    cmd.get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect()
 }
 
 #[test]
 fn unavailable_backend_claims_nothing_and_refuses_to_spawn() {
-    let backend = unavailable();
+    let backend = BubblewrapBackend { verified: None };
     assert_eq!(backend.name(), "bubblewrap");
     assert!(!backend.is_available());
     assert_eq!(backend.isolation(), IsolationLevel::None);
@@ -27,13 +39,27 @@ fn unavailable_backend_claims_nothing_and_refuses_to_spawn() {
 }
 
 #[test]
-fn available_backend_reports_kernel_isolation_and_is_untrusted_safe() {
+fn kernel_isolation_needs_disable_userns_support() {
+    let hardened = BubblewrapBackend::unverified("/x", true);
+    assert_eq!(hardened.isolation(), IsolationLevel::Kernel);
+    assert!(hardened.is_suitable_for_untrusted_code());
+    assert!(hardened.carves_denials());
+    let old = BubblewrapBackend::unverified("/x", false);
+    assert_eq!(old.isolation(), IsolationLevel::None);
+    assert!(!old.is_suitable_for_untrusted_code());
+    assert!(old.is_available(), "it still confines the filesystem");
+}
+
+#[test]
+fn a_shared_network_namespace_is_not_suitable_for_untrusted_code() {
     let backend = available();
-    assert_eq!(backend.isolation(), IsolationLevel::Kernel);
-    assert!(backend.is_suitable_for_untrusted_code());
-    assert!(backend.carves_denials());
-    let jail = Jail::new(".", "t").deny_net();
-    assert!(backend.require(&jail).is_ok());
+    let closed = Jail::new(".", "t").deny_net();
+    let open = Jail::new(".", "t");
+    assert!(backend.is_suitable_for_untrusted_jail(&closed));
+    assert_eq!(backend.isolation_for(&closed), IsolationLevel::Kernel);
+    assert!(!backend.is_suitable_for_untrusted_jail(&open));
+    assert_eq!(backend.isolation_for(&open), IsolationLevel::Process);
+    assert!(backend.require(&open).is_ok(), "preflight is unchanged");
 }
 
 #[test]
@@ -49,59 +75,69 @@ fn subprocess_denial_is_refused_because_it_is_not_enforced() {
 }
 
 #[test]
-fn wrapped_command_keeps_program_args_and_explicit_env() -> io::Result<()> {
+fn caller_env_never_reaches_the_host_bwrap_process() -> io::Result<()> {
     let root = tempfile::tempdir()?;
     let mut cmd = Command::new("node");
-    cmd.arg("server.js").env("A", "1").env_remove("B");
+    cmd.arg("server.js")
+        .env("LD_PRELOAD", "/evil.so")
+        .env("A", "1")
+        .env_remove("B");
     let wrapper = prepare_command(
-        std::path::Path::new("/usr/bin/bwrap"),
+        &verified("/usr/bin/bwrap"),
         &Jail::new(root.path(), "t"),
         &cmd,
     )?;
-    let argv: Vec<_> = wrapper
-        .get_args()
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
+    assert_eq!(wrapper.get_envs().count(), 0, "bwrap itself gets no env");
+    let argv = argv_of(&wrapper);
+    let clear = argv.iter().position(|a| a == "--clearenv");
     let sep = argv.iter().position(|a| a == "--");
+    assert!(clear.is_some() && clear < sep);
+    for (k, v) in [("LD_PRELOAD", "/evil.so"), ("A", "1")] {
+        assert!(
+            argv.windows(3)
+                .any(|w| w[0] == "--setenv" && w[1] == k && w[2] == v),
+            "{k} must be passed as --setenv"
+        );
+    }
+    assert!(!argv.iter().any(|a| a == "B"));
     assert_eq!(
         sep.map(|i| &argv[i + 1..]),
         Some(&["node".to_owned(), "server.js".to_owned()][..])
     );
-    let envs: Vec<_> = wrapper.get_envs().collect();
-    assert_eq!(envs.len(), 1);
     Ok(())
 }
 
-fn fake_bwrap() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-bwrap.sh")
+#[test]
+fn trust_requires_root_ownership_and_no_group_or_other_write() -> io::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let bin = dir.path().join("bwrap");
+    std::fs::write(&bin, "#!/bin/sh\n")?;
+    let is_root = std::fs::metadata(&bin)?.uid() == 0;
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))?;
+    assert_eq!(is_trusted_binary(&bin), is_root, "owner must be root");
+    for mode in [0o775, 0o757, 0o777] {
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(mode))?;
+        assert!(!is_trusted_binary(&bin), "{mode:o} is writable by others");
+    }
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o644))?;
+    assert!(!is_trusted_binary(&bin), "must be executable");
+    assert!(!is_trusted_binary(&dir.path().join("missing")));
+    Ok(())
 }
 
 #[test]
-fn a_working_bwrap_makes_the_backend_available() {
-    let backend = BubblewrapBackend::with_program(fake_bwrap());
-    assert!(backend.is_available());
-    assert_eq!(backend.program(), Some(fake_bwrap().as_path()));
-    assert_eq!(
-        backend
-            .constraint_support()
-            .enforcement(Constraint::Network),
-        Enforcement::Enforced
-    );
-}
-
-#[test]
-fn a_bwrap_that_cannot_start_a_sandbox_is_unavailable() {
-    for program in ["/nonexistent/bwrap", "/bin/false"] {
-        let backend = BubblewrapBackend::with_program(program);
-        assert!(!backend.is_available(), "{program}");
-        assert_eq!(backend.program(), None);
-        assert_eq!(backend.isolation(), IsolationLevel::None);
+fn a_passthrough_shim_does_not_pass_the_isolation_probe() {
+    // The fake runs its arguments unconfined: the host-only file stays visible
+    // and the pid namespace is the parent's, so the probe must reject it.
+    assert!(!BubblewrapBackend::with_program(fake_bwrap()).is_available());
+    for program in ["/nonexistent/bwrap", "/bin/false", "/bin/true"] {
+        assert!(!BubblewrapBackend::with_program(program).is_available());
     }
 }
 
 #[test]
 fn spawn_runs_the_wrapped_command_through_the_launcher() -> io::Result<()> {
-    let backend = BubblewrapBackend::with_program(fake_bwrap());
+    let backend = BubblewrapBackend::unverified(fake_bwrap(), true);
     let root = tempfile::tempdir()?;
     let jail = Jail::new(root.path(), "t");
     let mut cmd = Command::new("sh");
@@ -111,23 +147,43 @@ fn spawn_runs_the_wrapped_command_through_the_launcher() -> io::Result<()> {
 }
 
 #[test]
-fn spawn_captured_pipes_the_wrapper_and_forwards_env() -> io::Result<()> {
-    let backend = BubblewrapBackend::with_program(fake_bwrap());
+fn spawn_captured_pipes_the_wrapper_and_forwards_env_as_arguments() -> io::Result<()> {
+    let backend = BubblewrapBackend::unverified(fake_bwrap(), true);
     let root = tempfile::tempdir()?;
     let jail = Jail::new(root.path(), "t");
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg("printf %s \"$A\"").env("A", "hi");
     let out = backend.spawn_captured(&jail, cmd)?.wait_with_output()?;
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "hi");
+    // The fake drops --setenv with the other flags, so the variable is absent:
+    // proof the host launcher is not what carries it.
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "");
     Ok(())
 }
 
 #[test]
 fn spawn_with_a_missing_root_is_not_found() {
-    let backend = BubblewrapBackend::with_program(fake_bwrap());
+    let backend = BubblewrapBackend::unverified(fake_bwrap(), true);
     let kind = backend
         .spawn(&Jail::new("/nonexistent/root", "t"), Command::new("true"))
         .err()
         .map(|e| e.kind());
     assert_eq!(kind, Some(io::ErrorKind::NotFound));
+}
+
+#[test]
+fn a_leaked_descriptor_is_closed_through_the_shell_launcher() -> io::Result<()> {
+    // Not reproducible without clearing CLOEXEC (see tests/bwrap_isolation.rs);
+    // here, check the wrapper shape when the launcher has nothing to close.
+    let root = tempfile::tempdir()?;
+    let wrapper = prepare_command(
+        &verified("/usr/bin/bwrap"),
+        &Jail::new(root.path(), "t"),
+        &Command::new("true"),
+    )?;
+    if fds::leaked_fds()?.is_empty() {
+        assert_eq!(wrapper.get_program(), "/usr/bin/bwrap");
+    } else {
+        assert_eq!(wrapper.get_program(), "/bin/sh");
+    }
+    Ok(())
 }

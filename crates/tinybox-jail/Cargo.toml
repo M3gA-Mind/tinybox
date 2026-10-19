@@ -50,5 +50,11 @@ windows-sys = { version = "0.61", features = [
 [dev-dependencies]
 tempfile = "3"
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# Clears close-on-exec on a descriptor in the fd-leak regression test; the safe
+# `fcntl_setfd` avoids `unsafe`, which the workspace forbids. Already in the
+# lockfile through tempfile.
+rustix = { version = "1", default-features = false, features = ["std", "fs"] }
+
 [lints]
 workspace = true

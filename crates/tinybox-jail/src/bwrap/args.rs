@@ -221,7 +221,9 @@ pub(super) fn jail_args(
             ));
         }
         match std::fs::metadata(deny) {
-            Ok(meta) if meta.is_dir() => argv.extend([os("--tmpfs"), deny.clone().into_os_string()]),
+            Ok(meta) if meta.is_dir() => {
+                argv.extend([os("--tmpfs"), deny.clone().into_os_string()])
+            }
             Ok(_) => argv.extend([
                 os("--ro-bind"),
                 os("/dev/null"),

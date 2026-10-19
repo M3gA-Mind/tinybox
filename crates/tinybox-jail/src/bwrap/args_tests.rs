@@ -64,7 +64,11 @@ fn disable_userns_is_omitted_when_the_probe_found_no_support() -> io::Result<()>
 #[test]
 fn network_is_unshared_only_when_denied() -> io::Result<()> {
     let root = tempfile::tempdir()?;
-    assert!(!build(&jail(root.path()))?.iter().any(|a| a == "--unshare-net"));
+    assert!(
+        !build(&jail(root.path()))?
+            .iter()
+            .any(|a| a == "--unshare-net")
+    );
     assert!(
         build(&jail(root.path()).deny_net())?
             .iter()
