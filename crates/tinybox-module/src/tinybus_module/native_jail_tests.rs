@@ -227,7 +227,10 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
     })?;
     assert_eq!(
         std::fs::read_to_string(cgroup.join("memory.max"))?.trim(),
-        "67108864"
+        "67108864",
+        "wrong cgroup path {} (proc says {})",
+        cgroup.display(),
+        std::fs::read_to_string(format!("/proc/{}/cgroup", child.id()))?.trim()
     );
     assert_eq!(
         std::fs::read_to_string(cgroup.join("memory.swap.max"))?.trim(),
