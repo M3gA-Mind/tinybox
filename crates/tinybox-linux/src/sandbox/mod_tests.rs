@@ -464,6 +464,18 @@ fn native_jail_command_keeps_limits_and_target_environment_after_namespace_setup
         env: BTreeMap::from([("BASH_ENV".into(), "/tmp/target-init".into())]),
     })?;
     assert_eq!(argv.first().map(String::as_str), Some("/bin/bash"));
+    let systemd_command = argv
+        .iter()
+        .position(|part| part == "--")
+        .and_then(|position| argv.get(position + 1))
+        .ok_or("missing systemd command")?;
+    assert!(std::path::Path::new(systemd_command).is_absolute());
+    let bubblewrap = argv
+        .iter()
+        .position(|part| part == "--")
+        .and_then(|position| argv.get(position + 2))
+        .ok_or("missing bubblewrap command")?;
+    assert!(std::path::Path::new(bubblewrap).is_absolute());
     assert!(has(&argv, "--property=CPUQuota=0.1%"));
     assert!(has(&argv, "--property=MemoryMax=67108864"));
     assert!(has(&argv, "--property=MemorySwapMax=0"));
