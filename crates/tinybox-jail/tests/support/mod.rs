@@ -39,7 +39,11 @@ pub(crate) fn run(
 }
 
 /// Runs `script` under `sh -c` inside `jail`; returns (success, stdout).
-pub(crate) fn sh(backend: &BubblewrapBackend, jail: &Jail, script: &str) -> io::Result<(bool, String)> {
+pub(crate) fn sh(
+    backend: &BubblewrapBackend,
+    jail: &Jail,
+    script: &str,
+) -> io::Result<(bool, String)> {
     let mut cmd = Command::new("/bin/sh");
     cmd.arg("-c").arg(script);
     let out = run(backend, jail, cmd)?;
