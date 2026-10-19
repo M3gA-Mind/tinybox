@@ -755,14 +755,17 @@ async fn native_cancellation_kills_detached_descendants_and_preserves_stream_eve
     let mut ready = false;
     while tokio::time::Instant::now() < deadline {
         let output = journal.read(0)?;
-        let stdout = output
-            .chunks
-            .iter()
-            .any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stdout && chunk.bytes.starts_with(b"stdout-ready"));
-        let stderr = output
-            .chunks
-            .iter()
-            .any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stderr && chunk.bytes.starts_with(b"stderr-ready"));
+        let stream_contains = |stream, marker: &[u8]| {
+            let bytes: Vec<_> = output
+                .chunks
+                .iter()
+                .filter(|chunk| chunk.stream == stream)
+                .flat_map(|chunk| chunk.bytes.iter().copied())
+                .collect();
+            bytes.windows(marker.len()).any(|window| window == marker)
+        };
+        let stdout = stream_contains(tinybox_bus::OutputStream::Stdout, b"stdout-ready");
+        let stderr = stream_contains(tinybox_bus::OutputStream::Stderr, b"stderr-ready");
         if stdout && stderr && pid_file.metadata().is_ok() {
             ready = true;
             break;
@@ -778,37 +781,17 @@ async fn native_cancellation_kills_detached_descendants_and_preserves_stream_eve
     let mut identity = identity.split_whitespace();
     let detached: i32 = identity.next().ok_or("missing detached PID")?.parse()?;
     let pid_namespace: u64 = identity.next().ok_or("missing PID namespace")?.parse()?;
+    assert!(
+        pid_namespace_contains_process(detached, pid_namespace)?,
+        "fixture did not expose its detached process in the host proc view"
+    );
     journal.cancel();
     assert!(task.await?.is_err(), "cancelled native command unexpectedly succeeded");
     assert!(!host.has_pending_cleanup(), "cancel did not acknowledge child cleanup");
 
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        let still_alive = std::fs::read_dir("/proc")?
-            .filter_map(|entry| entry.ok())
-            .any(|entry| {
-                if !entry.file_name().to_string_lossy().bytes().all(|byte| byte.is_ascii_digit()) {
-                    return false;
-                }
-                let status = std::fs::read_to_string(entry.path().join("status"));
-                let namespaces = std::fs::read_link(entry.path().join("ns/pid"));
-                let same_pid = status.ok().is_some_and(|status| {
-                    status
-                        .lines()
-                        .find_map(|line| line.strip_prefix("NSpid:"))
-                        .and_then(|pids| pids.split_whitespace().last())
-                        .and_then(|pid| pid.parse::<i32>().ok())
-                        == Some(detached)
-                });
-                let same_namespace = namespaces.ok().is_some_and(|path| {
-                    path.to_string_lossy()
-                        .strip_prefix("pid:[")
-                        .and_then(|inode| inode.strip_suffix(']'))
-                        .and_then(|inode| inode.parse::<u64>().ok())
-                        == Some(pid_namespace)
-                });
-                same_pid && same_namespace
-            });
+        let still_alive = pid_namespace_contains_process(detached, pid_namespace)?;
         if !still_alive {
             break;
         }
