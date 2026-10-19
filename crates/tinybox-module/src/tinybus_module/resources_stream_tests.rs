@@ -1316,60 +1316,11 @@ async fn concurrent_preparations_share_a_bounded_admission_budget()
 #[tokio::test]
 async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendants()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
-    use std::{os::unix::fs::FileTypeExt, process::Command, time::Duration};
-
-    let bus_available = std::env::var("DBUS_SESSION_BUS_ADDRESS")
-        .ok()
-        .and_then(|address| address.strip_prefix("unix:path=").map(str::to_owned))
-        .is_some_and(|path| {
-            std::fs::metadata(path).is_ok_and(|metadata| metadata.file_type().is_socket())
-        });
-    let scope_available = Command::new("systemd-run")
-        .args([
-            "--user",
-            "--scope",
-            "--quiet",
-            "--property=MemoryMax=67108864",
-            "--property=MemorySwapMax=0",
-            "--property=OOMPolicy=continue",
-            "--property=CPUQuota=100%",
-            "--property=TasksMax=16",
-            "--",
-            "/bin/true",
-        ])
-        .status()
-        .is_ok_and(|status| status.success());
-    let namespaces_available = Command::new("bwrap")
-        .args([
-            "--unshare-user",
-            "--unshare-pid",
-            "--unshare-net",
-            "--ro-bind",
-            "/usr",
-            "/usr",
-            "--symlink",
-            "usr/lib",
-            "/lib",
-            "--symlink",
-            "usr/lib64",
-            "/lib64",
-            "--",
-            "/usr/bin/true",
-        ])
-        .status()
-        .is_ok_and(|status| status.success());
-    let available = bus_available && scope_available && namespaces_available;
-    if std::env::var_os("TINYBOX_REQUIRE_NATIVE_RESOURCE_TESTS").is_some() {
-        assert!(available, "required native resource runtime is unavailable");
-    }
-    if !available {
+    if !native_resource_bus_available() {
         eprintln!("skipped: rootless systemd scope and bubblewrap namespaces are unavailable");
         return Ok(());
     }
-
     let root = tempfile::tempdir()?;
-    let pid_file = root.path().join("detached-descendant");
-    let python = "import os,time,sys\nfirst=os.fork()\nif first == 0:\n os.setsid()\n second=os.fork()\n if second == 0:\n  with open(sys.argv[1],'w') as f: f.write(f'{os.getpid()} {os.stat(\"/proc/self/ns/pid\").st_ino}')\n  while True: time.sleep(1)\n os._exit(0)\nos.waitpid(first,0)\nwhile not os.path.exists(sys.argv[1]) or os.path.getsize(sys.argv[1]) == 0: time.sleep(0.01)\nprint('stdout-ready',flush=True)\nprint('stderr-ready',file=sys.stderr,flush=True)\ntime.sleep(600)";
     let resources = Resources::default();
     let resource = resources.reserve(ReserveRequest::Resource).await?;
     resources
@@ -1380,193 +1331,131 @@ async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendan
             ..Default::default()
         })
         .await?;
-    let process_id = resources
-        .reserve(ReserveRequest::Process(resource.clone()))
-        .await?;
-    let process = ProcessRef {
-        resource: resource.clone(),
-        process: process_id,
-    };
-    resources
-        .start_jailed_exec_with_resources(
-            SpawnRequest {
-                process: process.process.clone(),
-                command: ExecRequest {
-                    resource: resource.clone(),
-                    argv: vec![
-                        "python3".into(),
-                        "-c".into(),
-                        python.into(),
-                        pid_file.display().to_string(),
-                    ],
-                    cwd: Some(root.path().display().to_string()),
-                    env: std::collections::BTreeMap::default(),
-                    stdin: None,
-                },
-            },
-            tinybox_bus::NativeJailRequest {
-                jail: tinybox_bus::NativeJailConfig {
-                    read_only: vec![],
-                    read_write: vec![],
-                    allow_net: false,
-                    allow_subprocess: true,
-                    enforcement: tinybox_bus::JailEnforcement::Enforced,
-                    require_process_isolation: true,
-                    deny_read: vec![],
-                    resources: None,
-                },
-                resources: Some(tinybox_bus::NativeJailResourceRequest {
-                    cpu_millis: Some(1000),
-                    memory_bytes: Some(64 * 1024 * 1024),
-                    pids_max: Some(16),
-                    disk_bytes: None,
-                }),
-            },
-        )
-        .await?;
+    let python = detached_descendant_script();
+    let cancel_file = root.path().join("cancelled-descendant");
+    let cancelled = start_resource_descendant(&resources, &resource, root.path(), &cancel_file, &python).await?;
+    let (cancel_pid, cancel_ns) = wait_for_resource_descendant(&resources, &cancelled, &cancel_file, true).await?;
+    assert!(process_in_namespace(cancel_pid, cancel_ns)?, "fixture descendant was not visible before cancellation");
+    cancel_resource_descendant(&resources, &cancelled, cancel_pid, cancel_ns).await?;
+    resources.release_output(&cancelled).await?;
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    let (detached_pid, namespace_inode) = loop {
-        let batch = resources.read_output(&process, 0).await?;
-        let collect = |stream| {
-            batch
-                .chunks
-                .iter()
-                .filter(|chunk| chunk.stream == stream)
-                .flat_map(|chunk| chunk.bytes.iter().copied())
-                .collect::<Vec<_>>()
-        };
-        let stdout = collect(tinybox_bus::OutputStream::Stdout);
-        let stderr = collect(tinybox_bus::OutputStream::Stderr);
-        let has_stdout = stdout
-            .windows(b"stdout-ready".len())
-            .any(|w| w == b"stdout-ready");
-        let has_stderr = stderr
-            .windows(b"stderr-ready".len())
-            .any(|w| w == b"stderr-ready");
-        if has_stdout && has_stderr && std::fs::metadata(&pid_file).is_ok() {
-            let identity = std::fs::read_to_string(&pid_file)?;
-            let mut identity = identity.split_whitespace();
-            break (
-                identity
-                    .next()
-                    .ok_or("missing detached PID")?
-                    .parse::<i32>()?,
-                identity
-                    .next()
-                    .ok_or("missing PID namespace")?
-                    .parse::<u64>()?,
-            );
-        }
-        if batch.state != ExecutionState::Running || tokio::time::Instant::now() >= deadline {
-            return Err(format!("native bus exec failed before output: {batch:?}").into());
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    };
-    assert!(
-        process_in_namespace(detached_pid, namespace_inode)?,
-        "fixture descendant was not visible before bus cancellation"
-    );
-    resources.cancel(&process).await?;
-    let cancelled = resources.read_output(&process, 0).await?;
-    assert_eq!(cancelled.state, ExecutionState::Cancelled);
-    assert!(
-        cancelled
-            .chunks
-            .iter()
-            .any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stdout)
-            && cancelled
-                .chunks
-                .iter()
-                .any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stderr),
-        "cancellation must preserve both output streams"
-    );
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-    while process_in_namespace(detached_pid, namespace_inode)? {
-        if tokio::time::Instant::now() >= deadline {
-            return Err("bus cancellation left a detached namespace process alive".into());
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    resources.release_output(&process).await?;
-
-    let destroyed_file = root.path().join("destroyed-descendant");
-    let destroyed_process_id = resources
-        .reserve(ReserveRequest::Process(resource.clone()))
-        .await?;
-    let destroyed_process = ProcessRef {
-        resource: resource.clone(),
-        process: destroyed_process_id.clone(),
-    };
-    resources
-        .start_jailed_exec_with_resources(
-            SpawnRequest {
-                process: destroyed_process_id,
-                command: ExecRequest {
-                    resource: resource.clone(),
-                    argv: vec![
-                        "python3".into(),
-                        "-c".into(),
-                        python.into(),
-                        destroyed_file.display().to_string(),
-                    ],
-                    cwd: Some(root.path().display().to_string()),
-                    env: std::collections::BTreeMap::default(),
-                    stdin: None,
-                },
-            },
-            tinybox_bus::NativeJailRequest {
-                jail: tinybox_bus::NativeJailConfig {
-                    read_only: vec![],
-                    read_write: vec![],
-                    allow_net: false,
-                    allow_subprocess: true,
-                    enforcement: tinybox_bus::JailEnforcement::Enforced,
-                    require_process_isolation: true,
-                    deny_read: vec![],
-                    resources: None,
-                },
-                resources: Some(tinybox_bus::NativeJailResourceRequest {
-                    cpu_millis: Some(1000),
-                    memory_bytes: Some(64 * 1024 * 1024),
-                    pids_max: Some(16),
-                    disk_bytes: None,
-                }),
-            },
-        )
-        .await?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    let (destroyed_descendant_pid, destroyed_namespace) = loop {
-        let batch = resources.read_output(&destroyed_process, 0).await?;
-        if std::fs::metadata(&destroyed_file).is_ok() {
-            let identity = std::fs::read_to_string(&destroyed_file)?;
-            let mut identity = identity.split_whitespace();
-            break (
-                identity
-                    .next()
-                    .ok_or("missing destroy fixture PID")?
-                    .parse::<i32>()?,
-                identity
-                    .next()
-                    .ok_or("missing destroy fixture namespace")?
-                    .parse::<u64>()?,
-            );
-        }
-        if batch.state != ExecutionState::Running || tokio::time::Instant::now() >= deadline {
-            return Err(format!("native destroy fixture failed before ready: {batch:?}").into());
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    };
-    assert!(process_in_namespace(
-        destroyed_descendant_pid,
-        destroyed_namespace
-    )?);
+    let destroy_file = root.path().join("destroyed-descendant");
+    let destroyed = start_resource_descendant(&resources, &resource, root.path(), &destroy_file, &python).await?;
+    let (destroy_pid, destroy_ns) = wait_for_resource_descendant(&resources, &destroyed, &destroy_file, false).await?;
+    assert!(process_in_namespace(destroy_pid, destroy_ns)?, "fixture descendant was not visible before destroy");
     resources.close(&resource).await?;
-    assert!(
-        !process_in_namespace(destroyed_descendant_pid, destroyed_namespace)?,
-        "resource destroy returned with a detached namespace process alive"
-    );
+    assert!(!process_in_namespace(destroy_pid, destroy_ns)?, "resource destroy left a detached namespace process alive");
     resources.shutdown().await?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn native_resource_bus_available() -> bool {
+    use std::{os::unix::fs::FileTypeExt, process::Command};
+    let bus = std::env::var("DBUS_SESSION_BUS_ADDRESS")
+        .ok()
+        .and_then(|address| address.strip_prefix("unix:path=").map(str::to_owned))
+        .is_some_and(|path| std::fs::metadata(path).is_ok_and(|metadata| metadata.file_type().is_socket()));
+    let scope = Command::new("systemd-run")
+        .args(["--user", "--scope", "--quiet", "--property=MemoryMax=67108864", "--property=MemorySwapMax=0", "--property=OOMPolicy=continue", "--property=CPUQuota=100%", "--property=TasksMax=16", "--", "/bin/true"])
+        .status().is_ok_and(|status| status.success());
+    let namespaces = Command::new("bwrap")
+        .args(["--unshare-user", "--unshare-pid", "--unshare-net", "--ro-bind", "/usr", "/usr", "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib64", "/lib64", "--", "/usr/bin/true"])
+        .status().is_ok_and(|status| status.success());
+    let available = bus && scope && namespaces;
+    if std::env::var_os("TINYBOX_REQUIRE_NATIVE_RESOURCE_TESTS").is_some() {
+        assert!(available, "required native resource runtime is unavailable");
+    }
+    available
+}
+
+#[cfg(target_os = "linux")]
+fn detached_descendant_script() -> String {
+    "import os,time,sys\nfirst=os.fork()\nif first == 0:\n os.setsid()\n second=os.fork()\n if second == 0:\n  with open(sys.argv[1],'w') as f: f.write(f'{os.getpid()} {os.stat(\"/proc/self/ns/pid\").st_ino}')\n  while True: time.sleep(1)\n os._exit(0)\nos.waitpid(first,0)\nwhile not os.path.exists(sys.argv[1]) or os.path.getsize(sys.argv[1]) == 0: time.sleep(0.01)\nprint('stdout-ready',flush=True)\nprint('stderr-ready',file=sys.stderr,flush=True)\ntime.sleep(600)".into()
+}
+
+#[cfg(target_os = "linux")]
+async fn start_resource_descendant(
+    resources: &Resources,
+    resource: &ResourceId,
+    root: &std::path::Path,
+    pid_file: &std::path::Path,
+    python: &str,
+) -> std::result::Result<ProcessRef, Box<dyn std::error::Error>> {
+    let process_id = resources.reserve(ReserveRequest::Process(resource.clone())).await?;
+    let process = ProcessRef { resource: resource.clone(), process: process_id.clone() };
+    resources.start_jailed_exec_with_resources(
+        SpawnRequest {
+            process: process_id,
+            command: ExecRequest {
+                resource: resource.clone(),
+                argv: vec!["python3".into(), "-c".into(), python.into(), pid_file.display().to_string()],
+                cwd: Some(root.display().to_string()),
+                env: std::collections::BTreeMap::default(),
+                stdin: None,
+            },
+        },
+        tinybox_bus::NativeJailRequest {
+            jail: tinybox_bus::NativeJailConfig {
+                read_only: vec![], read_write: vec![], allow_net: false, allow_subprocess: true,
+                enforcement: tinybox_bus::JailEnforcement::Enforced, require_process_isolation: true,
+                deny_read: vec![], resources: None,
+            },
+            resources: Some(tinybox_bus::NativeJailResourceRequest {
+                cpu_millis: Some(1000), memory_bytes: Some(64 * 1024 * 1024), pids_max: Some(16), disk_bytes: None,
+            }),
+        },
+    ).await?;
+    Ok(process)
+}
+
+#[cfg(target_os = "linux")]
+async fn wait_for_resource_descendant(
+    resources: &Resources,
+    process: &ProcessRef,
+    pid_file: &std::path::Path,
+    check_streams: bool,
+) -> std::result::Result<(i32, u64), Box<dyn std::error::Error>> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let batch = resources.read_output(process, 0).await?;
+        let stream_has = |stream, marker: &[u8]| {
+            let bytes: Vec<_> = batch.chunks.iter().filter(|chunk| chunk.stream == stream)
+                .flat_map(|chunk| chunk.bytes.iter().copied()).collect();
+            bytes.windows(marker.len()).any(|window| window == marker)
+        };
+        let streams_ready = !check_streams || (stream_has(tinybox_bus::OutputStream::Stdout, b"stdout-ready")
+            && stream_has(tinybox_bus::OutputStream::Stderr, b"stderr-ready"));
+        if streams_ready && std::fs::metadata(pid_file).is_ok() {
+            let identity = std::fs::read_to_string(pid_file)?;
+            let mut parts = identity.split_whitespace();
+            return Ok((parts.next().ok_or("missing detached PID")?.parse()?, parts.next().ok_or("missing PID namespace")?.parse()?));
+        }
+        if batch.state != ExecutionState::Running || tokio::time::Instant::now() >= deadline {
+            return Err(format!("native bus exec failed before descendant identity: {batch:?}").into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn cancel_resource_descendant(
+    resources: &Resources,
+    process: &ProcessRef,
+    pid: i32,
+    namespace: u64,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    resources.cancel(process).await?;
+    let cancelled = resources.read_output(process, 0).await?;
+    assert_eq!(cancelled.state, ExecutionState::Cancelled);
+    assert!(cancelled.chunks.iter().any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stdout)
+        && cancelled.chunks.iter().any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stderr),
+        "cancellation must preserve both output streams");
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    while process_in_namespace(pid, namespace)? {
+        if tokio::time::Instant::now() >= deadline { return Err("bus cancellation left a detached namespace process alive".into()); }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
     Ok(())
 }
 

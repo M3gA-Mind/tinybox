@@ -259,14 +259,8 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::{
         io::Write,
-        os::{
-            fd::AsRawFd,
-            unix::{
-                fs::{FileTypeExt, MetadataExt},
-                net::UnixStream,
-            },
-        },
         process::{Command, Stdio},
+        os::unix::fs::MetadataExt,
     };
 
     if !native_resource_runtime_available() {
@@ -274,40 +268,7 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         return Ok(());
     }
     let root = tempfile::tempdir()?;
-    let workspace = root.path().join("workspace");
-    let hidden = workspace.join("hidden");
-    std::fs::create_dir_all(&hidden)?;
-    std::fs::write(hidden.join("secret"), "secret")?;
-    let denied_inside = workspace.join("denied-inside");
-    std::fs::create_dir_all(&denied_inside)?;
-    std::fs::write(denied_inside.join("secret"), "secret")?;
-    let manager_socket = std::env::var("DBUS_SESSION_BUS_ADDRESS")?
-        .strip_prefix("unix:path=")
-        .ok_or("filesystem DBus manager socket is required for this escape test")?
-        .to_owned();
-    let manager_socket = std::path::PathBuf::from(manager_socket);
-    assert!(manager_socket.metadata()?.file_type().is_socket());
-    let inherited_manager = UnixStream::connect(&manager_socket)?;
-    let inherited_fd = inherited_manager.as_raw_fd();
-    let flags = nix::fcntl::fcntl(&inherited_manager, nix::fcntl::FcntlArg::F_GETFD)?;
-    assert_ne!(flags & nix::libc::FD_CLOEXEC, 0);
-    nix::fcntl::fcntl(
-        &inherited_manager,
-        nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
-    )?;
-    let inherited_inode = std::fs::metadata(format!("/proc/self/fd/{inherited_fd}"))?.ino();
-    let manager_alias = workspace.join("manager-socket-alias");
-    std::os::unix::fs::symlink(&manager_socket, &manager_alias)?;
-    let outside = std::env::temp_dir().join(format!("tinybox-escape-proof-{}", std::process::id()));
-    let _ = std::fs::remove_file(&outside);
-    let bash_env = workspace.join("startup.sh");
-    std::fs::write(
-        &bash_env,
-        format!(
-            "printf startup > {}\n",
-            shell_quote(&workspace.join("from-bash-env").display().to_string())
-        ),
-    )?;
+    let fixture = native_escape_fixture(root.path())?;
 
     let probe = Command::new("systemd-run")
         .args([
@@ -328,13 +289,13 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
     }
 
     let (request, mut command) = resource_escape_command(
-        &workspace,
-        &denied_inside,
-        &bash_env,
-        &manager_alias,
-        inherited_fd,
-        inherited_inode,
-        &outside,
+        &fixture.workspace,
+        &fixture.denied_inside,
+        &fixture.bash_env,
+        &fixture.manager_alias,
+        fixture.inherited_fd,
+        fixture.inherited_inode,
+        &fixture.outside,
     );
     let backend = resource_backend();
     let jail = prepare_with_resources(
@@ -378,11 +339,79 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         "launcher failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(std::fs::read(workspace.join("control"))?, b"allowed");
-    assert_eq!(std::fs::read(workspace.join("from-bash-env"))?, b"startup");
-    assert!(!outside.exists(), "jail wrote outside its granted roots");
-    let _ = std::fs::remove_file(outside);
+    assert_eq!(std::fs::read(fixture.workspace.join("control"))?, b"allowed");
+    assert_eq!(
+        std::fs::read(fixture.workspace.join("from-bash-env"))?,
+        b"startup"
+    );
+    assert!(
+        !fixture.outside.exists(),
+        "jail wrote outside its granted roots"
+    );
+    let _ = std::fs::remove_file(fixture.outside);
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+struct NativeEscapeFixture {
+    workspace: std::path::PathBuf,
+    denied_inside: std::path::PathBuf,
+    manager_alias: std::path::PathBuf,
+    outside: std::path::PathBuf,
+    bash_env: std::path::PathBuf,
+    _inherited_manager: std::os::unix::net::UnixStream,
+    inherited_fd: i32,
+    inherited_inode: u64,
+}
+
+#[cfg(target_os = "linux")]
+fn native_escape_fixture(
+    root: &std::path::Path,
+) -> std::result::Result<NativeEscapeFixture, Box<dyn std::error::Error>> {
+    use std::{os::fd::AsRawFd, os::unix::fs::FileTypeExt, os::unix::net::UnixStream};
+
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(workspace.join("hidden"))?;
+    std::fs::write(workspace.join("hidden/secret"), "secret")?;
+    let denied_inside = workspace.join("denied-inside");
+    std::fs::create_dir_all(&denied_inside)?;
+    std::fs::write(denied_inside.join("secret"), "secret")?;
+    let socket = std::env::var("DBUS_SESSION_BUS_ADDRESS")?
+        .strip_prefix("unix:path=")
+        .ok_or("filesystem DBus manager socket is required for this escape test")?;
+    let socket = std::path::PathBuf::from(socket);
+    assert!(socket.metadata()?.file_type().is_socket());
+    let inherited_manager = UnixStream::connect(&socket)?;
+    let inherited_fd = inherited_manager.as_raw_fd();
+    let flags = nix::fcntl::fcntl(&inherited_manager, nix::fcntl::FcntlArg::F_GETFD)?;
+    assert_ne!(flags & nix::libc::FD_CLOEXEC, 0);
+    nix::fcntl::fcntl(
+        &inherited_manager,
+        nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
+    )?;
+    let inherited_inode = std::fs::metadata(format!("/proc/self/fd/{inherited_fd}"))?.ino();
+    let manager_alias = workspace.join("manager-socket-alias");
+    std::os::unix::fs::symlink(socket, &manager_alias)?;
+    let outside = std::env::temp_dir().join(format!("tinybox-escape-proof-{}", std::process::id()));
+    let _ = std::fs::remove_file(&outside);
+    let bash_env = workspace.join("startup.sh");
+    std::fs::write(
+        &bash_env,
+        format!(
+            "printf startup > {}\n",
+            shell_quote(&workspace.join("from-bash-env").display().to_string())
+        ),
+    )?;
+    Ok(NativeEscapeFixture {
+        workspace,
+        denied_inside,
+        manager_alias,
+        outside,
+        bash_env,
+        _inherited_manager: inherited_manager,
+        inherited_fd,
+        inherited_inode,
+    })
 }
 
 #[cfg(target_os = "linux")]
