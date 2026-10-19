@@ -249,10 +249,11 @@ fn prepare_command(verified: &Verified, jail: &Jail, cmd: &Command) -> io::Resul
         direct.args(&argv);
         direct
     } else {
-        let mut shell = Command::new("/bin/sh");
+        let shell_path = fds::shell_for(&leaked, |path| Path::new(path).is_file())?;
+        let mut shell = Command::new(shell_path);
         shell
             .arg("-c")
-            .arg(fds::closing_script(&leaked)?)
+            .arg(fds::closing_script(&leaked))
             .arg(&verified.program)
             .args(&argv);
         shell

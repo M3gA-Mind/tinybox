@@ -10,7 +10,7 @@ use std::io;
 use std::os::fd::AsRawFd as _;
 use std::time::Instant;
 
-use support::{backend, done, jail, refused, sh};
+use support::{backend, done, jail, sh};
 
 #[test]
 fn inheritable_host_descriptors_do_not_reach_the_sandbox() -> io::Result<()> {
@@ -25,15 +25,6 @@ fn inheritable_host_descriptors_do_not_reach_the_sandbox() -> io::Result<()> {
     // Simulate a library that opened a descriptor without O_CLOEXEC.
     rustix::io::fcntl_setfd(&file, rustix::io::FdFlags::empty())?;
     let fd = file.as_raw_fd();
-    if fd > 9 {
-        // `sh` cannot close it, so the spawn must fail closed instead.
-        assert_eq!(
-            refused(&backend, &jail(root.path()).deny_net()),
-            Some(io::ErrorKind::InvalidInput)
-        );
-        done("fd-leak-refused", start);
-        return Ok(());
-    }
     let (_, out) = sh(
         &backend,
         &jail(root.path()).deny_net(),

@@ -180,10 +180,17 @@ fn a_leaked_descriptor_is_closed_through_the_shell_launcher() -> io::Result<()> 
         &Jail::new(root.path(), "t"),
         &Command::new("true"),
     )?;
-    if fds::leaked_fds()?.is_empty() {
+    let leaked = fds::leaked_fds()?;
+    if leaked.is_empty() {
         assert_eq!(wrapper.get_program(), "/usr/bin/bwrap");
     } else {
-        assert_eq!(wrapper.get_program(), "/bin/sh");
+        // Whatever the environment leaked is closed by a shell first.
+        assert!(
+            wrapper.get_program().to_string_lossy().ends_with("sh"),
+            "{:?}",
+            wrapper.get_program()
+        );
+        assert!(argv_of(&wrapper).iter().any(|a| a.contains(">&-")));
     }
     Ok(())
 }
