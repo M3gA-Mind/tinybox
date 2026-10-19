@@ -7,8 +7,8 @@
 //! the pure argument builders.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tinybox_core::{BoxSpec, Capability, Error, ExecRequest, Resources, Result, WorkspaceSource};
 
@@ -237,7 +237,11 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
         || std::iter::once(&request.root)
             .chain(&request.read_only)
             .chain(&request.read_write)
-            .any(|path| ["/run", "/sys", "/proc"].iter().any(|protected| path.starts_with(protected)))
+            .any(|path| {
+                ["/run", "/sys", "/proc"]
+                    .iter()
+                    .any(|protected| path.starts_with(protected))
+            })
     {
         return Err(invalid());
     }
@@ -272,12 +276,14 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
         .arg("--help")
         .env("LC_ALL", "C")
         .output()?;
-    let supports_expand_environment = parse_expand_environment_help(
-        probe.status.success(),
-        &probe.stdout,
-        &probe.stderr,
-    )
-    .map_err(|_| Error::new(ErrorKind::Unsupported, "cannot verify systemd-run argument handling"))?;
+    let supports_expand_environment =
+        parse_expand_environment_help(probe.status.success(), &probe.stdout, &probe.stderr)
+            .map_err(|_| {
+                Error::new(
+                    ErrorKind::Unsupported,
+                    "cannot verify systemd-run argument handling",
+                )
+            })?;
     let mut argv = vec![
         "systemd-run".to_owned(),
         "--user".to_owned(),

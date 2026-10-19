@@ -281,9 +281,10 @@ impl JailBackend for NativeResourceBackend {
         let program = cmd.get_program().as_bytes();
         let mut actual = vec![OsString::from_vec(program.to_vec())];
         actual.extend(cmd.get_args().map(OsString::from));
-        let mut expected = self.expected.lock().map_err(|_| {
-            std::io::Error::other("resource launcher plan lock poisoned")
-        })?;
+        let mut expected = self
+            .expected
+            .lock()
+            .map_err(|_| std::io::Error::other("resource launcher plan lock poisoned"))?;
         if expected.take().as_deref() != Some(actual.as_slice()) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
@@ -334,7 +335,11 @@ fn prepare_with_resources(
         memory_bytes: resources.memory_bytes,
         pids_max: resources.pids_max,
         argv: command.argv.clone(),
-        env: command.env.iter().map(|(key, value)| (key.clone(), value.clone())).collect(),
+        env: command
+            .env
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
     };
     let argv = tinybox_linux::native_jail_argv(&native).map_err(|_| unavailable())?;
     backend.bind(&argv)?;

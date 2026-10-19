@@ -154,7 +154,10 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
     let bash_env = workspace.join("startup.sh");
     std::fs::write(
         &bash_env,
-        format!("printf startup > {}\n", shell_quote(&workspace.join("from-bash-env").display().to_string())),
+        format!(
+            "printf startup > {}\n",
+            shell_quote(&workspace.join("from-bash-env").display().to_string())
+        ),
     )?;
 
     let probe = Command::new("systemd-run")
