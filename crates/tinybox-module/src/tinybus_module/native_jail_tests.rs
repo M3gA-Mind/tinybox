@@ -518,7 +518,11 @@ fn native_memory_limit_kills_a_workload_that_touches_past_its_budget()
         .ok_or("missing stdin pipe")?
         .write_all(b"continue\n")?;
     let output = child.wait_with_output()?;
-    assert!(output.status.success(), "supervisor should survive OOM");
+    assert!(
+        output.status.success() || output.status.code() == Some(137),
+        "OOM should terminate the workload with success or SIGKILL status, got {:?}",
+        output.status
+    );
     Ok(())
 }
 

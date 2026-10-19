@@ -342,7 +342,7 @@ fn prepare_with_resources(
         return Err(invalid());
     }
     backend.bind_resources(resources)?;
-    let mut jail = prepare(root, &request.jail, command, backend)?;
+    let jail = prepare(root, &request.jail, command, backend)?;
     if request.jail.allow_net || !request.jail.allow_subprocess {
         return Err(unavailable());
     }
