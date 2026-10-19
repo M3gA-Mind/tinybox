@@ -7,7 +7,7 @@
 //! duration for the CI log.
 #![cfg(target_os = "linux")]
 
-use std::io::{self, BufRead as _, Read as _, Write as _};
+use std::io;
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::Command;
@@ -224,13 +224,14 @@ fn deny_read_of_a_missing_path_refuses_without_creating_a_host_mountpoint() -> i
     let denied = root.path().join(".ssh");
     let mut j = jail(root.path());
     j.deny_read = vec![denied.clone()];
-    let mut cmd = Command::new("/bin/true");
+    let cmd = Command::new("/bin/true");
     let error = match spawn_captured_with(&backend, &j, cmd) {
         Ok(mut child) => {
             let _ = child.wait()?;
-            return Err(io::Error::other(
-                "missing deny_read path unexpectedly started a sandbox",
-            ));
+            return Err(io::Error::other(format!(
+                "missing deny_read path unexpectedly started a sandbox (host path exists: {})",
+                denied.exists()
+            )));
         }
         Err(error) => error,
     };
