@@ -253,8 +253,8 @@ impl JailBackend for NativeResourceBackend {
 
     fn is_available(&self) -> bool {
         cfg!(target_os = "linux")
-            && executable_on_path("bwrap")
-            && executable_on_path("systemd-run")
+            && tinybox_linux::trusted_systemd_run_program().is_ok()
+            && tinybox_jail::BubblewrapBackend::new().program().is_some()
     }
 
     fn isolation(&self) -> tinybox_core::IsolationLevel {
@@ -316,12 +316,6 @@ impl JailBackend for NativeResourceBackend {
     }
 }
 
-fn executable_on_path(name: &str) -> bool {
-    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|directory| directory.join(name))
-        .any(|path| path.is_file())
-}
-
 fn prepare_with_resources(
     root: &Path,
     request: &NativeJailRequest,
@@ -370,7 +364,13 @@ fn prepare_with_resources(
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
     };
-    let argv = tinybox_linux::native_jail_argv(&native).map_err(|_| unavailable())?;
+    let bwrap = tinybox_jail::BubblewrapBackend::new()
+        .program()
+        .map(Path::to_path_buf)
+        .ok_or_else(unavailable)?;
+    let systemd_run = tinybox_linux::trusted_systemd_run_program().map_err(|_| unavailable())?;
+    let argv = tinybox_linux::native_jail_argv_with_programs(&native, &systemd_run, &bwrap)
+        .map_err(|_| unavailable())?;
     backend.bind(&argv)?;
     command.argv = argv;
     command.env = launcher_environment();
