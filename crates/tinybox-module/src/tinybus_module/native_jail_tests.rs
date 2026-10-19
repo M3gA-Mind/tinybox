@@ -685,7 +685,11 @@ async fn native_cancellation_kills_detached_descendants_and_preserves_stream_eve
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert!(ready, "native exec did not deliver both output streams and descendant identity");
+    assert!(
+        ready,
+        "native exec did not deliver both output streams and descendant identity: {:?}",
+        journal.read(0)?.chunks
+    );
     let identity = std::fs::read_to_string(&pid_file)?;
     let mut identity = identity.split_whitespace();
     let detached: i32 = identity.next().ok_or("missing detached PID")?.parse()?;
