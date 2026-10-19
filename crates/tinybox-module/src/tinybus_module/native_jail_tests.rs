@@ -224,7 +224,7 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         .envs(&command.env)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let child = tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, child_command)?;
+    let mut child = tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, child_command)?;
     let mut ready = String::new();
     std::io::BufRead::read_line(
         &mut std::io::BufReader::new(child.stdout.as_mut().ok_or("missing stdout pipe")?),
