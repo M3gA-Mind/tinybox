@@ -495,7 +495,11 @@ fn native_memory_limit_kills_a_workload_that_touches_past_its_budget()
         .output()?;
     assert!(control_group.status.success());
     let control_group = String::from_utf8(control_group.stdout)?;
-    assert!(!control_group.trim().is_empty(), "scope has no cgroup path");
+    assert!(
+        !control_group.trim().is_empty(),
+        "scope {unit} has no cgroup path; systemd-run status is {:?}",
+        child.try_wait()?
+    );
     let cgroup = std::path::Path::new("/sys/fs/cgroup").join(
         control_group.trim_start_matches('/').trim(),
     );
