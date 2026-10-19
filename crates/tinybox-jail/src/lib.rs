@@ -104,7 +104,10 @@ pub fn default_backend() -> Arc<dyn JailBackend> {
 pub fn spawn(jail: &Jail, cmd: Command) -> std::io::Result<Child> {
     let mut jail = jail.clone();
     jail.canonicalize()?;
-    default_backend().spawn(&jail, cmd)
+    let backend = default_backend();
+    require_resources(backend.as_ref(), &jail)?;
+    jail.validate_denials(backend.carves_denials(), &backend.implicit_grants())?;
+    backend.spawn(&jail, cmd)
 }
 
 /// Same as [`spawn`] but with a caller-supplied backend. Useful in
@@ -121,6 +124,8 @@ pub fn spawn(jail: &Jail, cmd: Command) -> std::io::Result<Child> {
 pub fn spawn_with(backend: &dyn JailBackend, jail: &Jail, cmd: Command) -> std::io::Result<Child> {
     let mut jail = jail.clone();
     jail.canonicalize()?;
+    require_resources(backend, &jail)?;
+    jail.validate_denials(backend.carves_denials(), &backend.implicit_grants())?;
     backend.spawn(&jail, cmd)
 }
 
@@ -135,7 +140,19 @@ pub fn spawn_captured_with(
 ) -> std::io::Result<Child> {
     let mut jail = jail.clone();
     jail.canonicalize()?;
+    require_resources(backend, &jail)?;
+    jail.validate_denials(backend.carves_denials(), &backend.implicit_grants())?;
     backend.spawn_captured(&jail, cmd)
+}
+
+fn require_resources(backend: &dyn JailBackend, jail: &Jail) -> std::io::Result<()> {
+    backend.require_resources(jail).map_err(|error| {
+        let kind = match error {
+            tinybox_core::Error::ZeroResourceLimit { .. } => std::io::ErrorKind::InvalidInput,
+            _ => std::io::ErrorKind::Unsupported,
+        };
+        std::io::Error::new(kind, error)
+    })
 }
 
 /// Spawn only after all jail constraints pass a hard preflight.

@@ -8,6 +8,13 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
+const RESOURCE_CONSTRAINTS: [tinybox_core::Constraint; 4] = [
+    tinybox_core::Constraint::Cpu,
+    tinybox_core::Constraint::Memory,
+    tinybox_core::Constraint::Pids,
+    tinybox_core::Constraint::Disk,
+];
+
 /// Declarative description of a directory jail.
 ///
 /// One `root` (read/write), zero or more extra `read_write` paths, zero or
@@ -27,11 +34,17 @@ pub struct Jail {
     /// must write to without it landing inside the root (e.g. a per-call
     /// output-capture directory). Grant the narrowest directory that works.
     pub read_write: Vec<PathBuf>,
-    /// Paths the child may neither read nor write, even inside the root or a
-    /// grant. Only a backend that [`carves_denials`](JailBackend::carves_denials)
-    /// can subtract them from a grant; everywhere else they are unreachable
-    /// already because nothing grants them.
+    /// Paths the child may neither read nor write. A backend that
+    /// [`carves_denials`](JailBackend::carves_denials) subtracts them from
+    /// grants; allow-list backends deny paths outside grants by default. The
+    /// native module rejects overlaps that an allow-list backend cannot enforce.
+    /// Missing paths are retained so backend rules can cover later creation.
     pub deny_read: Vec<PathBuf>,
+    /// Optional hard CPU, memory, process and writable-disk limits.
+    ///
+    /// Backends include the corresponding constraints in preflight. A backend
+    /// that does not enforce every requested limit refuses before spawning.
+    pub resources: Option<tinybox_core::Resources>,
     /// Allow outbound network. Most agent tools need this; some risky tools
     /// (untrusted code execution) should disable it.
     pub allow_net: bool,
@@ -52,6 +65,7 @@ impl Jail {
             read_only: Vec::new(),
             read_write: Vec::new(),
             deny_read: Vec::new(),
+            resources: None,
             allow_net: true,
             allow_subprocess: true,
             label: label.into(),
@@ -102,6 +116,14 @@ impl Jail {
         if !self.allow_subprocess {
             constraints.push(Constraint::Subprocess);
         }
+        if self.resources.is_some() {
+            constraints.extend([
+                Constraint::Cpu,
+                Constraint::Memory,
+                Constraint::Pids,
+                Constraint::Disk,
+            ]);
+        }
         constraints
     }
 
@@ -121,6 +143,43 @@ impl Jail {
         {
             if let Ok(c) = p.canonicalize() {
                 *p = c;
+            }
+        }
+        self.deny_read = self
+            .deny_read
+            .iter()
+            .map(|path| crate::registry::canonicalize_missing(path))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        self.deny_read.sort();
+        self.deny_read.dedup();
+        Ok(())
+    }
+
+    /// Refuse denials that a non-carving backend cannot preserve against its
+    /// explicit and implicit grants after path canonicalization.
+    pub(crate) fn validate_denials(
+        &self,
+        carves_denials: bool,
+        implicit_grants: &[PathBuf],
+    ) -> std::io::Result<()> {
+        if carves_denials || self.deny_read.is_empty() {
+            return Ok(());
+        }
+        let implicit_grants = implicit_grants
+            .iter()
+            .map(|path| crate::registry::canonicalize_missing(path))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        for denied in &self.deny_read {
+            if std::iter::once(&self.root)
+                .chain(&self.read_only)
+                .chain(&self.read_write)
+                .chain(&implicit_grants)
+                .any(|granted| denied.starts_with(granted) || granted.starts_with(denied))
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "denied path overlaps an allow-list or implicit grant",
+                ));
             }
         }
         Ok(())
@@ -146,6 +205,16 @@ impl Jail {
 /// `AppContainer` requires custom `CreateProcess` flags that `std`'s
 /// `Command::spawn` does not expose.
 pub trait JailBackend: Send + Sync {
+    /// Paths the backend implicitly grants in addition to explicit jail roots.
+    ///
+    /// Callers enforcing hard denials use these paths to detect overlaps that
+    /// the backend's allow rules would otherwise override. Backends should
+    /// report every recursively granted baseline path; the default means the
+    /// backend has no implicit filesystem grants.
+    fn implicit_grants(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
     /// Whether [`Jail::deny_read`] is enforced even inside the root or a grant.
     /// Allow-list backends (Landlock, `AppContainer`) cannot subtract from a
     /// grant, so they keep the default `false`.
@@ -216,7 +285,26 @@ pub trait JailBackend: Send + Sync {
             .require(self.name(), &jail.constraints())
     }
 
-    /// Spawn `cmd` under the jail described by `jail`. Backends own how the
+    /// Require full enforcement for every resource limit present on a jail.
+    ///
+    /// Resource limits are hard requirements even when the caller accepts
+    /// declared filesystem, network, or subprocess enforcement.
+    ///
+    /// # Errors
+    /// Returns a typed refusal if any requested resource constraint is not
+    /// fully enforced.
+    fn require_resources(&self, jail: &Jail) -> tinybox_core::Result<()> {
+        if let Some(resources) = jail.resources {
+            resources.validate()?;
+            self.constraint_support()
+                .require(self.name(), &RESOURCE_CONSTRAINTS)?;
+        }
+        Ok(())
+    }
+
+    /// Spawn `cmd` under the jail described by `jail`. Callers must run
+    /// [`JailBackend::require_resources`] before calling this method when
+    /// `jail.resources` is present. Backends own how the
     /// jail is materialized (Landlock ruleset, sandbox-exec wrapper,
     /// `AppContainer` profile + restricted token).
     ///
@@ -227,6 +315,8 @@ pub trait JailBackend: Send + Sync {
 
     /// Spawn with module-owned stdin, stdout, and stderr pipes.
     /// Wrapping providers must apply these pipes to their actual launcher.
+    /// Callers must run [`JailBackend::require_resources`] first when
+    /// `jail.resources` is present.
     /// # Errors
     /// Returns the provider's confinement or native startup error.
     fn spawn_captured(&self, jail: &Jail, mut cmd: Command) -> std::io::Result<Child> {
