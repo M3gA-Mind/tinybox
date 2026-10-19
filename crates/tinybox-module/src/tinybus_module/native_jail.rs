@@ -93,6 +93,129 @@ pub(super) fn prepare(
     }
     Ok(jail)
 }
+
+/// Prepare the distinct 2.1 subset request, preserving the existing 2.0
+/// `NativeJailConfig` and rewriting the execution into the trusted namespace
+/// launcher. The target environment is carried only by bubblewrap's explicit
+/// `--setenv` arguments, never by systemd-run or bwrap setup.
+pub(super) fn prepare_with_resources(
+    root: &Path,
+    request: &tinybox_bus::NativeJailRequest,
+    command: &mut tinybox_core::ExecRequest,
+    backend: &dyn JailBackend,
+) -> Result<Jail> {
+    if !cfg!(target_os = "linux") {
+        return Err(unavailable());
+    }
+    if request.jail.resources.is_some() {
+        // The legacy all-four request has different semantics and is handled
+        // only by StartJailedExec; never reinterpret it as a subset.
+        return Err(unavailable());
+    }
+    let limits = request.resources.ok_or_else(unavailable)?;
+    if limits.cpu_millis.is_none()
+        && limits.memory_bytes.is_none()
+        && limits.pids_max.is_none()
+        && limits.disk_bytes.is_none()
+    {
+        return Err(unavailable());
+    }
+    let mut jail = prepare(root, &request.jail, command, backend)?;
+    jail.native_resources = Some(limits);
+    backend
+        .require_resources(&jail)
+        .map_err(|_| unavailable())?;
+
+    let native = tinybox_linux::NativeJailCommand {
+        root: jail.root.clone(),
+        cwd: command.cwd.clone().ok_or_else(invalid)?,
+        read_only: jail.read_only.clone(),
+        read_write: jail.read_write.clone(),
+        deny_read: jail.deny_read.clone(),
+        allow_net: jail.allow_net,
+        allow_subprocess: jail.allow_subprocess,
+        cpu_millis: limits.cpu_millis,
+        memory_bytes: limits.memory_bytes,
+        pids_max: limits.pids_max,
+        argv: command.argv.clone(),
+        env: command.env.clone(),
+    };
+    command.argv = tinybox_linux::native_jail_argv(&native).map_err(|_| unavailable())?;
+    command.env = launcher_environment();
+    command.cwd = None;
+    Ok(jail)
+}
+
+fn launcher_environment() -> std::collections::BTreeMap<String, String> {
+    // systemd-run needs the user's session bus coordinates. Values capable of
+    // changing dynamic loading or shell startup are intentionally excluded.
+    [
+        "PATH",
+        "HOME",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "SYSTEMD_BUS_ADDRESS",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+    ]
+    .into_iter()
+    .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_owned(), value)))
+    .collect()
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn resource_backend() -> Arc<dyn JailBackend> {
+    Arc::new(NativeResourceBackend)
+}
+
+#[cfg(target_os = "linux")]
+struct NativeResourceBackend;
+
+#[cfg(target_os = "linux")]
+impl JailBackend for NativeResourceBackend {
+    fn name(&self) -> &'static str {
+        "native-resource-namespace"
+    }
+    fn is_available(&self) -> bool {
+        fn on_path(program: &str) -> bool {
+            std::env::var_os("PATH").is_some_and(|path| {
+                std::env::split_paths(&path).any(|dir| dir.join(program).is_file())
+            })
+        }
+        on_path("systemd-run") && on_path("bwrap")
+    }
+    fn constraint_support(&self) -> tinybox_core::ConstraintSupport {
+        use tinybox_core::{Constraint, ConstraintSupport, Enforcement};
+        ConstraintSupport::NONE
+            .with(Constraint::Filesystem, Enforcement::Enforced)
+            .with(Constraint::Network, Enforcement::Enforced)
+            .with(Constraint::Cpu, Enforcement::Enforced)
+            .with(Constraint::Memory, Enforcement::Enforced)
+            .with(Constraint::Pids, Enforcement::Enforced)
+    }
+    fn isolation(&self) -> tinybox_core::IsolationLevel {
+        tinybox_core::IsolationLevel::Kernel
+    }
+    fn carves_denials(&self) -> bool {
+        true
+    }
+    fn spawn(
+        &self,
+        jail: &Jail,
+        command: std::process::Command,
+    ) -> std::io::Result<std::process::Child> {
+        if jail.native_resources.is_none()
+            || command.get_program() != std::ffi::OsStr::new("systemd-run")
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "resource backend accepts only the prepared systemd-run launcher",
+            ));
+        }
+        command.spawn()
+    }
+}
 fn grants(paths: &[String]) -> Result<Vec<std::path::PathBuf>> {
     paths
         .iter()

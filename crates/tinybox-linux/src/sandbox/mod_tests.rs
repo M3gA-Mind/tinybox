@@ -347,7 +347,8 @@ async fn fractional_cpu_quota_is_not_rounded_down_to_zero() -> Result<()> {
 }
 
 #[test]
-fn native_jail_command_keeps_limits_and_target_environment_after_namespace_setup() -> Result<()> {
+fn native_jail_command_keeps_limits_and_target_environment_after_namespace_setup()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
     let cwd = root.path().join("work");
     std::fs::create_dir(&cwd)?;

@@ -250,6 +250,14 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
     }
     argv.extend(["--die-with-parent".into(), "--new-session".into()]);
     argv.extend(root_filesystem());
+    // A user-scope manager socket or host cgroup filesystem would let a
+    // same-UID workload escape the transient resource scope.
+    argv.extend([
+        "--tmpfs".into(),
+        "/run".into(),
+        "--tmpfs".into(),
+        "/sys".into(),
+    ]);
     ensure_mount_parents(&mut argv, request);
     argv.extend([
         "--bind".into(),

@@ -8,11 +8,17 @@ use tinybox_bus::{ExecutionFailure, OutputBatch};
 
 pub(super) const MAX_STREAM_EXECUTIONS: usize = 32;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NativeJailRequest {
+    Legacy(tinybox_bus::NativeJailConfig),
+    Resources(tinybox_bus::NativeJailRequest),
+}
+
 pub(super) struct StreamExecution {
     request: SpawnRequest,
     shell: Option<tinybox_bus::ShellExecRequest>,
     platform_shell: Option<tinybox_bus::SelectShellRequest>,
-    jail: Option<tinybox_bus::NativeJailConfig>,
+    jail: Option<NativeJailRequest>,
     journal: Arc<OutputJournal>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     collector: Collector,
@@ -128,8 +134,8 @@ impl Collector {
 }
 fn select_collector(
     entry: &super::Resource,
-    jail: Option<&tinybox_bus::NativeJailConfig>,
-    resolved: &tinybox_core::ExecRequest,
+    jail: Option<&NativeJailRequest>,
+    resolved: &mut tinybox_core::ExecRequest,
 ) -> Result<Collector> {
     Ok(if let Some(config) = jail {
         if !entry.native_host || entry.local_sandbox.is_none() {
@@ -144,9 +150,14 @@ fn select_collector(
                 "native jail requires a directory resource",
             )
         })?;
-        Collector::Jailed(super::super::native_jail::collector(
-            root, config, resolved,
-        )?)
+        Collector::Jailed(match config {
+            NativeJailRequest::Legacy(config) => {
+                super::super::native_jail::collector(root, config, resolved)?
+            }
+            NativeJailRequest::Resources(config) => {
+                super::super::native_jail::collector_with_resources(root, config, resolved)?
+            }
+        })
     } else {
         let native = Arc::new(tinybox_host::LimitedLocalHost::new(
             tinybox_bus::MAX_OUTPUT_BYTES,
@@ -178,9 +189,9 @@ fn require_owned_collector(entry: &super::Resource) -> Result<()> {
 }
 fn select_execution_collector(
     entry: &super::Resource,
-    jail: Option<&tinybox_bus::NativeJailConfig>,
+    jail: Option<&NativeJailRequest>,
     shell: Option<&tinybox_bus::ShellExecRequest>,
-    resolved: &tinybox_core::ExecRequest,
+    resolved: &mut tinybox_core::ExecRequest,
 ) -> Result<CollectorPreparation> {
     Ok(if let Some(shell) = shell {
         if !entry.native_host || entry.local_sandbox.is_none() {
@@ -203,7 +214,7 @@ fn select_execution_collector(
 fn prepare_execution(
     entry: &super::Resource,
     request: &SpawnRequest,
-    jail: Option<&tinybox_bus::NativeJailConfig>,
+    jail: Option<&NativeJailRequest>,
     shell: Option<&tinybox_bus::ShellExecRequest>,
     platform_shell: Option<&tinybox_bus::SelectShellRequest>,
 ) -> Result<(tinybox_core::ExecRequest, CollectorPreparation)> {
