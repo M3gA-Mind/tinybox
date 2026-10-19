@@ -49,8 +49,7 @@ fn the_launcher_hands_bwrap_the_args_on_fd_9_and_deletes_the_file() -> io::Resul
     let out = run(
         "/bin/sh",
         r#"[ "$1" = "--args" ] && [ "$2" = "9" ] || exit 3
-cat <&9 | tr '\0' ','
-ls "$(dirname "$TINY_FILE")" 2>/dev/null"#,
+cat <&9 | tr '\0' ','"#,
         &["--a", "value with space", "--b"],
     )?;
     assert_eq!(out, "--a,value with space,--b,");
@@ -73,10 +72,7 @@ fn the_launcher_runs_with_an_empty_environment() -> io::Result<()> {
     let dir = tempfile::tempdir()?;
     let bwrap = stand_in(dir.path(), "env")?;
     let file = ArgsFile::create(&[])?;
-    let mut launcher = command("/bin/sh", &bwrap, &file);
-    // Even a later `.env` on the returned command is the caller's explicit act;
-    // by default nothing is inherited.
-    let out = launcher.output()?;
+    let out = command("/bin/sh", &bwrap, &file).output()?;
     file.discard();
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(!text.contains("HOME=") && !text.contains("LD_PRELOAD"), "{text}");

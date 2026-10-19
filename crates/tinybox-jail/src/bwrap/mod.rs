@@ -7,51 +7,67 @@
 //! cannot see host processes, cannot create nested user namespaces
 //! (`--disable-userns`), and dies with its parent.
 //!
-//! # Choosing and trusting `bwrap`
+//! # Choosing `bwrap`
 //!
-//! `bwrap` is the host's privileged-adjacent helper, so it is never looked up
-//! on `PATH`. Only `/usr/bin/bwrap`, `/usr/local/bin/bwrap` and `/bin/bwrap`
-//! are considered, and only when owned by root and not group- or
-//! other-writable. [`BubblewrapBackend::with_program`] lets a host name another
-//! binary explicitly. Either way the binary must pass a probe, run once per
-//! process: a sandbox that really starts, in which a host-only file is
-//! invisible and the pid namespace differs from the parent's. A shim that just
-//! runs its arguments fails that probe.
+//! `bwrap` is never looked up on `PATH`. Only `/usr/bin/bwrap`,
+//! `/usr/local/bin/bwrap` and `/bin/bwrap` are considered, and only when owned
+//! by root and not group- or other-writable. [`BubblewrapBackend::with_program`]
+//! lets a host name another binary: it **skips that ownership check**, so the
+//! host is vouching for the path. Either way the binary must pass a probe, run
+//! once per process: a sandbox that starts, in which a host-only file is
+//! invisible and the pid namespace differs from the parent's. The probe is a
+//! sanity check that the thing isolates, not an authenticity check: a
+//! malicious `bwrap` that prints the expected answer passes it.
 //!
-//! The command's environment is **never** applied to the host `bwrap` process
-//! (`LD_PRELOAD` there would run caller code unsandboxed). `bwrap` runs with an
-//! empty environment and the caller's variables are passed as `--setenv`.
+//! # Environment and credentials
+//!
+//! Nothing the caller sets reaches a host-side process. A small launcher shell
+//! runs with an empty environment, and the whole `bwrap` argument list,
+//! including every `--setenv NAME value`, travels in a private file read
+//! through `bwrap --args 9` (see `launcher.rs`). So a token in the command's
+//! environment is in neither `/proc/<pid>/cmdline` (world-readable) nor in the
+//! environment of a host process, and `LD_PRELOAD` and similar loader
+//! variables take effect only inside the sandbox. The file is mode 0600 in a
+//! fresh 0700 directory and is deleted by the launcher as soon as it is open.
+//! If the launcher cannot start at all the file is removed on the error path.
 //!
 //! # What is claimed
 //!
-//! [`IsolationLevel::Kernel`] requires `--disable-userns` support (bubblewrap
-//! 0.8+); without it the backend still confines the filesystem but reports
-//! [`IsolationLevel::None`]. With a shared network namespace (`allow_net`) the
-//! per-jail answer drops further, see [`JailBackend::isolation_for`]: host
-//! loopback services and abstract sockets are reachable, so such a jail is not
-//! suitable for untrusted code. Hosts must ask
-//! [`JailBackend::is_suitable_for_untrusted_jail`], not the per-backend form.
+//! [`JailBackend::isolation`] is the **minimum over every configuration the
+//! backend accepts**: `Process` with `--disable-userns` support (bubblewrap
+//! 0.8+), `None` without it. [`JailBackend::isolation_for`] reaches
+//! [`IsolationLevel::Kernel`] only for a jail that denies network (a new net
+//! namespace). With `allow_net` the host network namespace is shared, so host
+//! loopback services and abstract sockets are reachable. Hosts must ask
+//! [`JailBackend::is_suitable_for_untrusted_jail`]; the per-backend
+//! `is_suitable_for_untrusted_code` is false by construction. `Kernel` here
+//! means separate pid, mount, user, ipc and uts (and net) namespaces: it does
+//! not imply seccomp or resource limits.
 //!
 //! # Known gaps (not closed in this backend)
 //!
 //! - No seccomp filter: `keyctl` (the user's kernel keyrings), `ptrace`,
 //!   `bpf`, `io_uring` and similar syscalls remain reachable. A filter needs a
-//!   file descriptor handed to `bwrap --seccomp`, which cannot be done without
-//!   `unsafe` or a helper process.
+//!   file descriptor handed to `bwrap --seccomp`; the launcher could carry one,
+//!   but a vetted BPF program is not part of this change.
 //! - No CPU, memory or pid limits (`tinybox-linux` offers them through a
 //!   `systemd-run` scope; not wired here).
-//! - `deny_read` paths must exist when the jail starts, and one nested more
-//!   than a level inside a writable grant is refused.
+//! - `deny_read` paths must exist when the jail starts: a path created later
+//!   under a mounted grant is **not** protected. One nested more than a level
+//!   inside a writable grant is refused.
 //! - Landlock is not layered inside: the kernel denies `mount` and
 //!   `pivot_root` to a Landlock-restricted thread, which would break `bwrap`'s
 //!   own setup.
+//! - Subprocess denial is not enforced and is refused.
 //!
 //! # Other behaviour
 //!
-//! Subprocess denial is not enforced and is refused. Stdio configured on the
-//! original `Command` is not recoverable from `std` (as with Seatbelt); use
-//! `spawn_captured` for pipes. File descriptors above 2 that the host left
-//! inheritable are closed before the sandbox starts (see `fds.rs`).
+//! Stdio configured on the original `Command` is not recoverable from `std`
+//! (as with Seatbelt); use `spawn_captured` for pipes. Descriptors above 2 that
+//! the host left inheritable are closed by the launcher after it starts,
+//! including ones opened by another thread at the moment of the spawn. Under
+//! `dash` (no `bash` installed) a descriptor above 9 cannot be closed and the
+//! sandbox fails to start rather than leak it.
 
 use std::io;
 use std::os::unix::fs::MetadataExt as _;
