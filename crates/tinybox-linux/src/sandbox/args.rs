@@ -6,6 +6,8 @@
 //! happens at runtime.
 
 use std::path::Path;
+use std::path::PathBuf;
+use std::collections::BTreeMap;
 
 use tinybox_core::{BoxSpec, Error, ExecRequest, Resources, Result, WorkspaceSource};
 
@@ -132,6 +134,162 @@ fn cpu_quota(cpu_millis: u32) -> String {
         whole.to_string()
     } else {
         format!("{whole}.{tenth}")
+    }
+}
+
+/// Fully validated input for the namespace-backed native directory jail.
+/// This is separate from [`BoxSpec`]: a native jail binds the caller's grants
+/// at their declared paths and never broadens them to a workspace image.
+#[derive(Debug, Clone)]
+pub struct NativeJailCommand {
+    /// Writable workspace root.
+    pub root: PathBuf,
+    /// Working directory, required to be under `root`.
+    pub cwd: PathBuf,
+    /// Additional read-only paths.
+    pub read_only: Vec<PathBuf>,
+    /// Additional writable paths.
+    pub read_write: Vec<PathBuf>,
+    /// Paths to mask after applying grants.
+    pub deny_read: Vec<PathBuf>,
+    /// Whether the process may use network sockets.
+    pub allow_net: bool,
+    /// Whether the process may create child processes.
+    pub allow_subprocess: bool,
+    /// Hard CPU limit in thousandths of one CPU.
+    pub cpu_millis: Option<u64>,
+    /// Hard resident memory limit in bytes.
+    pub memory_bytes: Option<u64>,
+    /// Hard task count limit.
+    pub pids_max: Option<u64>,
+    /// Program and arguments, never parsed by a shell.
+    pub argv: Vec<String>,
+    /// Environment installed by bubblewrap only after namespace setup.
+    pub env: BTreeMap<String, String>,
+}
+
+/// Build the trusted systemd-run and bubblewrap launcher for a native jail.
+///
+/// Explicit unsupported dimensions and unsafe request shapes are rejected;
+/// no requested limit is rounded up or dropped.
+pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<String>> {
+    use std::io::{Error, ErrorKind};
+    let invalid = || Error::new(ErrorKind::InvalidInput, "invalid native jail command");
+    if request.argv.is_empty()
+        || request.argv.iter().any(|part| part.contains('\0'))
+        || request.argv[0].is_empty()
+        || request.env.iter().any(|(key, value)| {
+            key.is_empty() || key.contains(['=', '\0']) || value.contains('\0')
+        })
+        || request.deny_read.iter().any(|denied| {
+            request
+                .root
+                .starts_with(denied)
+                || request.read_write.iter().any(|grant| grant.starts_with(denied))
+        })
+        || !request.cwd.starts_with(&request.root)
+        || request
+            .root
+            .canonicalize()
+            .is_err_or(|root| !root.is_dir())
+        || request.cwd.canonicalize().is_err()
+        || request.read_only.iter().chain(&request.read_write).any(|path| path.canonicalize().is_err())
+    {
+        return Err(invalid());
+    }
+    if request.cpu_millis == Some(0)
+        || request.memory_bytes == Some(0)
+        || request.pids_max == Some(0)
+    {
+        return Err(invalid());
+    }
+    if request.cpu_millis.is_none() && request.memory_bytes.is_none() && request.pids_max.is_none() {
+        return Err(invalid());
+    }
+    if !request.allow_subprocess {
+        return Err(Error::new(ErrorKind::Unsupported, "subprocess denial is unsupported"));
+    }
+
+    let mut argv = vec![
+        "systemd-run".to_owned(),
+        "--user".to_owned(),
+        "--scope".to_owned(),
+        "--quiet".to_owned(),
+        "--property=MemorySwapMax=0".to_owned(),
+        "--property=RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK".to_owned(),
+    ];
+    if let Some(value) = request.memory_bytes {
+        argv.push(format!("--property=MemoryMax={value}"));
+    }
+    if let Some(value) = request.cpu_millis {
+        argv.push(format!("--property=CPUQuota={}%", cpu_quota_u64(value)));
+    }
+    if let Some(value) = request.pids_max {
+        argv.push(format!("--property=TasksMax={value}"));
+    }
+    argv.push("--".to_owned());
+    argv.push("bwrap".to_owned());
+    for flag in [
+        "--unshare-user",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--unshare-cgroup",
+    ] {
+        argv.push(flag.to_owned());
+    }
+    if !request.allow_net {
+        argv.push("--unshare-net".to_owned());
+    }
+    argv.extend(["--die-with-parent".into(), "--new-session".into()]);
+    argv.extend(root_filesystem());
+    ensure_mount_parents(&mut argv, request);
+    argv.extend(["--bind".into(), request.root.display().to_string(), "/workspace".into()]);
+    for (source, destination, mode) in request
+        .read_only
+        .iter()
+        .map(|path| (path, path, "--ro-bind"))
+        .chain(request.read_write.iter().map(|path| (path, path, "--bind")))
+    {
+        argv.extend([mode.into(), source.display().to_string(), destination.display().to_string()]);
+    }
+    for denied in &request.deny_read {
+        argv.extend(["--tmpfs".into(), denied.display().to_string()]);
+    }
+    let cwd = request.cwd.strip_prefix(&request.root).map_err(|_| invalid())?;
+    let cwd = Path::new("/workspace").join(cwd);
+    argv.extend(["--chdir".into(), cwd.display().to_string(), "--clearenv".into()]);
+    for (key, value) in &request.env {
+        argv.extend(["--setenv".into(), key.clone(), value.clone()]);
+    }
+    argv.push("--".into());
+    argv.extend(request.argv.iter().cloned());
+    Ok(argv)
+}
+
+fn cpu_quota_u64(cpu_millis: u64) -> String {
+    let whole = cpu_millis / 10;
+    let tenth = cpu_millis % 10;
+    if tenth == 0 { whole.to_string() } else { format!("{whole}.{tenth}") }
+}
+
+fn ensure_mount_parents(argv: &mut Vec<String>, request: &NativeJailCommand) {
+    let mut dirs = std::collections::BTreeSet::new();
+    for path in request
+        .read_only
+        .iter()
+        .chain(&request.read_write)
+        .chain(&request.deny_read)
+    {
+        let mut parent = path.parent();
+        while let Some(path) = parent {
+            if path == Path::new("/") { break; }
+            dirs.insert(path.to_path_buf());
+            parent = path.parent();
+        }
+    }
+    for dir in dirs {
+        argv.extend(["--dir".into(), dir.display().to_string()]);
     }
 }
 
