@@ -216,12 +216,14 @@ fn unavailable() -> Error {
 /// consumes that command exactly once at spawn.
 struct NativeResourceBackend {
     expected: Mutex<Option<Vec<OsString>>>,
+    requested: Mutex<Option<tinybox_bus::NativeJailResourceRequest>>,
 }
 
 impl NativeResourceBackend {
     fn new() -> Self {
         Self {
             expected: Mutex::new(None),
+            requested: Mutex::new(None),
         }
     }
 
@@ -231,6 +233,15 @@ impl NativeResourceBackend {
             return Err(unavailable());
         }
         *expected = Some(argv.iter().map(OsString::from).collect());
+        Ok(())
+    }
+
+    fn bind_resources(&self, resources: tinybox_bus::NativeJailResourceRequest) -> Result<()> {
+        let mut requested = self.requested.lock().map_err(|_| unavailable())?;
+        if requested.is_some() {
+            return Err(unavailable());
+        }
+        *requested = Some(resources);
         Ok(())
     }
 }
@@ -271,7 +282,13 @@ impl JailBackend for NativeResourceBackend {
     }
 
     fn spawn(&self, jail: &Jail, mut cmd: Command) -> std::io::Result<Child> {
-        if jail.native_resources.is_none() {
+        if jail.resources.is_some()
+            || self
+                .requested
+                .lock()
+                .map_err(|_| std::io::Error::other("native resource request lock poisoned"))?
+                .is_none()
+        {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "resource backend requires a 2.1 native request",
@@ -314,11 +331,18 @@ fn prepare_with_resources(
     if request.jail.resources.is_some() || resources.disk_bytes.is_some() {
         return Err(unavailable());
     }
+    if [resources.cpu_millis, resources.memory_bytes, resources.pids_max]
+        .into_iter()
+        .flatten()
+        .any(|value| value == 0)
+        || (resources.cpu_millis.is_none()
+            && resources.memory_bytes.is_none()
+            && resources.pids_max.is_none())
+    {
+        return Err(invalid());
+    }
+    backend.bind_resources(resources)?;
     let mut jail = prepare(root, &request.jail, command, backend)?;
-    jail.native_resources = Some(resources);
-    backend
-        .require_resources(&jail)
-        .map_err(|_| unavailable())?;
     if request.jail.allow_net || !request.jail.allow_subprocess {
         return Err(unavailable());
     }
