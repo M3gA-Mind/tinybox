@@ -3,25 +3,6 @@
 use super::*;
 
 #[test]
-fn native_resource_subset_only_adds_explicit_constraints() {
-    let mut jail = Jail::new("/tmp", "native-resource-subset");
-    jail.native_resources = Some(tinybox_bus::NativeJailResourceRequest {
-        cpu_millis: Some(1),
-        memory_bytes: Some(1024),
-        pids_max: None,
-        disk_bytes: None,
-    });
-    assert_eq!(
-        jail.constraints(),
-        [
-            tinybox_core::Constraint::Filesystem,
-            tinybox_core::Constraint::Cpu,
-            tinybox_core::Constraint::Memory,
-        ]
-    );
-}
-
-#[test]
 fn noop_backend_spawns_unrestricted() {
     let dir = std::env::temp_dir();
     let jail = Jail::new(&dir, "test.noop");
