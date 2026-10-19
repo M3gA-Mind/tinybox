@@ -438,7 +438,11 @@ fn nested_user_namespaces_are_blocked_on_a_hardened_backend() -> io::Result<()> 
     let Some(backend) = backend()? else {
         return Ok(());
     };
-    if !backend.is_suitable_for_untrusted_code() {
+    if backend.isolation() < tinybox_core::IsolationLevel::Process {
+        // Only reachable on bubblewrap < 0.8; CI's bubblewrap has the flag.
+        if std::env::var_os("TINYBOX_REQUIRE_BWRAP").is_some_and(|v| v == "1") {
+            return Err(io::Error::other("bwrap lacks --disable-userns"));
+        }
         eprintln!("skipped: bwrap lacks --disable-userns");
         return Ok(());
     }
