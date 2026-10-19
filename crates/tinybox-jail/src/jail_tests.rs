@@ -129,3 +129,38 @@ fn canonicalize_deduplicates_denials_that_resolve_through_symlink_aliases() -> s
     assert_eq!(jail.deny_read, vec![credential.canonicalize()?]);
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn a_nested_grant_through_a_symlink_planted_in_a_writable_root_is_refused() -> std::io::Result<()> {
+    let root = tempfile::tempdir()?;
+    let secret = tempfile::tempdir()?;
+    std::os::unix::fs::symlink(secret.path(), root.path().join("vendor"))?;
+    let mut jail = Jail::new(root.path(), "t").add_read_only(root.path().join("vendor"));
+    let err = jail.canonicalize().err().map(|e| e.kind());
+    assert_eq!(err, Some(std::io::ErrorKind::InvalidInput));
+
+    // Same through a read-write grant, and through a deeper component.
+    let rw = tempfile::tempdir()?;
+    std::fs::create_dir(rw.path().join("a"))?;
+    std::os::unix::fs::symlink(secret.path(), rw.path().join("a").join("link"))?;
+    let mut jail = Jail::new(root.path(), "t")
+        .add_read_write(rw.path())
+        .add_read_only(rw.path().join("a").join("link").join("x"));
+    assert!(jail.canonicalize().is_err());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_grant_outside_any_writable_ancestor_is_still_allowed() -> std::io::Result<()> {
+    let root = tempfile::tempdir()?;
+    let target = tempfile::tempdir()?;
+    let holder = tempfile::tempdir()?;
+    let link = holder.path().join("tools");
+    std::os::unix::fs::symlink(target.path(), &link)?;
+    let mut jail = Jail::new(root.path(), "t").add_read_only(&link);
+    jail.canonicalize()?;
+    assert_eq!(jail.read_only, vec![target.path().canonicalize()?]);
+    Ok(())
+}

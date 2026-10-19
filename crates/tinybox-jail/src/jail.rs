@@ -134,6 +134,7 @@ impl Jail {
     ///
     /// Returns the filesystem error encountered while canonicalizing `root`.
     pub fn canonicalize(&mut self) -> std::io::Result<()> {
+        self.reject_symlinked_grants()?;
         self.root = self.root.canonicalize()?;
         for p in self
             .read_only
@@ -152,6 +153,27 @@ impl Jail {
             .collect::<std::io::Result<Vec<_>>>()?;
         self.deny_read.sort();
         self.deny_read.dedup();
+        Ok(())
+    }
+
+    /// Refuses a read-only or read-write grant that sits inside a writable
+    /// root or grant and reaches its target through a symlink below that
+    /// ancestor. The jailed program can plant such a link (`vendor -> /secret`)
+    /// in a writable directory; canonicalizing it would silently turn a later
+    /// session's grant into a mount of the link's target.
+    fn reject_symlinked_grants(&self) -> std::io::Result<()> {
+        let mut writable: Vec<PathBuf> = Vec::new();
+        for path in std::iter::once(&self.root).chain(&self.read_write) {
+            writable.push(path.clone());
+            if let Ok(canonical) = path.canonicalize() {
+                writable.push(canonical);
+            }
+        }
+        for grant in self.read_only.iter().chain(&self.read_write) {
+            for ancestor in &writable {
+                reject_symlink_below(ancestor, grant)?;
+            }
+        }
         Ok(())
     }
 
@@ -199,6 +221,37 @@ impl Jail {
     }
 }
 
+/// Errors when `path` lies inside `ancestor` (lexically) and any component
+/// below `ancestor` is a symlink. A path equal to `ancestor` passes.
+///
+/// # Errors
+/// `InvalidInput` naming the symlink.
+pub(crate) fn reject_symlink_below(ancestor: &Path, path: &Path) -> std::io::Result<()> {
+    let Ok(rest) = path.strip_prefix(ancestor) else {
+        return Ok(());
+    };
+    let mut current = ancestor.to_path_buf();
+    for component in rest.components() {
+        current.push(component);
+        match std::fs::symlink_metadata(&current) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "grant {} reaches {} through a symlink inside writable {}",
+                        path.display(),
+                        current.display(),
+                        ancestor.display()
+                    ),
+                ));
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
 /// OS-specific enforcement of a [`Jail`].
 ///
 /// We model spawning rather than `Command` mutation because Windows
@@ -236,12 +289,18 @@ pub trait JailBackend: Send + Sync {
         tinybox_core::ConstraintSupport::NONE
     }
 
-    /// Process isolation provided by this backend, independent of path checks.
+    /// Process isolation this backend guarantees for **any** jail it accepts,
+    /// independent of path checks. A backend whose isolation depends on the
+    /// configuration reports its weakest case here and the actual level from
+    /// [`isolation_for`](Self::isolation_for).
     fn isolation(&self) -> tinybox_core::IsolationLevel {
         tinybox_core::IsolationLevel::None
     }
 
-    /// Whether the backend confines processes sufficiently for untrusted code.
+    /// Whether the backend confines processes sufficiently for untrusted code
+    /// under *every* configuration it accepts. Prefer
+    /// [`is_suitable_for_untrusted_jail`](Self::is_suitable_for_untrusted_jail)
+    /// when you hold the jail: it can be true where this is false.
     fn is_suitable_for_untrusted_code(&self) -> bool {
         self.isolation() >= tinybox_core::IsolationLevel::Kernel
             && self
