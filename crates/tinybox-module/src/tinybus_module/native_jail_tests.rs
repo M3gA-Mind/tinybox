@@ -499,23 +499,7 @@ fn native_memory_limit_kills_a_workload_that_touches_past_its_budget()
         &mut ready,
     )?;
     assert_eq!(ready, "READY\n", "memory pressure workload did not finish");
-    let unit = command
-        .argv
-        .iter()
-        .find_map(|part| part.strip_prefix("--unit="))
-        .ok_or("launcher has no transient scope unit")?;
-    let control_group = Command::new("systemctl")
-        .args(["--user", "show", "--property=ControlGroup", "--value", unit])
-        .output()?;
-    assert!(control_group.status.success());
-    let control_group = String::from_utf8(control_group.stdout)?;
-    assert!(
-        !control_group.trim().is_empty(),
-        "scope {unit} has no cgroup path; systemd-run status is {:?}",
-        child.try_wait()?
-    );
-    let cgroup =
-        std::path::Path::new("/sys/fs/cgroup").join(control_group.trim_start_matches('/').trim());
+    let cgroup = active_scope_cgroup(&command.argv, &mut child)?;
     let memory_events = std::fs::read_to_string(cgroup.join("memory.events")).map_err(|error| {
         std::io::Error::other(format!(
             "cannot read {}: {error}",
@@ -544,6 +528,31 @@ fn native_memory_limit_kills_a_workload_that_touches_past_its_budget()
         output.status
     );
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn active_scope_cgroup(
+    argv: &[String],
+    child: &mut std::process::Child,
+) -> std::io::Result<std::path::PathBuf> {
+    let unit = argv
+        .iter()
+        .find_map(|part| part.strip_prefix("--unit="))
+        .ok_or_else(|| std::io::Error::other("launcher has no transient scope unit"))?;
+    let control_group = std::process::Command::new("systemctl")
+        .args(["--user", "show", "--property=ControlGroup", "--value", unit])
+        .output()?;
+    assert!(control_group.status.success());
+    let control_group = String::from_utf8(control_group.stdout)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    assert!(
+        !control_group.trim().is_empty(),
+        "scope {unit} has no cgroup path; systemd-run status is {:?}",
+        child.try_wait()?
+    );
+    Ok(std::path::Path::new("/sys/fs/cgroup").join(
+        control_group.trim_start_matches('/').trim(),
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -653,7 +662,7 @@ fn native_scope_exit_kills_double_forked_setsid_descendants()
     use std::{
         io::Write,
         process::{Command, Stdio},
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     if !native_resource_runtime_available() {
@@ -747,7 +756,7 @@ async fn native_cancellation_kills_detached_descendants_and_preserves_stream_eve
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::{
         process::Command,
-        time::{Duration, Instant},
+        time::Duration,
     };
 
     if !native_resource_runtime_available() {
