@@ -196,7 +196,7 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         }),
     };
     let script = format!(
-        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; python3 -c {} || exit 44; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; printf 'READY\\n'; read -r _; exit 0",
+        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; python3 -c 'data=bytearray(8388608); data[0]=1' || exit 45; python3 -c {} || exit 44; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; printf 'READY\\n'; read -r _; exit 0",
         shell_quote(&workspace.join("control").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
@@ -298,8 +298,10 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
 #[test]
 fn native_memory_limit_kills_a_workload_that_touches_past_its_budget()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
-    use std::os::unix::process::ExitStatusExt;
-    use std::process::{Command, Stdio};
+    use std::{
+        io::Write,
+        process::{Command, Stdio},
+    };
 
     if !Command::new("python3").arg("--version").status()?.success() {
         eprintln!("skipped: python3 is unavailable for the memory pressure fixture");
@@ -336,11 +338,14 @@ fn native_memory_limit_kills_a_workload_that_touches_past_its_budget()
             disk_bytes: None,
         }),
     };
-    let mut command = tinybox_core::ExecRequest::new([
-        "python3",
-        "-c",
-        "data=bytearray(256*1024*1024)\nfor i in range(0,len(data),4096): data[i]=1\nprint('allocation survived')",
-    ]);
+    let script = format!(
+        "python3 -c {}; status=$?; printf '%s' \"$status\" > {}; printf 'READY\\n'; read -r _; exit 0",
+        shell_quote(
+            "data=bytearray(256*1024*1024)\nfor i in range(0,len(data),4096): data[i]=1\nprint('allocation survived')"
+        ),
+        shell_quote(&root.path().join("python-status").display().to_string())
+    );
+    let mut command = tinybox_core::ExecRequest::new(["/bin/bash", "-c", &script]);
     command.cwd = Some(root.path().into());
     let backend = resource_backend();
     let jail = prepare_with_resources(root.path(), &request, &mut command, backend.as_ref())?;
@@ -351,16 +356,44 @@ fn native_memory_limit_kills_a_workload_that_touches_past_its_budget()
         .envs(&command.env)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output =
-        tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, launcher)?.wait_with_output()?;
-    assert_eq!(
-        output.status.signal(),
-        Some(9),
-        "memory overrun must be killed by the cgroup, status={:?}, stderr={}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+    let mut child = tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, launcher)?;
+    let mut ready = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(child.stdout.as_mut().ok_or("missing stdout pipe")?),
+        &mut ready,
+    )?;
+    assert_eq!(ready, "READY\n", "memory pressure workload did not finish");
+    let unit = command
+        .argv
+        .iter()
+        .find_map(|part| part.strip_prefix("--unit="))
+        .ok_or("launcher has no transient scope unit")?;
+    let control_group = Command::new("systemctl")
+        .args(["--user", "show", "--property=ControlGroup", "--value", unit])
+        .output()?;
+    assert!(control_group.status.success());
+    let cgroup = std::path::Path::new("/sys/fs/cgroup").join(
+        String::from_utf8(control_group.stdout)?
+            .trim_start_matches('/')
+            .trim(),
     );
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("allocation survived"));
+    let oom_kills: u64 = std::fs::read_to_string(cgroup.join("memory.events"))?
+        .lines()
+        .find_map(|line| line.strip_prefix("oom_kill "))
+        .ok_or("missing memory OOM counter")?
+        .parse()?;
+    assert!(oom_kills > 0, "memory overrun did not increment oom_kill");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("python-status"))?,
+        "137"
+    );
+    child
+        .stdin
+        .as_mut()
+        .ok_or("missing stdin pipe")?
+        .write_all(b"continue\n")?;
+    let output = child.wait_with_output()?;
+    assert!(output.status.success(), "supervisor should survive OOM");
     Ok(())
 }
 
