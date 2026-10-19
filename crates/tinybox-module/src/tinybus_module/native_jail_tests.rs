@@ -117,6 +117,45 @@ fn native_resource_runtime_available() -> bool {
     available
 }
 
+#[cfg(target_os = "linux")]
+fn pid_namespace_contains_process(pid: i32, namespace_inode: u64) -> std::io::Result<bool> {
+    for entry in std::fs::read_dir("/proc")? {
+        let Ok(entry) = entry else { continue };
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+        {
+            continue;
+        }
+        let status = match std::fs::read_to_string(entry.path().join("status")) {
+            Ok(status) => status,
+            Err(_) => continue,
+        };
+        let namespaces = match std::fs::read_link(entry.path().join("ns/pid")) {
+            Ok(namespaces) => namespaces,
+            Err(_) => continue,
+        };
+        let same_pid = status
+            .lines()
+            .find_map(|line| line.strip_prefix("NSpid:"))
+            .and_then(|pids| pids.split_whitespace().last())
+            .and_then(|pid| pid.parse::<i32>().ok())
+            == Some(pid);
+        let same_namespace = namespaces
+            .to_string_lossy()
+            .strip_prefix("pid:[")
+            .and_then(|inode| inode.strip_suffix(']'))
+            .and_then(|inode| inode.parse::<u64>().ok())
+            == Some(namespace_inode);
+        if same_pid && same_namespace {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(unix)]
 #[test]
 fn requested_native_resource_limits_are_refused_before_spawn()
@@ -636,29 +675,16 @@ fn native_scope_exit_kills_double_forked_setsid_descendants()
     let mut identity = identity.split_whitespace();
     let detached: i32 = identity.next().ok_or("missing detached PID")?.parse()?;
     let pid_namespace: u64 = identity.next().ok_or("missing PID namespace inode")?.parse()?;
+    assert!(
+        pid_namespace_contains_process(detached, pid_namespace)?,
+        "fixture did not expose its detached process in the host proc view"
+    );
     let output = child.wait_with_output()?;
     assert!(output.status.success(), "jail supervisor failed: {}", String::from_utf8_lossy(&output.stderr));
 
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        let still_alive = std::fs::read_dir("/proc")?.filter_map(|entry| entry.ok()).any(|entry| {
-            if !entry.file_name().to_string_lossy().bytes().all(|byte| byte.is_ascii_digit()) {
-                return false;
-            }
-            let status = std::fs::read_to_string(entry.path().join("status"));
-            let namespaces = std::fs::read_link(entry.path().join("ns/pid"));
-            let same_pid = status.ok().is_some_and(|status| {
-                status.lines().find_map(|line| line.strip_prefix("NSpid:"))
-                    .and_then(|pids| pids.split_whitespace().last())
-                    .and_then(|pid| pid.parse::<i32>().ok()) == Some(detached)
-            });
-            let same_namespace = namespaces.ok().is_some_and(|path| {
-                path.to_string_lossy().strip_prefix("pid:[")
-                    .and_then(|inode| inode.strip_suffix(']'))
-                    .and_then(|inode| inode.parse::<u64>().ok()) == Some(pid_namespace)
-            });
-            same_pid && same_namespace
-        });
+        let still_alive = pid_namespace_contains_process(detached, pid_namespace)?;
         if !still_alive {
             break;
         }
