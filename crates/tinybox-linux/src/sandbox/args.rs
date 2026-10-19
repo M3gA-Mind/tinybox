@@ -1,15 +1,16 @@
 //! Building the `bwrap` command line, and the cgroup wrapper around it.
 //!
-//! Pure functions, as with the Docker backend: what a sandbox binds, unshares,
-//! and limits *is* the security boundary, so every one of those decisions
-//! should be a value a test can assert on rather than something that only
-//! happens at runtime.
+//! Command construction, as with the Docker backend: what a sandbox binds,
+//! unshares, and limits *is* the security boundary, so every one of those
+//! decisions should be a value a test can assert on rather than something that
+//! only happens at runtime. Runtime capability probes are kept separate from
+//! the pure argument builders.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::path::PathBuf;
 
-use tinybox_core::{BoxSpec, Error, ExecRequest, Resources, Result, WorkspaceSource};
+use tinybox_core::{BoxSpec, Capability, Error, ExecRequest, Resources, Result, WorkspaceSource};
 
 use super::NAME;
 
@@ -23,6 +24,7 @@ pub const WORKSPACE_MOUNT: &str = "/workspace";
 /// user can read; this exposes the system's programs and libraries and nothing
 /// else.
 const USR: &str = "/usr";
+const SYSTEMD_EXPAND_ENVIRONMENT_FLAG: &[u8] = b"--expand-environment";
 
 /// Files a normal command expects to exist.
 ///
@@ -74,7 +76,12 @@ fn unsupported(kind: &'static str) -> Error {
 /// Returns [`Error::EmptyCommand`] when the request names no program, and
 /// [`Error::UnsupportedWorkspaceSource`] when the spec names a source this
 /// backend cannot bind.
-pub(super) fn exec(spec: &BoxSpec, request: &ExecRequest, limits: bool) -> Result<Vec<String>> {
+pub(super) fn exec(
+    spec: &BoxSpec,
+    request: &ExecRequest,
+    limits: bool,
+    supports_expand_environment: bool,
+) -> Result<Vec<String>> {
     if request.argv.is_empty() {
         return Err(Error::EmptyCommand {
             sandbox: NAME.to_owned(),
@@ -82,7 +89,7 @@ pub(super) fn exec(spec: &BoxSpec, request: &ExecRequest, limits: bool) -> Resul
     }
 
     let mut argv = if limits {
-        cgroup_prefix(&spec.resources)
+        cgroup_prefix(&spec.resources, supports_expand_environment)
     } else {
         Vec::new()
     };
@@ -97,8 +104,11 @@ pub(super) fn exec(spec: &BoxSpec, request: &ExecRequest, limits: bool) -> Resul
 /// also why limits are opt-in: a machine with no systemd user session cannot
 /// provide them, and a sandbox that accepted a memory cap it could not apply
 /// would be claiming something untrue.
-fn cgroup_prefix(resources: &Resources) -> Vec<String> {
-    vec![
+pub(super) fn cgroup_prefix(
+    resources: &Resources,
+    supports_expand_environment: bool,
+) -> Vec<String> {
+    let mut argv = vec![
         "systemd-run".to_owned(),
         "--user".to_owned(),
         "--scope".to_owned(),
@@ -122,7 +132,34 @@ fn cgroup_prefix(resources: &Resources) -> Vec<String> {
         "--property".to_owned(),
         format!("TasksMax={}", resources.pids_max),
         "--".to_owned(),
-    ]
+    ];
+    if supports_expand_environment {
+        // The shell receives the command as an argument, but newer systemd
+        // releases expand `${VAR}` references before the shell can interpret
+        // its own quoting. Keep arbitrary user commands byte-for-byte intact.
+        // This option was added in v254; older releases do not expand scope
+        // command arguments by default, so omitting it preserves compatibility.
+        argv.splice(3..3, ["--expand-environment=no".to_owned()]);
+    }
+    argv
+}
+
+pub(super) fn parse_expand_environment_help(
+    success: bool,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<bool> {
+    if !success {
+        return Err(Error::Unsupported {
+            sandbox: NAME.to_owned(),
+            capability: Capability::ResourceLimits,
+        });
+    }
+    Ok([stdout, stderr].into_iter().any(|stream| {
+        stream
+            .windows(SYSTEMD_EXPAND_ENVIRONMENT_FLAG.len())
+            .any(|window| window == SYSTEMD_EXPAND_ENVIRONMENT_FLAG)
+    }))
 }
 
 /// Convert thousandths of one CPU to systemd's percentage without dropping
@@ -227,12 +264,29 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
         ));
     }
 
+    // `systemd-run` versions that support variable expansion apply it to
+    // command arguments before starting bwrap. Probe the same advertised
+    // capability used by the owning namespace backend and disable expansion
+    // before placing any target-controlled argv on the command line.
+    let probe = std::process::Command::new("systemd-run")
+        .arg("--help")
+        .env("LC_ALL", "C")
+        .output()?;
+    let supports_expand_environment = parse_expand_environment_help(
+        probe.status.success(),
+        &probe.stdout,
+        &probe.stderr,
+    )
+    .map_err(|_| Error::new(ErrorKind::Unsupported, "cannot verify systemd-run argument handling"))?;
     let mut argv = vec![
         "systemd-run".to_owned(),
         "--user".to_owned(),
         "--scope".to_owned(),
         "--quiet".to_owned(),
     ];
+    if supports_expand_environment {
+        argv.push("--expand-environment=no".into());
+    }
     if let Some(value) = request.memory_bytes {
         argv.push(format!("--property=MemoryMax={value}"));
         argv.push("--property=MemorySwapMax=0".to_owned());
