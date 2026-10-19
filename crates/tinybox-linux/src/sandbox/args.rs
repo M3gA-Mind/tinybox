@@ -190,13 +190,17 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
                     .any(|grant| grant.starts_with(denied))
         })
         || !request.cwd.starts_with(&request.root)
-        || !matches!(request.root.canonicalize(), Ok(root) if root.is_dir())
-        || request.cwd.canonicalize().is_err()
+        || !matches!(request.root.canonicalize(), Ok(root) if root.is_dir() && root == request.root)
+        || !matches!(request.cwd.canonicalize(), Ok(cwd) if cwd.starts_with(&request.root) && cwd == request.cwd)
         || request
             .read_only
             .iter()
             .chain(&request.read_write)
-            .any(|path| path.canonicalize().is_err())
+            .any(|path| !matches!(path.canonicalize(), Ok(canonical) if canonical == *path))
+        || std::iter::once(&request.root)
+            .chain(&request.read_only)
+            .chain(&request.read_write)
+            .any(|path| ["/run", "/sys", "/proc"].iter().any(|protected| path.starts_with(protected)))
     {
         return Err(invalid());
     }
@@ -210,6 +214,12 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
     {
         return Err(invalid());
     }
+    if request.allow_net {
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            "resource-aware native jail requires a private network namespace",
+        ));
+    }
     if !request.allow_subprocess {
         return Err(Error::new(
             ErrorKind::Unsupported,
@@ -222,7 +232,6 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
         "--user".to_owned(),
         "--scope".to_owned(),
         "--quiet".to_owned(),
-        "--property=RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK".to_owned(),
     ];
     if let Some(value) = request.memory_bytes {
         argv.push(format!("--property=MemoryMax={value}"));
@@ -245,9 +254,9 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
     ] {
         argv.push(flag.to_owned());
     }
-    if !request.allow_net {
-        argv.push("--unshare-net".to_owned());
-    }
+    // The private network namespace also isolates AF_UNIX abstract sockets,
+    // closing the same-UID user-manager escape path.
+    argv.push("--unshare-net".to_owned());
     argv.extend(["--die-with-parent".into(), "--new-session".into()]);
     argv.extend(root_filesystem());
     // A user-scope manager socket or host cgroup filesystem would let a
@@ -262,7 +271,7 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
     argv.extend([
         "--bind".into(),
         request.root.display().to_string(),
-        "/workspace".into(),
+        request.root.display().to_string(),
     ]);
     for (source, destination, mode) in request
         .read_only
@@ -287,14 +296,9 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
             ]);
         }
     }
-    let cwd = request
-        .cwd
-        .strip_prefix(&request.root)
-        .map_err(|_| invalid())?;
-    let cwd = Path::new("/workspace").join(cwd);
     argv.extend([
         "--chdir".into(),
-        cwd.display().to_string(),
+        request.cwd.display().to_string(),
         "--clearenv".into(),
     ]);
     for (key, value) in &request.env {
@@ -317,9 +321,8 @@ fn cpu_quota_u64(cpu_millis: u64) -> String {
 
 fn ensure_mount_parents(argv: &mut Vec<String>, request: &NativeJailCommand) {
     let mut dirs = std::collections::BTreeSet::new();
-    for path in request
-        .read_only
-        .iter()
+    for path in std::iter::once(&request.root)
+        .chain(&request.read_only)
         .chain(&request.read_write)
         .chain(&request.deny_read)
     {

@@ -128,7 +128,10 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
     let outside = std::env::temp_dir().join(format!("tinybox-escape-proof-{}", std::process::id()));
     let _ = std::fs::remove_file(&outside);
     let bash_env = workspace.join("startup.sh");
-    std::fs::write(&bash_env, "printf startup > /workspace/from-bash-env\n")?;
+    std::fs::write(
+        &bash_env,
+        format!("printf startup > {}\n", shell_quote(&workspace.join("from-bash-env").display().to_string())),
+    )?;
 
     let probe = Command::new("systemd-run")
         .args([
@@ -164,7 +167,9 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         }),
     };
     let script = format!(
-        "printf allowed > /workspace/control; test ! -e /workspace/denied-inside/secret || exit 41; test ! -r {} || exit 42; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; exit 0",
+        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; exit 0",
+        shell_quote(&workspace.join("control").display().to_string()),
+        shell_quote(&denied_inside.join("secret").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
         shell_quote(&outside.display().to_string()),
     );
@@ -172,7 +177,7 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
     command.cwd = Some(workspace.clone());
     command
         .env
-        .insert("BASH_ENV".into(), "/workspace/startup.sh".into());
+        .insert("BASH_ENV".into(), bash_env.display().to_string());
     let backend = resource_backend();
     let jail = prepare_with_resources(
         root.path().join("workspace").as_path(),
