@@ -82,6 +82,7 @@ fn config() -> NativeJailConfig {
 #[cfg(target_os = "linux")]
 fn native_resource_runtime_available() -> bool {
     use std::process::Command;
+    use std::os::unix::fs::FileTypeExt;
 
     let manager_socket = std::env::var("DBUS_SESSION_BUS_ADDRESS")
         .ok()
@@ -187,6 +188,10 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         process::{Command, Stdio},
     };
 
+    if !native_resource_runtime_available() {
+        eprintln!("skipped: rootless systemd scope and bubblewrap namespaces are unavailable");
+        return Ok(());
+    }
     let root = tempfile::tempdir()?;
     let workspace = root.path().join("workspace");
     let hidden = workspace.join("hidden");
@@ -376,6 +381,10 @@ fn native_memory_limit_kills_a_workload_that_touches_past_its_budget()
         process::{Command, Stdio},
     };
 
+    if !native_resource_runtime_available() {
+        eprintln!("skipped: rootless systemd scope and bubblewrap namespaces are unavailable");
+        return Ok(());
+    }
     if !Command::new("python3").arg("--version").status()?.success() {
         eprintln!("skipped: python3 is unavailable for the memory pressure fixture");
         return Ok(());
@@ -480,6 +489,10 @@ fn fractional_cpu_limit_throttles_the_live_native_scope()
         time::{Duration, Instant},
     };
 
+    if !native_resource_runtime_available() {
+        eprintln!("skipped: rootless systemd scope and bubblewrap namespaces are unavailable");
+        return Ok(());
+    }
     let root = tempfile::tempdir()?;
     let release = root.path().join("release-cpu-loop");
     let script = format!(
@@ -575,6 +588,10 @@ fn native_scope_exit_kills_double_forked_setsid_descendants()
         time::{Duration, Instant},
     };
 
+    if !native_resource_runtime_available() {
+        eprintln!("skipped: rootless systemd scope and bubblewrap namespaces are unavailable");
+        return Ok(());
+    }
     let root = tempfile::tempdir()?;
     let pid_file = root.path().join("detached.pid");
     let python = format!(
@@ -661,6 +678,10 @@ async fn native_cancellation_kills_detached_descendants_and_preserves_stream_eve
         time::{Duration, Instant},
     };
 
+    if !native_resource_runtime_available() {
+        eprintln!("skipped: rootless systemd scope and bubblewrap namespaces are unavailable");
+        return Ok(());
+    }
     let root = tempfile::tempdir()?;
     let pid_file = root.path().join("cancelled-descendant");
     let python = format!(
