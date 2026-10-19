@@ -553,7 +553,7 @@ fn fractional_cpu_limit_throttles_the_live_native_scope()
     use std::{
         io::BufRead,
         process::{Command, Stdio},
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     if !native_resource_runtime_available() {
@@ -653,7 +653,7 @@ fn native_scope_exit_kills_double_forked_setsid_descendants()
     use std::{
         io::Write,
         process::{Command, Stdio},
-        time::{Duration, Instant},
+        time::Duration,
     };
 
     if !native_resource_runtime_available() {
