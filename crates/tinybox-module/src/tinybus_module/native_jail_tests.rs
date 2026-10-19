@@ -220,7 +220,7 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         }),
     };
     let script = format!(
-        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; python3 -c 'data=bytearray(8388608); data[0]=1' || exit 45; python3 -c {} || exit 44; python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX)\ntry: s.connect(sys.argv[1])\nexcept OSError: sys.exit(0)\nsys.exit(1)' {} || exit 46; python3 -c 'import os,sys; fd=int(os.environ[\"TINYBOX_MANAGER_FD\"]); expected=int(os.environ[\"TINYBOX_MANAGER_INODE\"])\ntry: actual=os.stat(f\"/proc/self/fd/{fd}\").st_ino\nexcept OSError: sys.exit(0)\nsys.exit(1 if actual==expected else 0)' || exit 47; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; printf 'READY\\n'; read -r _; exit 0",
+        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; python3 -c 'data=bytearray(8388608); data[0]=1' || exit 45; python3 -c {} || exit 44; python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX)\ntry: s.connect(sys.argv[1])\nexcept OSError: sys.exit(0)\nsys.exit(1)' {} || exit 46; python3 -c 'import os,sys; fd=int(os.environ[\"TINYBOX_MANAGER_FD\"]); expected=int(os.environ[\"TINYBOX_MANAGER_INODE\"])\ntry: actual=os.stat(f\"/proc/self/fd/{{fd}}\").st_ino\nexcept OSError: sys.exit(0)\nsys.exit(1 if actual==expected else 0)' || exit 47; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; printf 'READY\\n'; read -r _; exit 0",
         shell_quote(&workspace.join("control").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
