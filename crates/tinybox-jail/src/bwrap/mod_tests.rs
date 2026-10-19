@@ -194,3 +194,41 @@ fn a_leaked_descriptor_is_closed_through_the_shell_launcher() -> io::Result<()> 
     }
     Ok(())
 }
+
+fn fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+#[test]
+fn a_launcher_that_passes_the_probe_is_available_with_kernel_isolation() {
+    let backend = BubblewrapBackend::with_program(fixture("fake-bwrap-probe.sh"));
+    assert!(backend.is_available());
+    assert_eq!(backend.isolation(), IsolationLevel::Kernel);
+    assert_eq!(
+        backend.program(),
+        Some(fixture("fake-bwrap-probe.sh").as_path())
+    );
+}
+
+#[test]
+fn a_bwrap_without_disable_userns_is_available_but_claims_no_isolation() {
+    let backend = BubblewrapBackend::with_program(fixture("fake-bwrap-old.sh"));
+    assert!(backend.is_available());
+    assert_eq!(backend.isolation(), IsolationLevel::None);
+    assert!(!backend.is_suitable_for_untrusted_code());
+}
+
+#[test]
+fn the_default_constructor_probes_only_trusted_paths() {
+    let backend = BubblewrapBackend::new();
+    if let Some(program) = backend.program() {
+        assert!(TRUSTED_PATHS.iter().any(|p| Path::new(p) == program));
+        assert!(is_trusted_binary(program));
+    }
+    assert_eq!(
+        BubblewrapBackend::default().is_available(),
+        backend.is_available()
+    );
+}
