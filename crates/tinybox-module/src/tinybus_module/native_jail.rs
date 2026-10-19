@@ -378,25 +378,37 @@ fn prepare_with_resources(
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
     };
-    #[cfg(target_os = "linux")]
+    configure_resource_launcher(&native, command, backend)?;
+    Ok(jail)
+}
+
+#[cfg(target_os = "linux")]
+fn configure_resource_launcher(
+    native: &tinybox_linux::NativeJailCommand,
+    command: &mut tinybox_core::ExecRequest,
+    backend: &NativeResourceBackend,
+) -> Result<()> {
     let bwrap = tinybox_jail::BubblewrapBackend::new()
         .program()
         .map(Path::to_path_buf)
         .ok_or_else(unavailable)?;
-    #[cfg(target_os = "linux")]
-    let argv = tinybox_linux::native_jail_argv_with_programs(
-        &native,
-        &tinybox_linux::trusted_systemd_run_program().map_err(|_| unavailable())?,
-        &bwrap,
-    )
+    let systemd_run = tinybox_linux::trusted_systemd_run_program().map_err(|_| unavailable())?;
+    let argv = tinybox_linux::native_jail_argv_with_programs(native, &systemd_run, &bwrap)
         .map_err(|_| unavailable())?;
-    #[cfg(not(target_os = "linux"))]
-    return Err(unavailable());
     backend.bind(&argv)?;
     command.argv = argv;
     command.env = launcher_environment();
     command.cwd = None;
-    Ok(jail)
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_resource_launcher(
+    _native: &tinybox_linux::NativeJailCommand,
+    _command: &mut tinybox_core::ExecRequest,
+    _backend: &NativeResourceBackend,
+) -> Result<()> {
+    Err(unavailable())
 }
 
 #[cfg(target_os = "linux")]

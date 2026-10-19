@@ -504,7 +504,8 @@ fn native_jail_command_keeps_limits_and_target_environment_after_namespace_setup
 #[cfg(target_os = "linux")]
 fn native_jail_does_not_resolve_trusted_launchers_from_target_path()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
-    const CHILD: &str = "sandbox::test::native_jail_does_not_resolve_trusted_launchers_from_target_path";
+    const CHILD: &str =
+        "sandbox::test::native_jail_does_not_resolve_trusted_launchers_from_target_path";
     if let Some(marker) = std::env::var_os("TINYBOX_PATH_HIJACK_MARKER") {
         let root = tempfile::tempdir()?;
         let cwd = root.path().join("work");

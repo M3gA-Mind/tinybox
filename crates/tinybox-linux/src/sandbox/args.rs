@@ -243,15 +243,18 @@ pub fn native_jail_argv_with_programs(
 /// Find systemd-run only in fixed system locations and return its trusted
 /// canonical path. This does not consult the caller's `PATH`.
 pub fn trusted_systemd_run_program() -> std::io::Result<std::path::PathBuf> {
-    [Path::new("/usr/bin/systemd-run"), Path::new("/bin/systemd-run")]
-        .into_iter()
-        .find_map(|path| validate_trusted_program(path).ok())
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "no trusted systemd-run executable in fixed system locations",
-            )
-        })
+    [
+        Path::new("/usr/bin/systemd-run"),
+        Path::new("/bin/systemd-run"),
+    ]
+    .into_iter()
+    .find_map(|path| validate_trusted_program(path).ok())
+    .ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no trusted systemd-run executable in fixed system locations",
+        )
+    })
 }
 
 fn trusted_bwrap_program() -> std::io::Result<std::path::PathBuf> {
@@ -267,10 +270,13 @@ fn trusted_bwrap_program() -> std::io::Result<std::path::PathBuf> {
 }
 
 fn validate_trusted_program(path: &Path) -> std::io::Result<std::path::PathBuf> {
-    use std::os::unix::fs::MetadataExt as _;
     use std::io::{Error, ErrorKind};
+    use std::os::unix::fs::MetadataExt as _;
     if !path.is_absolute() {
-        return Err(Error::new(ErrorKind::PermissionDenied, "launcher path must be absolute"));
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "launcher path must be absolute",
+        ));
     }
     let canonical = path.canonicalize()?;
     let mut current = std::path::PathBuf::from("/");
@@ -286,7 +292,10 @@ fn validate_trusted_program(path: &Path) -> std::io::Result<std::path::PathBuf> 
     }
     let metadata = std::fs::metadata(&canonical)?;
     if !metadata.is_file() || metadata.mode() & 0o111 == 0 {
-        return Err(Error::new(ErrorKind::PermissionDenied, "launcher is not executable"));
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "launcher is not executable",
+        ));
     }
     Ok(canonical)
 }
