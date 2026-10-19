@@ -24,6 +24,8 @@ pub const WORKSPACE_MOUNT: &str = "/workspace";
 /// else.
 const USR: &str = "/usr";
 const SYSTEMD_EXPAND_ENVIRONMENT_FLAG: &[u8] = b"--expand-environment";
+static NATIVE_SCOPE_SEQUENCE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
 
 /// Files a normal command expects to exist.
 ///
@@ -288,6 +290,11 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
         "--user".to_owned(),
         "--scope".to_owned(),
         "--quiet".to_owned(),
+        format!(
+            "--unit=tinybox-native-{}-{}.scope",
+            std::process::id(),
+            NATIVE_SCOPE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ),
     ];
     if supports_expand_environment {
         argv.push("--expand-environment=no".into());
