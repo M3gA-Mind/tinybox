@@ -102,7 +102,8 @@ fn native_resource_runtime_available() -> bool {
     let namespaces = Command::new("bwrap")
         .args([
             "--unshare-user", "--unshare-pid", "--unshare-net", "--ro-bind", "/usr",
-            "/usr", "--", "/usr/bin/true",
+            "/usr", "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib64", "/lib64",
+            "--", "/usr/bin/true",
         ])
         .status()
         .is_ok_and(|status| status.success());
