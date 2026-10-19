@@ -219,10 +219,40 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let child = tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, child_command)?;
-    eprintln!(
-        "launcher {} cgroup: {}",
-        child.id(),
-        std::fs::read_to_string(format!("/proc/{}/cgroup", child.id()))?.trim()
+    let unit = command
+        .argv
+        .iter()
+        .find_map(|part| part.strip_prefix("--unit="))
+        .ok_or("launcher has no unique transient-scope unit")?;
+    let control_group = Command::new("systemctl")
+        .args(["--user", "show", "--property=ControlGroup", "--value", unit])
+        .output()?;
+    assert!(
+        control_group.status.success(),
+        "cannot inspect transient scope"
+    );
+    let control_group = String::from_utf8(control_group.stdout)?;
+    let cgroup =
+        std::path::Path::new("/sys/fs/cgroup").join(control_group.trim_start_matches('/').trim());
+    assert_eq!(
+        std::fs::read_to_string(cgroup.join("memory.max"))?.trim(),
+        "67108864"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cgroup.join("memory.swap.max"))?.trim(),
+        "0"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cgroup.join("pids.max"))?.trim(),
+        "16"
+    );
+    let cpu_max = std::fs::read_to_string(cgroup.join("cpu.max"))?;
+    let mut cpu_max = cpu_max.split_whitespace();
+    let quota: u64 = cpu_max.next().ok_or("missing CPU quota")?.parse()?;
+    let period: u64 = cpu_max.next().ok_or("missing CPU period")?.parse()?;
+    assert!(
+        quota > 0 && quota * 1000 <= period,
+        "CPU quota exceeded requested 1 milli-CPU: {quota}/{period}"
     );
     let output = child.wait_with_output()?;
     assert!(

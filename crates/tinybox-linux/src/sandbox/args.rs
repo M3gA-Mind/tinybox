@@ -24,8 +24,7 @@ pub const WORKSPACE_MOUNT: &str = "/workspace";
 /// else.
 const USR: &str = "/usr";
 const SYSTEMD_EXPAND_ENVIRONMENT_FLAG: &[u8] = b"--expand-environment";
-static NATIVE_SCOPE_SEQUENCE: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(1);
+static NATIVE_SCOPE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Files a normal command expects to exist.
 ///
