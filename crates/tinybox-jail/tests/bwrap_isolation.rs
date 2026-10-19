@@ -356,7 +356,7 @@ fn host_process_view(pid: u32) -> io::Result<(Vec<u8>, Vec<u8>)> {
     }
     Ok((
         std::fs::read(format!("/proc/{pid}/cmdline"))?,
-        std::fs::read(format!("/proc/{pid}/environ")).unwrap_or_default(),
+        std::fs::read(format!("/proc/{pid}/environ"))?,
     ))
 }
 

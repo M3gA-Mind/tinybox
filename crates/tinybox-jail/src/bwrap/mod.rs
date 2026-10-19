@@ -34,7 +34,11 @@
 //! # What is claimed
 //!
 //! [`JailBackend::isolation`] is the **minimum over every configuration the
-//! backend accepts**: `Process` with `--disable-userns` support (bubblewrap
+//! backend accepts**. It is reported as `Process`, the closest defined level
+//! below `Kernel`, but note what it means here: pid, mount, user and ipc
+//! namespaces and a private filesystem view, with the host *network* shared and
+//! no seccomp. That is more than the plain `Process` doc describes and less than
+//! `Kernel`; do not read it as "same process table". `Process` with `--disable-userns` support (bubblewrap
 //! 0.8+), `None` without it. [`JailBackend::isolation_for`] reaches
 //! [`IsolationLevel::Kernel`] only for a jail that denies network (a new net
 //! namespace). With `allow_net` the host network namespace is shared, so host
@@ -52,6 +56,14 @@
 //!   but a vetted BPF program is not part of this change.
 //! - No CPU, memory or pid limits (`tinybox-linux` offers them through a
 //!   `systemd-run` scope; not wired here).
+//! - Check-then-use gap on nested grants: the symlink check on a grant inside a
+//!   writable directory (`reject_symlinked_grants`) runs before `bwrap` binds
+//!   the path, so a program that is already running in another session could
+//!   swap a directory for a symlink in between. Closing it needs `O_PATH`
+//!   descriptors opened with `openat2(RESOLVE_NO_SYMLINKS)` and
+//!   `--bind-fd`/`--ro-bind-fd` (bubblewrap 0.10+); that is follow-up work.
+//!   The window is only open while another sandbox with write access to the
+//!   same tree is running.
 //! - `deny_read` paths must exist when the jail starts: a path created later
 //!   under a mounted grant is **not** protected. One nested more than a level
 //!   inside a writable grant is refused.
