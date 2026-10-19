@@ -190,7 +190,7 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
                     .any(|grant| grant.starts_with(denied))
         })
         || !request.cwd.starts_with(&request.root)
-        || request.root.canonicalize().is_err_or(|root| !root.is_dir())
+        || !matches!(request.root.canonicalize(), Ok(root) if root.is_dir())
         || request.cwd.canonicalize().is_err()
         || request
             .read_only

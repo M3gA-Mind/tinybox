@@ -343,6 +343,47 @@ async fn fractional_cpu_quota_is_not_rounded_down_to_zero() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn native_jail_command_keeps_limits_and_target_environment_after_namespace_setup()
+-> Result<()> {
+    let root = tempfile::tempdir()?;
+    let cwd = root.path().join("work");
+    std::fs::create_dir(&cwd)?;
+    let grant = root.path().join("read-only");
+    std::fs::create_dir(&grant)?;
+    let argv = crate::native_jail_argv(&crate::NativeJailCommand {
+        root: root.path().to_path_buf(),
+        cwd,
+        read_only: vec![grant.clone()],
+        read_write: Vec::new(),
+        deny_read: Vec::new(),
+        allow_net: false,
+        allow_subprocess: true,
+        cpu_millis: Some(1),
+        memory_bytes: Some(64 * 1024 * 1024),
+        pids_max: Some(16),
+        argv: vec!["/usr/bin/env".into()],
+        env: BTreeMap::from([("BASH_ENV".into(), "/tmp/target-init".into())]),
+    })?;
+    assert_eq!(argv.first().map(String::as_str), Some("systemd-run"));
+    assert!(has(&argv, "--property=CPUQuota=0.1%"));
+    assert!(has(&argv, "--property=MemoryMax=67108864"));
+    assert!(has(&argv, "--property=MemorySwapMax=0"));
+    assert!(has(&argv, "--property=TasksMax=16"));
+    assert!(has(&argv, "--property=RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK"));
+    assert!(has(&argv, "--unshare-cgroup"));
+    assert!(has(&argv, "--unshare-net"));
+    assert!(has(&argv, "--tmpfs"));
+    assert!(has(&argv, "/run"));
+    assert!(has(&argv, "/sys"));
+    assert!(has(&argv, "--ro-bind"));
+    assert!(has(&argv, grant.to_str().ok_or("grant path is not UTF-8")?));
+    assert!(has(&argv, "BASH_ENV"));
+    let systemd_end = argv.iter().position(|part| part == "--").ok_or("missing systemd delimiter")?;
+    assert!(!argv[..systemd_end].iter().any(|part| part.contains("BASH_ENV")));
+    Ok(())
+}
+
 #[tokio::test]
 async fn without_limits_there_is_no_scope_at_all() -> Result<()> {
     let (sandbox, host) = sandbox();
