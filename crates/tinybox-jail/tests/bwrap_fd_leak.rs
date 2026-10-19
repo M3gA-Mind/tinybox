@@ -7,7 +7,7 @@
 mod support;
 
 use std::io;
-use std::os::fd::AsRawFd as _;
+use std::os::fd::AsRawFd;
 use std::time::Instant;
 
 use support::{backend, done, jail, sh};
@@ -21,21 +21,27 @@ fn inheritable_host_descriptors_do_not_reach_the_sandbox() -> io::Result<()> {
     let root = tempfile::tempdir()?;
     let secret = tempfile::NamedTempFile::new()?;
     std::fs::write(secret.path(), "host-secret")?;
-    let file = std::fs::File::open(secret.path())?;
-    // Simulate a library that opened a descriptor without O_CLOEXEC.
-    rustix::io::fcntl_setfd(&file, rustix::io::FdFlags::empty())?;
-    let fd = file.as_raw_fd();
-    let (_, out) = sh(
-        &backend,
-        &jail(root.path()).deny_net(),
-        &format!("cat /proc/self/fd/{fd} 2>/dev/null; cat <&{fd} 2>/dev/null"),
-    )?;
+    // Simulate libraries that opened descriptors without O_CLOEXEC. Enough of
+    // them that some are above 9, which a plain `sh` launcher cannot close.
+    let mut files = Vec::new();
+    for _ in 0..12 {
+        let file = std::fs::File::open(secret.path())?;
+        rustix::io::fcntl_setfd(&file, rustix::io::FdFlags::empty())?;
+        files.push(file);
+    }
+    let fds: Vec<i32> = files.iter().map(AsRawFd::as_raw_fd).collect();
+    assert!(fds.iter().any(|fd| *fd > 9), "{fds:?}");
+    let script: String = fds
+        .iter()
+        .map(|fd| format!("cat /proc/self/fd/{fd} 2>/dev/null; "))
+        .collect();
+    let (_, out) = sh(&backend, &jail(root.path()).deny_net(), &script)?;
     assert!(
         !out.contains("host-secret"),
-        "descriptor {fd} leaked: {out}"
+        "descriptors {fds:?} leaked: {out}"
     );
     // The host's own descriptor is untouched.
-    drop(file);
+    assert_eq!(files.len(), 12);
     done("fd-leak", start);
     Ok(())
 }
