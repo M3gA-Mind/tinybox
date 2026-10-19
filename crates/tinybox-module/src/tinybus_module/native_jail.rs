@@ -17,9 +17,6 @@ pub(super) fn prepare(
     if !cfg!(unix) || !backend.is_available() || backend.name() == tinybox_jail::NOOP_BACKEND_NAME {
         return Err(unavailable());
     }
-    if config.require_process_isolation && !backend.is_suitable_for_untrusted_code() {
-        return Err(unavailable());
-    }
     if config.read_only.len() + config.read_write.len() + config.deny_read.len()
         > tinybox_bus::MAX_NATIVE_JAIL_GRANTS
     {
@@ -83,6 +80,11 @@ pub(super) fn prepare(
         }) {
             return Err(unavailable());
         }
+    }
+    // Per-jail, never per-backend: a backend's isolation can depend on the
+    // configuration (a shared network namespace under `allow_net`).
+    if config.require_process_isolation && !backend.is_suitable_for_untrusted_jail(&jail) {
+        return Err(unavailable());
     }
     backend
         .require_resources(&jail)

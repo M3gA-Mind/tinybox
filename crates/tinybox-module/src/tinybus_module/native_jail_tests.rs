@@ -20,6 +20,9 @@ impl JailBackend for Backend {
     fn is_suitable_for_untrusted_code(&self) -> bool {
         self.suitable
     }
+    fn is_suitable_for_untrusted_jail(&self, _: &Jail) -> bool {
+        self.suitable
+    }
     fn carves_denials(&self) -> bool {
         self.name == "seatbelt"
     }
@@ -546,5 +549,59 @@ fn landlock_keeps_a_denied_path_unreadable_when_created_after_preflight()
     .wait_with_output()?;
     assert_eq!(output.stdout, b"allowed-read-control\n");
     assert!(!output.status.success());
+    Ok(())
+}
+
+/// Isolation that depends on the configuration, as the bubblewrap backend's does.
+struct NetworkSensitiveBackend;
+impl JailBackend for NetworkSensitiveBackend {
+    fn name(&self) -> &'static str {
+        "network-sensitive"
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn isolation(&self) -> tinybox_core::IsolationLevel {
+        tinybox_core::IsolationLevel::Process
+    }
+    fn isolation_for(&self, jail: &Jail) -> tinybox_core::IsolationLevel {
+        if jail.allow_net {
+            tinybox_core::IsolationLevel::Process
+        } else {
+            tinybox_core::IsolationLevel::Kernel
+        }
+    }
+    fn constraint_support(&self) -> tinybox_core::ConstraintSupport {
+        use tinybox_core::{Constraint, ConstraintSupport, Enforcement};
+        ConstraintSupport::NONE
+            .with(Constraint::Filesystem, Enforcement::Enforced)
+            .with(Constraint::Network, Enforcement::Enforced)
+    }
+    fn spawn(&self, _: &Jail, _: std::process::Command) -> std::io::Result<std::process::Child> {
+        Err(std::io::Error::other("preflight fixture never spawns"))
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn process_isolation_is_decided_per_jail_so_shared_network_is_refused()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.path().into());
+    let mut config = config();
+    config.enforcement = JailEnforcement::Enforced;
+    config.require_process_isolation = true;
+    // tinymcp's default: network allowed, isolation required.
+    config.allow_net = true;
+    config.allow_subprocess = true;
+    let backend = NetworkSensitiveBackend;
+    assert!(
+        prepare(root.path(), &config, &command, &backend).is_err(),
+        "a shared network namespace must not satisfy require_process_isolation"
+    );
+    config.allow_net = false;
+    // Subprocess denial is not enforced by this fixture, so leave it allowed.
+    assert!(prepare(root.path(), &config, &command, &backend).is_ok());
     Ok(())
 }
