@@ -236,12 +236,12 @@ fn deny_read_deeper_than_a_child_of_a_writable_grant_is_refused() -> io::Result<
 }
 
 #[test]
-fn deny_read_of_a_missing_path_adds_nothing() -> io::Result<()> {
+fn deny_read_of_a_missing_path_is_masked_prospectively() -> io::Result<()> {
     let root = tempfile::tempdir()?;
     let mut j = jail(root.path());
     j.deny_read = vec![root.path().join("later")];
-    let plain = build(&jail(root.path()))?;
-    assert_eq!(build(&j)?, plain);
+    let argv = build(&j)?;
+    assert!(pair(&argv, "--tmpfs", &j.deny_read[0]).is_some());
     Ok(())
 }
 
