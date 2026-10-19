@@ -24,22 +24,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
       - name: Install rootless native jail prerequisites
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes bubblewrap dbus-user-session systemd
+          source scripts/ci/prepare-rootless-native-resources.sh
       - name: Run required Linux native resource proofs
         shell: bash
         run: |
           set -euo pipefail
           uid="$(id -u)"
-          sudo loginctl enable-linger "$USER"
-          sudo systemctl start "user@${uid}.service"
           runtime_dir="/run/user/${uid}"
           export XDG_RUNTIME_DIR="$runtime_dir"
           export DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus"
-          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-          systemctl --user show-environment >/dev/null
-          systemd-run --user --scope --quiet --property=CPUQuota=10% -- /bin/true
           TINYBOX_REQUIRE_NATIVE_RESOURCE_TESTS=1 cargo test -j1 -p tinybox-module native_
           TINYBOX_REQUIRE_NATIVE_RESOURCE_TESTS=1 cargo test -j1 -p tinybox-module resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendants

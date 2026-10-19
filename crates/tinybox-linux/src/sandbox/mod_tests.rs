@@ -488,6 +488,50 @@ fn native_jail_command_keeps_limits_and_target_environment_after_namespace_setup
     Ok(())
 }
 
+#[test]
+#[cfg(target_os = "linux")]
+fn native_jail_command_refuses_invalid_resource_and_isolation_requests()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let cwd = root.path().join("work");
+    std::fs::create_dir(&cwd)?;
+    let request = || crate::NativeJailCommand {
+        root: root.path().to_path_buf(),
+        cwd: cwd.clone(),
+        read_only: Vec::new(),
+        read_write: Vec::new(),
+        deny_read: Vec::new(),
+        allow_net: false,
+        allow_subprocess: true,
+        cpu_millis: Some(1000),
+        memory_bytes: None,
+        pids_max: None,
+        argv: vec!["/bin/true".into()],
+        env: BTreeMap::new(),
+    };
+
+    let mut invalid = request();
+    invalid.argv.clear();
+    assert!(crate::native_jail_argv(&invalid).is_err());
+
+    let mut invalid = request();
+    invalid.cpu_millis = Some(0);
+    assert!(crate::native_jail_argv(&invalid).is_err());
+
+    let mut invalid = request();
+    invalid.cpu_millis = None;
+    assert!(crate::native_jail_argv(&invalid).is_err());
+
+    let mut unsupported = request();
+    unsupported.allow_net = true;
+    assert!(crate::native_jail_argv(&unsupported).is_err());
+
+    let mut unsupported = request();
+    unsupported.allow_subprocess = false;
+    assert!(crate::native_jail_argv(&unsupported).is_err());
+    Ok(())
+}
+
 #[tokio::test]
 async fn without_limits_there_is_no_scope_at_all() -> Result<()> {
     let (sandbox, host) = sandbox();
