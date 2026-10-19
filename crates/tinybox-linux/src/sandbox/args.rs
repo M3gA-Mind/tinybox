@@ -7,7 +7,6 @@
 //! the pure argument builders.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::path::{Path, PathBuf};
 
 use tinybox_core::{BoxSpec, Capability, Error, ExecRequest, Resources, Result, WorkspaceSource};
