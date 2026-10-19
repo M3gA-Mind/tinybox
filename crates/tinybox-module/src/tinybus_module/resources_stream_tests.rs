@@ -1314,6 +1314,7 @@ async fn concurrent_preparations_share_a_bounded_admission_budget()
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // Cancel and destroy are both pinned through the public bus-owned stream.
 async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendants()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::{os::unix::fs::FileTypeExt, process::Command, time::Duration};
@@ -1400,7 +1401,7 @@ async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendan
                         pid_file.display().to_string(),
                     ],
                     cwd: Some(root.path().display().to_string()),
-                    env: Default::default(),
+                    env: std::collections::BTreeMap::default(),
                     stdin: None,
                 },
             },
@@ -1491,17 +1492,17 @@ async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendan
     resources.release_output(&process).await?;
 
     let destroyed_file = root.path().join("destroyed-descendant");
-    let destroyed_id = resources
+    let destroyed_process_id = resources
         .reserve(ReserveRequest::Process(resource.clone()))
         .await?;
     let destroyed_process = ProcessRef {
         resource: resource.clone(),
-        process: destroyed_id.clone(),
+        process: destroyed_process_id.clone(),
     };
     resources
         .start_jailed_exec_with_resources(
             SpawnRequest {
-                process: destroyed_id,
+                process: destroyed_process_id,
                 command: ExecRequest {
                     resource: resource.clone(),
                     argv: vec![
@@ -1511,7 +1512,7 @@ async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendan
                         destroyed_file.display().to_string(),
                     ],
                     cwd: Some(root.path().display().to_string()),
-                    env: Default::default(),
+                    env: std::collections::BTreeMap::default(),
                     stdin: None,
                 },
             },
@@ -1536,7 +1537,7 @@ async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendan
         )
         .await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    let (destroyed_pid, destroyed_namespace) = loop {
+    let (destroyed_descendant_pid, destroyed_namespace) = loop {
         let batch = resources.read_output(&destroyed_process, 0).await?;
         if std::fs::metadata(&destroyed_file).is_ok() {
             let identity = std::fs::read_to_string(&destroyed_file)?;
@@ -1557,10 +1558,10 @@ async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendan
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     };
-    assert!(process_in_namespace(destroyed_pid, destroyed_namespace)?);
+    assert!(process_in_namespace(destroyed_descendant_pid, destroyed_namespace)?);
     resources.close(&resource).await?;
     assert!(
-        !process_in_namespace(destroyed_pid, destroyed_namespace)?,
+        !process_in_namespace(destroyed_descendant_pid, destroyed_namespace)?,
         "resource destroy returned with a detached namespace process alive"
     );
     resources.shutdown().await?;
