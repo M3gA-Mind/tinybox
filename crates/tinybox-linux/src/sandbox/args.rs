@@ -209,6 +209,11 @@ pub struct NativeJailCommand {
 ///
 /// Explicit unsupported dimensions and unsafe request shapes are rejected;
 /// no requested limit is rounded up or dropped.
+///
+/// # Errors
+/// Returns an error when a request is invalid, unsupported, or systemd's
+/// command-argument expansion behavior cannot be verified.
+#[allow(clippy::too_many_lines)] // Keep this ordered security-sensitive argv plan together for audit.
 pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<String>> {
     use std::io::{Error, ErrorKind};
     let invalid = || Error::new(ErrorKind::InvalidInput, "invalid native jail command");
