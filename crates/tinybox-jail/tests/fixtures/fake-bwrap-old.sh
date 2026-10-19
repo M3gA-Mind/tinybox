@@ -1,17 +1,37 @@
 #!/bin/sh
-# A bwrap stand-in that passes the isolation probe, to unit-test probe handling
-# without a real sandbox. With FAKE_BWRAP_NO_DISABLE_USERNS in the file name
-# (`-old`), it rejects --disable-userns the way bubblewrap < 0.8 does.
-for arg in "$@"; do
-  if [ "$arg" = "--disable-userns" ] && [ "$(basename "$0")" = "fake-bwrap-old.sh" ]; then
-    echo "bwrap: Unknown option --disable-userns" >&2
-    exit 1
-  fi
-done
-while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
-shift
-if [ "$1" = "/bin/sh" ]; then
-  echo isolated
-  exit 0
+# Stand-in for bwrap in unit tests: reads the NUL-separated argument list from
+# `--args 9` like the real thing, applies --setenv, and runs the command
+# unconfined. Behaviour depends on the file name:
+#   fake-bwrap.sh        passes nothing (the isolation probe must reject it)
+#   fake-bwrap-probe.sh  also answers the isolation probe
+#   fake-bwrap-old.sh    like -probe, but rejects --disable-userns
+name=$(basename "$0")
+[ "$1" = "--args" ] || { echo "fake bwrap: expected --args" >&2; exit 2; }
+tmp=$(mktemp) || exit 2
+tr '\0' '\n' <&9 >"$tmp"
+set --
+mode=opts
+key=
+while IFS= read -r line; do
+  case $mode in
+    opts)
+      case $line in
+        --) mode=cmd ;;
+        --setenv) mode=setenv_k ;;
+        --disable-userns)
+          if [ "$name" = "fake-bwrap-old.sh" ]; then
+            rm -f "$tmp"
+            echo "bwrap: Unknown option --disable-userns" >&2
+            exit 1
+          fi ;;
+      esac ;;
+    setenv_k) key=$line; mode=setenv_v ;;
+    setenv_v) export "$key=$line"; mode=opts ;;
+    cmd) set -- "$@" "$line" ;;
+  esac
+done <"$tmp"
+rm -f "$tmp"
+if [ "$name" != "fake-bwrap.sh" ] && [ "$1" = "/bin/sh" ]; then
+  case $3 in *"echo isolated"*) echo isolated; exit 0 ;; esac
 fi
 exec "$@"

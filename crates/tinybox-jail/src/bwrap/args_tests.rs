@@ -265,3 +265,37 @@ fn chdir_defaults_to_root_and_honours_the_command_cwd() -> io::Result<()> {
     assert!(pair(&custom, "--chdir", &sub).is_some());
     Ok(())
 }
+
+#[test]
+fn relative_and_dotdot_paths_cannot_talk_around_the_private_mount_guard() -> io::Result<()> {
+    let root = tempfile::tempdir()?;
+    for bad in ["/usr/../tmp", "/tmp/..", "/usr/../proc", "relative/dir", "/a/./../b"] {
+        for j in [
+            jail(root.path()).add_read_only(bad),
+            jail(root.path()).add_read_write(bad),
+            jail(Path::new(bad)),
+        ] {
+            let kind = jail_args(&j, None, OPTS).err().map(|e| e.kind());
+            assert_eq!(kind, Some(io::ErrorKind::InvalidInput), "{bad}");
+        }
+        let mut j = jail(root.path());
+        j.deny_read = vec![bad.into()];
+        assert!(jail_args(&j, None, OPTS).is_err(), "deny {bad}");
+    }
+    let kind = jail_args(&jail(root.path()), Some(Path::new("../x")), OPTS)
+        .err()
+        .map(|e| e.kind());
+    assert_eq!(kind, Some(io::ErrorKind::InvalidInput));
+    Ok(())
+}
+
+#[test]
+fn a_nested_grant_through_a_planted_symlink_is_refused() -> io::Result<()> {
+    let root = tempfile::tempdir()?;
+    let secret = tempfile::tempdir()?;
+    std::os::unix::fs::symlink(secret.path(), root.path().join("vendor"))?;
+    let j = jail(root.path()).add_read_only(root.path().join("vendor"));
+    let kind = jail_args(&j, None, OPTS).err().map(|e| e.kind());
+    assert_eq!(kind, Some(io::ErrorKind::InvalidInput));
+    Ok(())
+}

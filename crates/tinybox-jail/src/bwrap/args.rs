@@ -87,6 +87,25 @@ fn os(s: &str) -> OsString {
     s.into()
 }
 
+/// Refuses a path the private-mount guard could be talked around with: only
+/// absolute paths without `..` are meaningful here (`/usr/../tmp` is `/tmp`).
+fn require_clean(path: &Path) -> io::Result<()> {
+    if path.is_absolute()
+        && !path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "jail path {} must be absolute and free of `..` components",
+            path.display()
+        ),
+    ))
+}
+
 /// Whether a grant would replace one of the sandbox's private mounts.
 fn replaces_private_mount(path: &Path) -> bool {
     path == Path::new("/")
@@ -134,7 +153,8 @@ fn baseline_mounts() -> Vec<Mount> {
 ///
 /// # Errors
 /// - `NotFound` when the root or a `read_write` grant does not exist;
-/// - `InvalidInput` for a grant that is `/`, `/tmp`, or at or under `/proc` or
+/// - `InvalidInput` for a relative path or one containing `..`, for a symlink
+///   below a writable grant that a nested grant goes through, for a grant that is `/`, `/tmp`, or at or under `/proc` or
 ///   `/dev` (it would replace a private mount and expose the host's), and for
 ///   a `deny_read` entry nested more than one level inside a writable mount
 ///   (the child could rename a parent directory and walk around the mask).
@@ -143,6 +163,22 @@ pub(super) fn jail_args(
     cwd: Option<&Path>,
     options: Options,
 ) -> io::Result<Vec<OsString>> {
+    for path in std::iter::once(&jail.root)
+        .chain(&jail.read_write)
+        .chain(&jail.read_only)
+        .chain(&jail.deny_read)
+        .map(PathBuf::as_path)
+        .chain(cwd)
+    {
+        require_clean(path)?;
+    }
+    // A grant inside a writable one must not reach its target through a
+    // symlink the jailed program could have planted.
+    for grant in jail.read_only.iter().chain(&jail.read_write) {
+        for ancestor in std::iter::once(&jail.root).chain(&jail.read_write) {
+            crate::jail::reject_symlink_below(ancestor, grant)?;
+        }
+    }
     let mut mounts = baseline_mounts();
     for (path, writable) in std::iter::once((&jail.root, true))
         .chain(jail.read_write.iter().map(|p| (p, true)))
