@@ -635,6 +635,7 @@ fn fractional_cpu_limit_throttles_the_live_native_scope()
 fn native_scope_exit_kills_double_forked_setsid_descendants()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::{
+        io::Write,
         process::{Command, Stdio},
         time::{Duration, Instant},
     };
@@ -646,12 +647,15 @@ fn native_scope_exit_kills_double_forked_setsid_descendants()
     let root = tempfile::tempdir()?;
     let pid_file = root.path().join("detached.pid");
     let python = format!(
-        "import os,time\nfirst=os.fork()\nif first == 0:\n os.setsid()\n second=os.fork()\n if second == 0:\n  with open({},'w') as pidfile: pidfile.write(f'{{os.getpid()}} {{os.stat(\"/proc/self/ns/pid\").st_ino}}')\n  while True: time.sleep(1)\n os._exit(0)\nos.waitpid(first,0)\nwhile not os.path.exists({}) or os.path.getsize({}) == 0: time.sleep(0.01)\nprint('READY',flush=True)",
+        "import os,time\nfirst=os.fork()\nif first == 0:\n os.setsid()\n second=os.fork()\n if second == 0:\n  with open({},'w') as pidfile: pidfile.write(f'{{os.getpid()}} {{os.stat(\"/proc/self/ns/pid\").st_ino}}')\n  while True: time.sleep(1)\n os._exit(0)\nos.waitpid(first,0)\nwhile not os.path.exists({}) or os.path.getsize({}) == 0: time.sleep(0.01)\npid=int(open({}).read().split()[0])\nos.kill(pid,0)",
         shell_quote(&pid_file.display().to_string()),
         shell_quote(&pid_file.display().to_string()),
         shell_quote(&pid_file.display().to_string())
     );
-    let script = format!("python3 -c {}; exit $?", shell_quote(&python));
+    let script = format!(
+        "python3 -c {}; status=$?; printf 'READY\\n'; read -r _; exit \"$status\"",
+        shell_quote(&python)
+    );
     let mut config = config();
     config.allow_subprocess = true;
     config.require_process_isolation = true;
@@ -673,6 +677,7 @@ fn native_scope_exit_kills_double_forked_setsid_descendants()
         .args(command.argv.iter().skip(1))
         .env_clear()
         .envs(&command.env)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, launcher)?;
@@ -690,6 +695,11 @@ fn native_scope_exit_kills_double_forked_setsid_descendants()
         pid_namespace_contains_process(detached, pid_namespace)?,
         "fixture did not expose its detached process in the host proc view"
     );
+    child
+        .stdin
+        .as_mut()
+        .ok_or("missing release pipe")?
+        .write_all(b"continue\n")?;
     let output = child.wait_with_output()?;
     assert!(output.status.success(), "jail supervisor failed: {}", String::from_utf8_lossy(&output.stderr));
 
