@@ -197,7 +197,9 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         shell_quote(&workspace.join("control").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
-        shell_quote("import errno,os,signal\nchildren=[]\nblocked=False\ntry:\n for _ in range(64):\n  pid=os.fork()\n  if pid==0:\n   while True: os.pause()\n  children.append(pid)\nexcept OSError as e:\n blocked=e.errno==errno.EAGAIN\nfor pid in children: os.kill(pid,signal.SIGKILL)\nfor pid in children: os.waitpid(pid,0)\nassert blocked\n"),
+        shell_quote(
+            "import errno,os,signal\nchildren=[]\nblocked=False\ntry:\n for _ in range(64):\n  pid=os.fork()\n  if pid==0:\n   while True: os.pause()\n  children.append(pid)\nexcept OSError as e:\n blocked=e.errno==errno.EAGAIN\nfor pid in children: os.kill(pid,signal.SIGKILL)\nfor pid in children: os.waitpid(pid,0)\nassert blocked\n"
+        ),
         shell_quote(&outside.display().to_string()),
     );
     let mut command = tinybox_core::ExecRequest::new(["/bin/bash", "-c", &script]);
@@ -325,8 +327,8 @@ fn native_memory_limit_kills_a_workload_that_touches_past_its_budget()
         .envs(&command.env)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, launcher)?
-        .wait_with_output()?;
+    let output =
+        tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, launcher)?.wait_with_output()?;
     assert_eq!(
         output.status.signal(),
         Some(9),
