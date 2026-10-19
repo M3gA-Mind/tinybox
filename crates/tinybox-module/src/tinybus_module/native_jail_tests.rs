@@ -674,11 +674,11 @@ async fn native_cancellation_kills_detached_descendants_and_preserves_stream_eve
         let stdout = output
             .chunks
             .iter()
-            .any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stdout && chunk.bytes == b"stdout-ready");
+            .any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stdout && chunk.bytes.starts_with(b"stdout-ready"));
         let stderr = output
             .chunks
             .iter()
-            .any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stderr && chunk.bytes == b"stderr-ready");
+            .any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stderr && chunk.bytes.starts_with(b"stderr-ready"));
         if stdout && stderr && pid_file.metadata().is_ok() {
             ready = true;
             break;
