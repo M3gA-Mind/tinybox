@@ -586,7 +586,7 @@ fn native_scope_exit_kills_double_forked_setsid_descendants()
 
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        let still_alive = std::fs::read_dir("/proc")?.filter_map(Result::ok).any(|entry| {
+        let still_alive = std::fs::read_dir("/proc")?.filter_map(|entry| entry.ok()).any(|entry| {
             if !entry.file_name().to_string_lossy().bytes().all(|byte| byte.is_ascii_digit()) {
                 return false;
             }
