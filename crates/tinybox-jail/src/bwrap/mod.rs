@@ -69,20 +69,21 @@
 //! `dash` (no `bash` installed) a descriptor above 9 cannot be closed and the
 //! sandbox fails to start rather than leak it.
 
-use std::io;
+use std::fmt::Write as _;
+use std::io::{self, Read as _};
 use std::os::unix::fs::MetadataExt as _;
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use tinybox_core::{Constraint, ConstraintSupport, Enforcement, IsolationLevel};
 
 use crate::jail::{Jail, JailBackend};
 
 mod args;
-mod fds;
+mod launcher;
 
 /// Backend name reported by [`BubblewrapBackend`].
 pub const BWRAP_BACKEND_NAME: &str = "bubblewrap";
@@ -188,15 +189,24 @@ fn verify(program: &Path) -> Option<Verified> {
 }
 
 fn probe(program: &Path, disable_userns: bool) -> bool {
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
-    let dir = PathBuf::from("/tmp").join(format!(
-        "tinybox-bwrap-probe-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
+    // A fresh, private, randomly named directory: never a predictable path
+    // another user could pre-create or symlink.
+    let Ok(dir) = private_probe_dir() else {
+        return false;
+    };
     let root = dir.join("root");
     let host_only = dir.join("host-only");
-    let setup = std::fs::create_dir_all(&root).and_then(|()| std::fs::write(&host_only, "x"));
+    let setup = std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&root)
+        .and_then(|()| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&host_only)
+                .map(drop)
+        });
     let ok = setup.is_ok() && run_probe(program, disable_userns, &root, &host_only);
     let _ = std::fs::remove_dir_all(&dir);
     log::debug!(
@@ -204,6 +214,20 @@ fn probe(program: &Path, disable_userns: bool) -> bool {
         program.display()
     );
     ok
+}
+
+/// `$TMPDIR/tinybox-bwrap-probe-<random>`, created mode 0700 with `create`
+/// (which fails if the name exists).
+fn private_probe_dir() -> io::Result<PathBuf> {
+    let mut random = [0_u8; 12];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+    let mut name = String::from("tinybox-bwrap-probe-");
+    for byte in random {
+        let _ = write!(name, "{byte:02x}");
+    }
+    let dir = std::env::temp_dir().join(name);
+    std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+    Ok(dir)
 }
 
 fn run_probe(program: &Path, disable_userns: bool, root: &Path, host_only: &Path) -> bool {
@@ -226,22 +250,33 @@ fn run_probe(program: &Path, disable_userns: bool, root: &Path, host_only: &Path
     );
     argv.push(host_only.into());
     argv.push(parent_pidns.into());
+    // The same launcher path as a real spawn, so it is exercised too.
+    let Ok(file) = launcher::ArgsFile::create(&argv) else {
+        return false;
+    };
+    let shell = launcher::pick_shell(|path| Path::new(path).is_file());
     // Positive evidence is required: a launcher that exits 0 without running
     // the check (`true`) must not pass.
-    Command::new(program)
-        .env_clear()
-        .args(&argv)
+    let out = launcher::command(shell, program, &file)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .output()
-        .is_ok_and(|out| out.status.success() && out.stdout == b"isolated\n")
+        .output();
+    file.discard();
+    out.is_ok_and(|out| out.status.success() && out.stdout == b"isolated\n")
 }
 
-/// Rebuilds `cmd` as a `bwrap` invocation of the same program.
+/// A command ready to spawn, plus the argument file it will consume.
+struct Prepared {
+    launcher: Command,
+    args: launcher::ArgsFile,
+}
+
+/// Rebuilds `cmd` as a launcher + `bwrap --args` invocation of the same
+/// program.
 ///
-/// The returned command carries no environment of its own: variables set on
-/// `cmd` reach the child only as `--setenv` arguments.
-fn prepare_command(verified: &Verified, jail: &Jail, cmd: &Command) -> io::Result<Command> {
+/// The launcher command carries no environment and its own argv holds only
+/// paths; the caller's variables and arguments live in the private args file.
+fn prepare_command(verified: &Verified, jail: &Jail, cmd: &Command) -> io::Result<Prepared> {
     let mut argv = args::jail_args(
         jail,
         cmd.get_current_dir(),
@@ -259,23 +294,10 @@ fn prepare_command(verified: &Verified, jail: &Jail, cmd: &Command) -> io::Resul
     argv.push(cmd.get_program().to_os_string());
     argv.extend(cmd.get_args().map(std::ffi::OsStr::to_os_string));
 
-    let leaked = fds::leaked_fds()?;
-    let mut wrapper = if leaked.is_empty() {
-        let mut direct = Command::new(&verified.program);
-        direct.args(&argv);
-        direct
-    } else {
-        let shell_path = fds::shell_for(&leaked, |path| Path::new(path).is_file())?;
-        let mut shell = Command::new(shell_path);
-        shell
-            .arg("-c")
-            .arg(fds::closing_script(&leaked))
-            .arg(&verified.program)
-            .args(&argv);
-        shell
-    };
-    wrapper.env_clear();
-    Ok(wrapper)
+    let args = launcher::ArgsFile::create(&argv)?;
+    let shell = launcher::pick_shell(|path| Path::new(path).is_file());
+    let launcher = launcher::command(shell, &verified.program, &args);
+    Ok(Prepared { launcher, args })
 }
 
 impl JailBackend for BubblewrapBackend {
@@ -302,18 +324,18 @@ impl JailBackend for BubblewrapBackend {
     }
 
     fn isolation(&self) -> IsolationLevel {
+        // The minimum over every accepted configuration: with `allow_net` the
+        // host network namespace is shared. `Process` is the closest defined
+        // level below `Kernel`.
         match &self.verified {
-            Some(v) if v.disable_userns => IsolationLevel::Kernel,
+            Some(v) if v.disable_userns => IsolationLevel::Process,
             _ => IsolationLevel::None,
         }
     }
 
     fn isolation_for(&self, jail: &Jail) -> IsolationLevel {
-        // A shared network namespace exposes host loopback services and
-        // abstract sockets. `Process` is the closest defined level below
-        // `Kernel`.
         match self.isolation() {
-            IsolationLevel::Kernel if jail.allow_net => IsolationLevel::Process,
+            IsolationLevel::Process if !jail.allow_net => IsolationLevel::Kernel,
             level => level,
         }
     }
@@ -341,7 +363,10 @@ impl BubblewrapBackend {
             .require(self.name(), &jail.constraints())
             .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error))?;
         log::debug!("[cwd_jail:bwrap] spawning label={}", jail.label);
-        let mut wrapper = prepare_command(verified, jail, cmd)?;
+        let Prepared {
+            launcher: mut wrapper,
+            args,
+        } = prepare_command(verified, jail, cmd)?;
         if captured {
             wrapper
                 .stdin(Stdio::piped())
@@ -351,7 +376,7 @@ impl BubblewrapBackend {
                 // can signal the whole sandbox.
                 .process_group(0);
         }
-        wrapper.spawn()
+        wrapper.spawn().inspect_err(|_| args.discard())
     }
 }
 
