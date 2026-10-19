@@ -203,21 +203,22 @@ fn run_probe(program: &Path, disable_userns: bool, root: &Path, host_only: &Path
             "--",
             "/bin/sh",
             "-c",
-            "test ! -e \"$1\" && test \"$(readlink /proc/self/ns/pid)\" != \"$2\"",
+            "test ! -e \"$1\" && test \"$(readlink /proc/self/ns/pid)\" != \"$2\" && echo isolated",
             "probe",
         ]
         .map(Into::into),
     );
     argv.push(host_only.into());
     argv.push(parent_pidns.into());
+    // Positive evidence is required: a launcher that exits 0 without running
+    // the check (`true`) must not pass.
     Command::new(program)
         .env_clear()
         .args(&argv)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .output()
+        .is_ok_and(|out| out.status.success() && out.stdout == b"isolated\n")
 }
 
 /// Rebuilds `cmd` as a `bwrap` invocation of the same program.

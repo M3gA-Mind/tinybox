@@ -52,13 +52,15 @@ fn default_backend_is_cached() {
 
 #[test]
 fn spawn_uses_default_backend() -> std::io::Result<()> {
-    let dir = std::env::temp_dir();
+    // A scratch directory, not `/tmp` itself: the bubblewrap backend refuses a
+    // grant that would replace its private `/tmp`.
+    let dir = tempfile::tempdir()?;
     // Landlock denies everything it is not told about; give it the system
     // directories so `true` can run. Other backends ignore the extra grants.
     let jail = ["/usr", "/bin", "/lib", "/lib64"]
         .into_iter()
         .filter(|path| std::path::Path::new(path).exists())
-        .fold(Jail::new(&dir, "default-spawn"), Jail::add_read_only);
+        .fold(Jail::new(dir.path(), "default-spawn"), Jail::add_read_only);
     let cmd = if cfg!(windows) {
         let mut c = Command::new("cmd");
         c.args(["/C", "exit"]);

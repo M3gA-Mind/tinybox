@@ -99,7 +99,7 @@ fn ungranted_paths_and_the_whole_of_etc_are_never_mounted() -> io::Result<()> {
     let other = tempfile::tempdir()?;
     let argv = build(&jail(root.path()))?;
     let other = other.path().display().to_string();
-    assert!(!argv.iter().any(|a| *a == other));
+    assert!(!argv.contains(&other));
     for etc in ["/etc", "/"] {
         assert!(triple(&argv, "--ro-bind-try", Path::new(etc)).is_none());
     }
@@ -190,7 +190,7 @@ fn deny_read_over_a_grant_drops_the_grant() -> io::Result<()> {
     j.deny_read = vec![ro.path().to_path_buf()];
     let argv = build(&j)?;
     let ro = ro.path().display().to_string();
-    assert!(!argv.iter().any(|a| *a == ro));
+    assert!(!argv.contains(&ro));
     Ok(())
 }
 

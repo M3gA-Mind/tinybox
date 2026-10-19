@@ -95,27 +95,9 @@ fn replaces_private_mount(path: &Path) -> bool {
         || path.starts_with("/dev")
 }
 
-/// Everything after the `bwrap` program name and before the `--` separator.
-///
-/// - new user, pid, ipc, uts (and cgroup where supported) namespaces; a new
-///   network namespace unless `jail.allow_net`; optionally `--disable-userns`;
-/// - `--die-with-parent` and `--new-session`;
-/// - a private `/proc`, `/dev` and `/tmp`;
-/// - baseline system paths and the root, `read_write` and `read_only` grants,
-///   shallowest first (see the module docs);
-/// - `deny_read` subtracted last.
-///
-/// # Errors
-/// - `NotFound` when the root or a `read_write` grant does not exist;
-/// - `InvalidInput` for a grant that is `/`, `/tmp`, or at or under `/proc` or
-///   `/dev` (it would replace a private mount and expose the host's), and for
-///   a `deny_read` entry nested more than one level inside a writable mount
-///   (the child could rename a parent directory and walk around the mask).
-pub(super) fn jail_args(
-    jail: &Jail,
-    cwd: Option<&Path>,
-    options: Options,
-) -> io::Result<Vec<OsString>> {
+/// The baseline mounts: system directories (or their symlinks) and the short
+/// `/etc` allow-list.
+fn baseline_mounts() -> Vec<Mount> {
     let mut mounts: Vec<Mount> = Vec::new();
     for dir in SYSTEM_DIRS {
         let path = PathBuf::from(dir);
@@ -137,6 +119,31 @@ pub(super) fn jail_args(
         });
     }
 
+    mounts
+}
+
+/// Everything after the `bwrap` program name and before the `--` separator.
+///
+/// - new user, pid, ipc, uts (and cgroup where supported) namespaces; a new
+///   network namespace unless `jail.allow_net`; optionally `--disable-userns`;
+/// - `--die-with-parent` and `--new-session`;
+/// - a private `/proc`, `/dev` and `/tmp`;
+/// - baseline system paths and the root, `read_write` and `read_only` grants,
+///   shallowest first (see the module docs);
+/// - `deny_read` subtracted last.
+///
+/// # Errors
+/// - `NotFound` when the root or a `read_write` grant does not exist;
+/// - `InvalidInput` for a grant that is `/`, `/tmp`, or at or under `/proc` or
+///   `/dev` (it would replace a private mount and expose the host's), and for
+///   a `deny_read` entry nested more than one level inside a writable mount
+///   (the child could rename a parent directory and walk around the mask).
+pub(super) fn jail_args(
+    jail: &Jail,
+    cwd: Option<&Path>,
+    options: Options,
+) -> io::Result<Vec<OsString>> {
+    let mut mounts = baseline_mounts();
     for (path, writable) in std::iter::once((&jail.root, true))
         .chain(jail.read_write.iter().map(|p| (p, true)))
         .chain(jail.read_only.iter().map(|p| (p, false)))
@@ -199,6 +206,18 @@ pub(super) fn jail_args(
         }
     }
 
+    argv.extend(deny_masks(jail, &mounts)?);
+
+    argv.extend([
+        os("--chdir"),
+        cwd.unwrap_or(&jail.root).as_os_str().to_os_string(),
+    ]);
+    Ok(argv)
+}
+
+/// Arguments that subtract `deny_read` from the surviving mounts.
+fn deny_masks(jail: &Jail, mounts: &[Mount]) -> io::Result<Vec<OsString>> {
+    let mut argv: Vec<OsString> = Vec::new();
     for deny in &jail.deny_read {
         // The deepest surviving mount that holds the denied path decides.
         let Some(holder) = mounts
@@ -222,7 +241,7 @@ pub(super) fn jail_args(
         }
         match std::fs::metadata(deny) {
             Ok(meta) if meta.is_dir() => {
-                argv.extend([os("--tmpfs"), deny.clone().into_os_string()])
+                argv.extend([os("--tmpfs"), deny.clone().into_os_string()]);
             }
             Ok(_) => argv.extend([
                 os("--ro-bind"),
@@ -234,11 +253,6 @@ pub(super) fn jail_args(
             Err(_) => {}
         }
     }
-
-    argv.extend([
-        os("--chdir"),
-        cwd.unwrap_or(&jail.root).as_os_str().to_os_string(),
-    ]);
     Ok(argv)
 }
 

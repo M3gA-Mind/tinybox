@@ -66,8 +66,13 @@ pub(super) fn closing_script(leaked: &[i32]) -> io::Result<String> {
             ),
         ));
     }
-    let closes: String = leaked.iter().map(|fd| format!("{fd}>&- ")).collect();
-    Ok(format!("exec {closes}; exec \"$0\" \"$@\""))
+    let mut script = String::from("exec ");
+    for fd in leaked {
+        script.push_str(&fd.to_string());
+        script.push_str(">&- ");
+    }
+    script.push_str("; exec \"$0\" \"$@\"");
+    Ok(script)
 }
 
 #[cfg(test)]
