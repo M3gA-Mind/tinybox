@@ -22,7 +22,7 @@ fn run(shell: &str, body: &str, items: &[&str]) -> io::Result<String> {
     let bwrap = stand_in(dir.path(), body)?;
     let argv: Vec<OsString> = items.iter().map(OsString::from).collect();
     let file = ArgsFile::create(&argv)?;
-    let out = command(shell, &bwrap, &file).output()?;
+    let out = command(shell, &bwrap, &file, "prog".as_ref(), &["a".into()]).output()?;
     file.discard();
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -58,11 +58,12 @@ fn the_args_file_is_private_nul_separated_and_never_reused() -> io::Result<()> {
 fn the_launcher_hands_bwrap_the_args_on_fd_9_and_deletes_the_file() -> io::Result<()> {
     let out = run(
         shell(),
-        r#"[ "$1" = "--args" ] && [ "$2" = "9" ] || exit 3
-cat <&9 | tr '\0' ','"#,
+        r#"[ "$1" = "--args" ] && [ "$2" = "9" ] && [ "$3" = "--" ] || exit 3
+cat <&9 | tr '\0' ','
+printf '|%s|%s' "$4" "$5""#,
         &["--a", "value with space", "--b"],
     )?;
-    assert_eq!(out, "--a,value with space,--b,");
+    assert_eq!(out, "--a,value with space,--b,|prog|a");
     Ok(())
 }
 
@@ -72,7 +73,7 @@ fn the_args_file_is_gone_once_the_launcher_has_started_bwrap() -> io::Result<()>
     let bwrap = stand_in(dir.path(), "exit 0")?;
     let file = ArgsFile::create(&["x".into()])?;
     let path = file.path().to_path_buf();
-    assert!(command(shell(), &bwrap, &file).status()?.success());
+    assert!(command(shell(), &bwrap, &file, "prog".as_ref(), &[]).status()?.success());
     assert!(!path.exists() && !path.parent().is_some_and(Path::exists));
     Ok(())
 }
@@ -82,7 +83,7 @@ fn the_launcher_runs_with_an_empty_environment() -> io::Result<()> {
     let dir = tempfile::tempdir()?;
     let bwrap = stand_in(dir.path(), "env")?;
     let file = ArgsFile::create(&[])?;
-    let out = command(shell(), &bwrap, &file).output()?;
+    let out = command(shell(), &bwrap, &file, "prog".as_ref(), &[]).output()?;
     file.discard();
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -104,21 +105,14 @@ fn inheritable_descriptors_including_high_numbers_are_closed_by_bash() -> io::Re
     }
     let fds: Vec<i32> = files.iter().map(AsRawFd::as_raw_fd).collect();
     assert!(fds.iter().any(|fd| *fd > 9), "{fds:?}");
-    let list = "ls /proc/self/fd | tr '\\n' ' '";
-    let shells: Vec<&str> = [shell()].into_iter().filter(|s| s.ends_with("bash")).collect();
-    if shells.is_empty() {
+    let name = secret.path().display().to_string();
+    let shell = shell();
+    if !shell.ends_with("bash") {
         eprintln!("skipped: no bash");
+        return Ok(());
     }
-    for shell in shells {
-        let out = run(shell, list, &[])?;
-        for fd in &fds {
-            let token = format!("{fd} ");
-            assert!(
-                !out.split_whitespace().any(|f| f == token.trim()),
-                "{shell}: fd {fd} survived: {out}"
-            );
-        }
-    }
+    let out = run(shell, "ls -l /proc/self/fd", &[])?;
+    assert!(!out.contains(&name), "descriptors {fds:?} survived: {out}");
     Ok(())
 }
 

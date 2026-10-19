@@ -69,6 +69,7 @@
 //! `dash` (no `bash` installed) a descriptor above 9 cannot be closed and the
 //! sandbox fails to start rather than leak it.
 
+use std::ffi::OsString;
 use std::io;
 use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
@@ -228,21 +229,18 @@ fn run_probe(program: &Path, disable_userns: bool, root: &Path, host_only: &Path
         return false;
     };
     let jail = Jail::new(root, "bwrap-probe").deny_net();
-    let Ok(mut argv) = args::jail_args(&jail, None, args::Options { disable_userns }) else {
+    let Ok(argv) = args::jail_args(&jail, None, args::Options { disable_userns }) else {
         return false;
     };
-    argv.extend(
-        [
-            "--",
-            "/bin/sh",
-            "-c",
-            "test ! -e \"$1\" && test \"$(readlink /proc/self/ns/pid)\" != \"$2\" && echo isolated",
-            "probe",
-        ]
-        .map(Into::into),
-    );
-    argv.push(host_only.into());
-    argv.push(parent_pidns.into());
+    let check: Vec<OsString> = [
+        "-c",
+        "test ! -e \"$1\" && test \"$(readlink /proc/self/ns/pid)\" != \"$2\" && echo isolated",
+        "probe",
+    ]
+    .map(OsString::from)
+    .into_iter()
+    .chain([host_only.into(), parent_pidns.into()])
+    .collect();
     // The same launcher path as a real spawn, so it is exercised too.
     let Ok(file) = launcher::ArgsFile::create(&argv) else {
         return false;
@@ -250,7 +248,7 @@ fn run_probe(program: &Path, disable_userns: bool, root: &Path, host_only: &Path
     let shell = launcher::pick_shell(|path| Path::new(path).is_file());
     // Positive evidence is required: a launcher that exits 0 without running
     // the check (`true`) must not pass.
-    let out = launcher::command(shell, program, &file)
+    let out = launcher::command(shell, program, &file, "/bin/sh".as_ref(), &check)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output();
@@ -283,13 +281,17 @@ fn prepare_command(verified: &Verified, jail: &Jail, cmd: &Command) -> io::Resul
             argv.extend(["--setenv".into(), key.to_os_string(), value.to_os_string()]);
         }
     }
-    argv.push("--".into());
-    argv.push(cmd.get_program().to_os_string());
-    argv.extend(cmd.get_args().map(std::ffi::OsStr::to_os_string));
 
     let file = launcher::ArgsFile::create(&argv)?;
     let shell = launcher::pick_shell(|path| Path::new(path).is_file());
-    let launcher = launcher::command(shell, &verified.program, &file);
+    let program_args: Vec<OsString> = cmd.get_args().map(OsString::from).collect();
+    let launcher = launcher::command(
+        shell,
+        &verified.program,
+        &file,
+        cmd.get_program(),
+        &program_args,
+    );
     Ok(Prepared {
         launcher,
         args: file,

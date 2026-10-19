@@ -6,17 +6,16 @@
 #   fake-bwrap-probe.sh  also answers the isolation probe
 #   fake-bwrap-old.sh    like -probe, but rejects --disable-userns
 name=$(basename "$0")
-[ "$1" = "--args" ] || { echo "fake bwrap: expected --args" >&2; exit 2; }
+[ "$1" = "--args" ] && [ "$3" = "--" ] || { echo "fake bwrap: expected --args N --" >&2; exit 2; }
+shift 3
 tmp=$(mktemp) || exit 2
 tr '\0' '\n' <&9 >"$tmp"
-set --
 mode=opts
 key=
 while IFS= read -r line; do
   case $mode in
     opts)
       case $line in
-        --) mode=cmd ;;
         --setenv) mode=setenv_k ;;
         --disable-userns)
           if [ "$name" = "fake-bwrap-old.sh" ]; then
@@ -27,7 +26,6 @@ while IFS= read -r line; do
       esac ;;
     setenv_k) key=$line; mode=setenv_v ;;
     setenv_v) export "$key=$line"; mode=opts ;;
-    cmd) set -- "$@" "$line" ;;
   esac
 done <"$tmp"
 rm -f "$tmp"

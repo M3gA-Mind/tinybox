@@ -27,20 +27,25 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The script: open and delete the args file, close every other inherited
-/// descriptor above 2, then `exec bwrap --args 9`. `$0` is `bwrap`, `$1` the
-/// args file.
+/// descriptor above 2, then `exec bwrap --args 9 -- COMMAND...`. `$0` is
+/// `bwrap`, `$1` the args file, the rest the command and its arguments (bwrap
+/// reads options from the file but the command itself must be on its argv; a
+/// command line is visible to every local user anyway, in the sandbox as on
+/// any host).
 const SCRIPT: &str = r#"[ -d /proc/self/fd ] || exit 126
-exec 9<"$1" || exit 126
-command -p rm -f -- "$1"
-command -p rmdir -- "${1%/*}" 2>/dev/null
-for f in /proc/self/fd/*; do
-  n=${f##*/}
+f=$1
+shift
+exec 9<"$f" || exit 126
+command -p rm -f -- "$f"
+command -p rmdir -- "${f%/*}" 2>/dev/null
+for fd in /proc/self/fd/*; do
+  n=${fd##*/}
   case $n in
     0|1|2|9) ;;
     *) eval "exec $n>&-" || exit 126 ;;
   esac
 done
-exec "$0" --args 9
+exec "$0" --args 9 -- "$@"
 "#;
 
 /// 24 hex characters from the kernel's random source.
@@ -116,15 +121,24 @@ impl ArgsFile {
     }
 }
 
-/// The launcher command: an empty environment, the script, `bwrap`, the file.
-pub(super) fn command(shell: &str, bwrap: &Path, args: &ArgsFile) -> Command {
+/// The launcher command: an empty environment, the script, `bwrap`, the file,
+/// then the command to run inside the sandbox and its arguments.
+pub(super) fn command(
+    shell: &str,
+    bwrap: &Path,
+    args: &ArgsFile,
+    program: &std::ffi::OsStr,
+    program_args: &[OsString],
+) -> Command {
     let mut launcher = Command::new(shell);
     launcher
         .env_clear()
         .arg("-c")
         .arg(SCRIPT)
         .arg(bwrap)
-        .arg(args.path());
+        .arg(args.path())
+        .arg(program)
+        .args(program_args);
     launcher
 }
 
