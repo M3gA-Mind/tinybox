@@ -197,6 +197,34 @@ fn requested_native_resource_limits_are_refused_before_spawn()
     Ok(())
 }
 
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn contract_21_resource_requests_refuse_before_spawn_on_non_linux()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let mut command = tinybox_core::ExecRequest::new(["target-program"]);
+    command.cwd = Some(root.path().into());
+    let original = command.clone();
+    let request = NativeJailRequest {
+        jail: config(),
+        resources: Some(tinybox_bus::NativeJailResourceRequest {
+            cpu_millis: Some(1000),
+            memory_bytes: None,
+            pids_max: None,
+            disk_bytes: None,
+        }),
+    };
+
+    let error = collector_with_resources(root.path(), &request, &mut command)
+        .err()
+        .ok_or("non-Linux resource requests must refuse before target launch")?;
+    assert_eq!(error.wire_name(), tinybox_bus::UNSUPPORTED_OPERATION);
+    assert_eq!(command.argv, original.argv);
+    assert_eq!(command.cwd, original.cwd);
+    assert_eq!(command.env, original.env);
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn resource_backend_consumes_one_validated_launcher_plan()
