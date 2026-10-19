@@ -301,6 +301,9 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
     if let Some(value) = request.memory_bytes {
         argv.push(format!("--property=MemoryMax={value}"));
         argv.push("--property=MemorySwapMax=0".to_owned());
+        // Keep the scope present long enough for its supervisor and observers
+        // to report the kernel OOM event and complete bounded cleanup.
+        argv.push("--property=OOMPolicy=continue".to_owned());
     }
     if let Some(value) = request.cpu_millis {
         argv.push(format!("--property=CPUQuota={}%", cpu_quota_u64(value)));
