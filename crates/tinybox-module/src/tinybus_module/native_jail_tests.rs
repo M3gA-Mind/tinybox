@@ -145,13 +145,11 @@ fn pid_namespace_contains_process(pid: i32, namespace_inode: u64) -> std::io::Re
         {
             continue;
         }
-        let status = match std::fs::read_to_string(entry.path().join("status")) {
-            Ok(status) => status,
-            Err(_) => continue,
+        let Ok(status) = std::fs::read_to_string(entry.path().join("status")) else {
+            continue;
         };
-        let namespaces = match std::fs::read_link(entry.path().join("ns/pid")) {
-            Ok(namespaces) => namespaces,
-            Err(_) => continue,
+        let Ok(namespaces) = std::fs::read_link(entry.path().join("ns/pid")) else {
+            continue;
         };
         let same_pid = status
             .lines()

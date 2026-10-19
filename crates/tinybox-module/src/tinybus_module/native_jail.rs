@@ -295,7 +295,7 @@ impl JailBackend for NativeResourceBackend {
             ));
         }
         let mut actual = vec![cmd.get_program().to_os_string()];
-        actual.extend(cmd.get_args().map(|arg| arg.to_os_string()));
+        actual.extend(cmd.get_args().map(std::ffi::OsStr::to_os_string));
         let mut expected = self
             .expected
             .lock()
