@@ -110,6 +110,100 @@ fn legacy_resource_limits_still_fail_closed_on_linux()
     );
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
+-> std::result::Result<(), Box<dyn Error>> {
+    use std::process::{Command, Stdio};
+
+    let root = tempfile::tempdir()?;
+    let workspace = root.path().join("workspace");
+    let hidden = workspace.join("hidden");
+    std::fs::create_dir_all(&hidden)?;
+    std::fs::write(hidden.join("secret"), "secret")?;
+    let denied_inside = workspace.join("denied-inside");
+    std::fs::create_dir_all(&denied_inside)?;
+    std::fs::write(denied_inside.join("secret"), "secret")?;
+    let outside = std::env::temp_dir().join(format!("tinybox-escape-proof-{}", std::process::id()));
+    let _ = std::fs::remove_file(&outside);
+    let bash_env = workspace.join("startup.sh");
+    std::fs::write(&bash_env, "printf startup > /workspace/from-bash-env\n")?;
+
+    let probe = Command::new("systemd-run")
+        .args([
+            "--user",
+            "--scope",
+            "--quiet",
+            "--property=CPUQuota=0.1%",
+            "--property=MemoryMax=67108864",
+            "--property=MemorySwapMax=0",
+            "--property=TasksMax=16",
+            "--property=RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK",
+            "--",
+            "/bin/true",
+        ])
+        .status()?;
+    if !probe.success() {
+        eprintln!("skipped: user systemd scope constraints are unavailable");
+        return Ok(());
+    }
+
+    let mut jail = config();
+    jail.allow_net = false;
+    jail.allow_subprocess = true;
+    jail.require_process_isolation = true;
+    jail.deny_read = vec![denied_inside.display().to_string()];
+    let request = tinybox_bus::NativeJailRequest {
+        jail,
+        resources: Some(tinybox_bus::NativeJailResourceRequest {
+            cpu_millis: Some(1),
+            memory_bytes: Some(64 * 1024 * 1024),
+            pids_max: Some(16),
+            disk_bytes: None,
+        }),
+    };
+    let script = format!(
+        "printf allowed > /workspace/control; test ! -e /workspace/denied-inside/secret || exit 41; test ! -r {} || exit 42; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; exit 0",
+        shell_quote(&denied_inside.join("secret").display().to_string()),
+        shell_quote(&outside.display().to_string()),
+    );
+    let mut command = tinybox_core::ExecRequest::new(["/bin/bash", "-c", &script]);
+    command.cwd = Some(workspace.clone());
+    command
+        .env
+        .insert("BASH_ENV".into(), "/workspace/startup.sh".into());
+    let backend = resource_backend();
+    let jail = prepare_with_resources(
+        root.path().join("workspace").as_path(),
+        &request,
+        &mut command,
+        backend.as_ref(),
+    )?;
+    let mut child_command = Command::new(command.argv.first().ok_or("missing launcher")?);
+    child_command
+        .args(command.argv.iter().skip(1))
+        .env_clear()
+        .envs(&command.env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, child_command)?;
+    let output = child.wait_with_output()?;
+    assert!(
+        output.status.success(),
+        "launcher failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read(workspace.join("control"))?, b"allowed");
+    assert_eq!(std::fs::read(workspace.join("from-bash-env"))?, b"startup");
+    assert!(!outside.exists(), "jail wrote outside its granted roots");
+    let _ = std::fs::remove_file(outside);
+    Ok(())
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
 #[test]
 fn native_grants_reject_relative_parent_null_and_missing_paths() {
     assert!(grants(&["/".repeat(tinybox_bus::MAX_FILE_PATH_BYTES + 1)]).is_err());

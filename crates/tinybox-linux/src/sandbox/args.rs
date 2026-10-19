@@ -222,11 +222,11 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
         "--user".to_owned(),
         "--scope".to_owned(),
         "--quiet".to_owned(),
-        "--property=MemorySwapMax=0".to_owned(),
         "--property=RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK".to_owned(),
     ];
     if let Some(value) = request.memory_bytes {
         argv.push(format!("--property=MemoryMax={value}"));
+        argv.push("--property=MemorySwapMax=0".to_owned());
     }
     if let Some(value) = request.cpu_millis {
         argv.push(format!("--property=CPUQuota={}%", cpu_quota_u64(value)));
@@ -277,7 +277,15 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
         ]);
     }
     for denied in &request.deny_read {
-        argv.extend(["--tmpfs".into(), denied.display().to_string()]);
+        if denied.is_dir() {
+            argv.extend(["--tmpfs".into(), denied.display().to_string()]);
+        } else {
+            argv.extend([
+                "--ro-bind".into(),
+                "/dev/null".into(),
+                denied.display().to_string(),
+            ]);
+        }
     }
     let cwd = request
         .cwd

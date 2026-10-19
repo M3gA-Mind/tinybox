@@ -189,8 +189,6 @@ pub mod names {
     pub const RELEASE_OUTPUT: &str = "ReleaseOutput";
     /// Wire name of the `StartJailedExec` member.
     pub const START_JAILED_EXEC: &str = "StartJailedExec";
-    /// Wire name of the 2.1 resource-aware jailed exec member.
-    pub const START_JAILED_EXEC_WITH_RESOURCES: &str = "StartJailedExecWithResources";
     /// Wire name of the `RunDocker` member.
     pub const RUN_DOCKER: &str = "RunDocker";
     /// Wire name of the `DockerStatus` member.
@@ -221,6 +219,8 @@ pub mod names {
     pub const KILL_STDIO: &str = "KillStdio";
     /// Wire name of the `StdioStatus` member.
     pub const STDIO_STATUS: &str = "StdioStatus";
+    /// Wire name of the 2.1 resource-aware jailed exec member.
+    pub const START_JAILED_EXEC_WITH_RESOURCES: &str = "StartJailedExecWithResources";
 }
 
 /// Supported methods in this contract, including the original discovery
@@ -267,6 +267,7 @@ pub const METHODS: &[&str] = &[
     names::CLOSE_STDIN,
     names::KILL_STDIO,
     names::STDIO_STATUS,
+    names::START_JAILED_EXEC_WITH_RESOURCES,
 ];
 
 /// Facts about the detected native directory-jail backend.

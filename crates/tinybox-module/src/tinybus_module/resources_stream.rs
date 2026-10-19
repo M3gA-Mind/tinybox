@@ -451,7 +451,7 @@ impl Resources {
             Some(shell),
             None,
         )
-            .await
+        .await
     }
     pub(in crate::tinybus_module) async fn start_platform_shell_exec(
         &self,

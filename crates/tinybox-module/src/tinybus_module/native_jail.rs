@@ -203,7 +203,7 @@ impl JailBackend for NativeResourceBackend {
     fn spawn(
         &self,
         jail: &Jail,
-        command: std::process::Command,
+        mut command: std::process::Command,
     ) -> std::io::Result<std::process::Child> {
         if jail.native_resources.is_none()
             || command.get_program() != std::ffi::OsStr::new("systemd-run")
@@ -292,13 +292,9 @@ pub(super) fn collector_with_resources(
     {
         let backend = resource_backend();
         let jail = prepare_with_resources(root, config, command, backend.as_ref())?;
-        tinybox_host::JailLocalHost::with_backend(
-            jail,
-            backend,
-            tinybox_bus::MAX_OUTPUT_BYTES,
-        )
-        .map(Arc::new)
-        .map_err(|_| unavailable())
+        tinybox_host::JailLocalHost::with_backend(jail, backend, tinybox_bus::MAX_OUTPUT_BYTES)
+            .map(Arc::new)
+            .map_err(|_| unavailable())
     }
     #[cfg(not(target_os = "linux"))]
     {
