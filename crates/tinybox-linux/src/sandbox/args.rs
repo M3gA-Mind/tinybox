@@ -381,7 +381,7 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
         "--noprofile".to_owned(),
         "--norc".to_owned(),
         "-c".to_owned(),
-        "[ -d /proc/self/fd ] || exit 125; shopt -s nullglob; fdpaths=(/proc/self/fd/*); ((${#fdpaths[@]} > 0)) || exit 125; for fdpath in \"${fdpaths[@]}\"; do fd=${fdpath##*/}; case $fd in 0|1|2|*[!0-9]*) continue;; esac; eval \"exec ${fd}>&-\" || exit 125; done; unit=; for arg in \"$@\"; do case $arg in --unit=*) unit=${arg#--unit=};; esac; done; [ -n \"$unit\" ] || exit 125; \"$@\"; status=$?; /usr/bin/systemctl --user stop \"$unit\" || exit 125; exit \"$status\"".to_owned(),
+        "[ -d /proc/self/fd ] || exit 125; shopt -s nullglob; fdpaths=(/proc/self/fd/*); ((${#fdpaths[@]} > 0)) || exit 125; for fdpath in \"${fdpaths[@]}\"; do fd=${fdpath##*/}; case $fd in 0|1|2|*[!0-9]*) continue;; esac; eval \"exec ${fd}>&-\" || exit 125; done; unit=; for arg in \"$@\"; do case $arg in --unit=*) unit=${arg#--unit=};; esac; done; [ -n \"$unit\" ] || exit 125; \"$@\"; status=$?; if ! /usr/bin/systemctl --user stop \"$unit\"; then /usr/bin/systemctl --user is-active --quiet \"$unit\" && exit 125; fi; exit \"$status\"".to_owned(),
         "tinybox-native-launcher".to_owned(),
     ];
     launcher.extend(argv);
