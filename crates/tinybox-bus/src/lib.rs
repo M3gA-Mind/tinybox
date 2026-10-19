@@ -19,7 +19,7 @@ mod grants;
 pub use grants::{LocalGrantConfig, LocalGrants, ProtectedPaths, ResolveLocalGrantsRequest};
 
 mod jail;
-pub use jail::{JailEnforcement, NativeJailConfig};
+pub use jail::{JailEnforcement, NativeJailConfig, NativeJailRequest, NativeJailResourceRequest};
 
 mod shell_execution;
 mod shell_selection;
@@ -82,7 +82,12 @@ pub use files::{
 /// 2.0 removes TinyBox-owned command policy classification and the
 /// `AnalyzeShell.hidden_execution` policy signal. Generic shell structure facts
 /// and transport helpers remain.
-pub const CONTRACT_VERSION: (u32, u32) = (2, 0);
+/// 2.1 adds separate resource-aware native jail request members without
+/// changing the 2.0 Rust request shapes.
+pub const CONTRACT_VERSION: (u32, u32) = (2, 1);
+
+/// Minimum contract version required for resource-aware native jail members.
+pub const NATIVE_JAIL_RESOURCES_VERSION: (u32, u32) = (2, 1);
 
 /// Whether this host vocabulary can bind to a module's advertised version.
 /// The major must match and the module's minor must include every host member.
@@ -177,6 +182,8 @@ pub mod names {
     pub const RELEASE_OUTPUT: &str = "ReleaseOutput";
     /// Wire name of the `StartJailedExec` member.
     pub const START_JAILED_EXEC: &str = "StartJailedExec";
+    /// Wire name of the 2.1 resource-aware jailed exec member.
+    pub const START_JAILED_EXEC_WITH_RESOURCES: &str = "StartJailedExecWithResources";
     /// Wire name of the `RunDocker` member.
     pub const RUN_DOCKER: &str = "RunDocker";
     /// Wire name of the `DockerStatus` member.
