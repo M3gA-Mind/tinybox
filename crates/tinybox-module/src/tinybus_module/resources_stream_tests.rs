@@ -1383,7 +1383,7 @@ async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendan
                         python.into(),
                         pid_file.display().to_string(),
                     ],
-                    cwd: Some(root.path().into()),
+                    cwd: Some(root.path().display().to_string()),
                     env: Default::default(),
                     stdin: None,
                 },
