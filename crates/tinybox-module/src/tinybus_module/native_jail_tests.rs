@@ -193,7 +193,7 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         }),
     };
     let script = format!(
-        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; exit 0",
+        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; sleep 3; exit 0",
         shell_quote(&workspace.join("control").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
@@ -219,6 +219,32 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let child = tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, child_command)?;
+    let cgroup = std::fs::read_to_string(format!("/proc/{}/cgroup", child.id()))?;
+    let relative = cgroup
+        .lines()
+        .find_map(|line| line.strip_prefix("0::/"))
+        .ok_or("launcher has no cgroup-v2 membership")?;
+    let cgroup = std::path::Path::new("/sys/fs/cgroup").join(relative);
+    assert_eq!(
+        std::fs::read_to_string(cgroup.join("memory.max"))?.trim(),
+        "67108864"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cgroup.join("memory.swap.max"))?.trim(),
+        "0"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cgroup.join("pids.max"))?.trim(),
+        "16"
+    );
+    let cpu_max = std::fs::read_to_string(cgroup.join("cpu.max"))?;
+    let mut cpu_max = cpu_max.split_whitespace();
+    let quota: u64 = cpu_max.next().ok_or("missing CPU quota")?.parse()?;
+    let period: u64 = cpu_max.next().ok_or("missing CPU period")?.parse()?;
+    assert!(
+        quota > 0 && quota * 1000 <= period,
+        "CPU quota exceeded requested 1 milli-CPU: {quota}/{period}"
+    );
     let output = child.wait_with_output()?;
     assert!(
         output.status.success(),
