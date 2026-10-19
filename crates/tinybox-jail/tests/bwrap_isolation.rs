@@ -189,7 +189,7 @@ fn a_symlink_planted_in_a_writable_root_cannot_redirect_a_nested_grant() -> io::
     let j = jail(root.path()).add_read_only(root.path().join("vendor"));
     // Through the public API (canonicalizing) and through the trait directly.
     assert_eq!(refused(&backend, &j), Some(io::ErrorKind::InvalidInput));
-    let cmd = Command::new("/bin/true");
+    let mut cmd = Command::new("/bin/true");
     cmd.arg("x");
     let direct = backend.spawn_captured(&j, cmd).err().map(|e| e.kind());
     assert_eq!(direct, Some(io::ErrorKind::InvalidInput));
@@ -224,7 +224,7 @@ fn deny_read_of_a_missing_path_refuses_without_creating_a_host_mountpoint() -> i
     let denied = root.path().join(".ssh");
     let mut j = jail(root.path());
     j.deny_read = vec![denied.clone()];
-    let mut cmd = Command::new("/bin/true");
+    let cmd = Command::new("/bin/true");
     let error = spawn_captured_with(&backend, &j, cmd)
         .expect_err("a missing denial must fail before bwrap starts");
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
