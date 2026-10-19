@@ -238,7 +238,10 @@ fn deny_read_of_a_missing_path_refuses_without_creating_a_host_mountpoint() -> i
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
     assert!(!denied.exists(), "preflight created the host deny path");
     std::fs::write(&denied, "host-file-can-still-be-created")?;
-    assert_eq!(std::fs::read_to_string(&denied)?, "host-file-can-still-be-created");
+    assert_eq!(
+        std::fs::read_to_string(&denied)?,
+        "host-file-can-still-be-created"
+    );
     done("deny-missing-refused-without-host-mutation", start);
     Ok(())
 }

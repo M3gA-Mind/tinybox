@@ -154,7 +154,8 @@ fn baseline_mounts() -> Vec<Mount> {
 /// - `deny_read` subtracted last.
 ///
 /// # Errors
-/// - `NotFound` when the root or a `read_write` grant does not exist;
+/// - `NotFound` when the root, a `read_write` grant, or a `deny_read` path does
+///   not exist;
 /// - `InvalidInput` for a relative path or one containing `..`, for a symlink
 ///   below a writable grant that a nested grant goes through, for a grant that is `/`, `/tmp`, or at or under `/proc` or
 ///   `/dev` (it would replace a private mount and expose the host's), and for
@@ -324,21 +325,17 @@ fn deny_masks(denied: &[PathBuf], mounts: &[Mount]) -> io::Result<Vec<OsString>>
                 os("/dev/null"),
                 deny.clone().into_os_string(),
             ]),
-            // Reserve a mountpoint for a prospective denial so a path created
-            // under a granted directory after spawn cannot become visible.
-            // Refuse deeper missing parents: bwrap must not guess at creating
-            // an arbitrary path outside an existing mountpoint.
+            // Bubblewrap creates a missing --tmpfs destination on the host
+            // before mounting over it. Refuse instead of mutating a granted
+            // directory or preventing a future file from being created there.
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                if !deny.parent().is_some_and(Path::is_dir) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::NotFound,
-                        format!(
-                            "cannot pre-create deny_read mountpoint {} without an existing parent",
-                            deny.display()
-                        ),
-                    ));
-                }
-                argv.extend([os("--tmpfs"), deny.clone().into_os_string()]);
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "deny_read path {} must exist before starting the jail",
+                        deny.display()
+                    ),
+                ));
             }
             Err(error) => return Err(error),
         }
