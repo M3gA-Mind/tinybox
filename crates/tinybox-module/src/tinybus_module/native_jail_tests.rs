@@ -259,7 +259,6 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::{
         io::Write,
-        os::unix::fs::MetadataExt,
         process::{Command, Stdio},
     };
 
@@ -371,7 +370,11 @@ struct NativeEscapeFixture {
 fn native_escape_fixture(
     root: &std::path::Path,
 ) -> std::result::Result<NativeEscapeFixture, Box<dyn std::error::Error>> {
-    use std::{os::fd::AsRawFd, os::unix::fs::FileTypeExt, os::unix::net::UnixStream};
+    use std::os::{
+        fd::AsRawFd,
+        unix::fs::{FileTypeExt, MetadataExt},
+        unix::net::UnixStream,
+    };
 
     let workspace = root.join("workspace");
     std::fs::create_dir_all(workspace.join("hidden"))?;
@@ -379,7 +382,8 @@ fn native_escape_fixture(
     let denied_inside = workspace.join("denied-inside");
     std::fs::create_dir_all(&denied_inside)?;
     std::fs::write(denied_inside.join("secret"), "secret")?;
-    let socket = std::env::var("DBUS_SESSION_BUS_ADDRESS")?
+    let address = std::env::var("DBUS_SESSION_BUS_ADDRESS")?;
+    let socket = address
         .strip_prefix("unix:path=")
         .ok_or("filesystem DBus manager socket is required for this escape test")?;
     let socket = std::path::PathBuf::from(socket);
