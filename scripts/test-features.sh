@@ -36,8 +36,8 @@ case "${RUNNER_OS:-$(uname -s)}" in
     cargo test --locked -p tinybox-jail --test bwrap_isolation --test bwrap_fd_leak -- --nocapture 2>&1 | tee "$log"
     ran="$(grep -c '^\[bwrap-real\] .* ok in ' "$log" || true)"
     echo "bwrap real isolation tests that ran: $ran"
-    if [ "$ran" -lt 16 ]; then
-      echo "expected at least 16 real bwrap tests to run, saw $ran" >&2
+    if [ "$ran" -lt 20 ]; then
+      echo "expected at least 20 real bwrap tests to run, saw $ran" >&2
       exit 1
     fi
     ;;

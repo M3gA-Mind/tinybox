@@ -39,27 +39,24 @@ fn unavailable_backend_claims_nothing_and_refuses_to_spawn() {
 }
 
 #[test]
-fn kernel_isolation_needs_disable_userns_support() {
+fn isolation_is_the_minimum_over_configurations_and_kernel_needs_a_private_network() {
     let hardened = BubblewrapBackend::unverified("/x", true);
-    assert_eq!(hardened.isolation(), IsolationLevel::Kernel);
-    assert!(hardened.is_suitable_for_untrusted_code());
+    let closed = Jail::new(".", "t").deny_net();
+    let open = Jail::new(".", "t");
+    assert_eq!(hardened.isolation(), IsolationLevel::Process);
+    assert_eq!(hardened.isolation_for(&closed), IsolationLevel::Kernel);
+    assert_eq!(hardened.isolation_for(&open), IsolationLevel::Process);
+    // Status without a jail (what a host reports) is the worst case, so the
+    // per-backend question answers false.
+    assert!(!hardened.is_suitable_for_untrusted_code());
+    assert!(hardened.is_suitable_for_untrusted_jail(&closed));
+    assert!(!hardened.is_suitable_for_untrusted_jail(&open));
     assert!(hardened.carves_denials());
     let old = BubblewrapBackend::unverified("/x", false);
     assert_eq!(old.isolation(), IsolationLevel::None);
-    assert!(!old.is_suitable_for_untrusted_code());
+    assert_eq!(old.isolation_for(&closed), IsolationLevel::None);
+    assert!(!old.is_suitable_for_untrusted_jail(&closed));
     assert!(old.is_available(), "it still confines the filesystem");
-}
-
-#[test]
-fn a_shared_network_namespace_is_not_suitable_for_untrusted_code() {
-    let backend = available();
-    let closed = Jail::new(".", "t").deny_net();
-    let open = Jail::new(".", "t");
-    assert!(backend.is_suitable_for_untrusted_jail(&closed));
-    assert_eq!(backend.isolation_for(&closed), IsolationLevel::Kernel);
-    assert!(!backend.is_suitable_for_untrusted_jail(&open));
-    assert_eq!(backend.isolation_for(&open), IsolationLevel::Process);
-    assert!(backend.require(&open).is_ok(), "preflight is unchanged");
 }
 
 #[test]
@@ -75,35 +72,48 @@ fn subprocess_denial_is_refused_because_it_is_not_enforced() {
 }
 
 #[test]
-fn caller_env_never_reaches_the_host_bwrap_process() -> io::Result<()> {
+fn secrets_stay_out_of_argv_and_the_launcher_environment() -> io::Result<()> {
     let root = tempfile::tempdir()?;
     let mut cmd = Command::new("node");
     cmd.arg("server.js")
+        .env("GITHUB_TOKEN", "ghp_s3cret")
         .env("LD_PRELOAD", "/evil.so")
         .env("A", "1")
         .env_remove("B");
-    let wrapper = prepare_command(
-        &verified("/usr/bin/bwrap"),
-        &Jail::new(root.path(), "t"),
-        &cmd,
-    )?;
-    assert_eq!(wrapper.get_envs().count(), 0, "bwrap itself gets no env");
-    let argv = argv_of(&wrapper);
-    let clear = argv.iter().position(|a| a == "--clearenv");
-    let sep = argv.iter().position(|a| a == "--");
-    assert!(clear.is_some() && clear < sep);
-    for (k, v) in [("LD_PRELOAD", "/evil.so"), ("A", "1")] {
+    let jail = Jail::new(root.path(), "t");
+    let prepared = prepare_command(&verified("/usr/bin/bwrap"), &jail, &cmd)?;
+    // The host-side process: empty environment, argv of paths only.
+    assert_eq!(prepared.launcher.get_envs().count(), 0);
+    let argv = argv_of(&prepared.launcher);
+    for secret in ["ghp_s3cret", "/evil.so", "GITHUB_TOKEN", "LD_PRELOAD"] {
         assert!(
-            argv.windows(3)
-                .any(|w| w[0] == "--setenv" && w[1] == k && w[2] == v),
-            "{k} must be passed as --setenv"
+            !argv.iter().any(|a| a.contains(secret)),
+            "{secret} leaked into the launcher argv: {argv:?}"
         );
     }
-    assert!(!argv.iter().any(|a| a == "B"));
+    // The values travel in the private args file instead.
+    let content = std::fs::read(prepared.args.path())?;
+    let fields: Vec<&[u8]> = content.split(|b| *b == 0).collect();
+    for (k, v) in [
+        ("GITHUB_TOKEN", "ghp_s3cret"),
+        ("LD_PRELOAD", "/evil.so"),
+        ("A", "1"),
+    ] {
+        assert!(
+            fields
+                .windows(3)
+                .any(|w| w[0] == b"--setenv" && w[1] == k.as_bytes() && w[2] == v.as_bytes()),
+            "{k} missing from the args file"
+        );
+    }
+    let clear = fields.iter().position(|f| *f == b"--clearenv");
+    let sep = fields.iter().position(|f| *f == b"--");
+    assert!(clear.is_some() && clear < sep);
     assert_eq!(
-        sep.map(|i| &argv[i + 1..]),
-        Some(&["node".to_owned(), "server.js".to_owned()][..])
+        sep.map(|i| &fields[i + 1..i + 3]),
+        Some(&[&b"node"[..], &b"server.js"[..]][..])
     );
+    prepared.args.discard();
     Ok(())
 }
 
@@ -147,16 +157,15 @@ fn spawn_runs_the_wrapped_command_through_the_launcher() -> io::Result<()> {
 }
 
 #[test]
-fn spawn_captured_pipes_the_wrapper_and_forwards_env_as_arguments() -> io::Result<()> {
+fn spawn_captured_pipes_the_wrapper_and_delivers_env_through_the_args_file() -> io::Result<()> {
     let backend = BubblewrapBackend::unverified(fake_bwrap(), true);
     let root = tempfile::tempdir()?;
     let jail = Jail::new(root.path(), "t");
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg("printf %s \"$A\"").env("A", "hi");
     let out = backend.spawn_captured(&jail, cmd)?.wait_with_output()?;
-    // The fake drops --setenv with the other flags, so the variable is absent:
-    // proof the host launcher is not what carries it.
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "");
+    // Delivered through `--setenv` in the args file, applied by the stand-in.
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "hi");
     Ok(())
 }
 
@@ -168,31 +177,6 @@ fn spawn_with_a_missing_root_is_not_found() {
         .err()
         .map(|e| e.kind());
     assert_eq!(kind, Some(io::ErrorKind::NotFound));
-}
-
-#[test]
-fn a_leaked_descriptor_is_closed_through_the_shell_launcher() -> io::Result<()> {
-    // Not reproducible without clearing CLOEXEC (see tests/bwrap_isolation.rs);
-    // here, check the wrapper shape when the launcher has nothing to close.
-    let root = tempfile::tempdir()?;
-    let wrapper = prepare_command(
-        &verified("/usr/bin/bwrap"),
-        &Jail::new(root.path(), "t"),
-        &Command::new("true"),
-    )?;
-    let leaked = fds::leaked_fds()?;
-    if leaked.is_empty() {
-        assert_eq!(wrapper.get_program(), "/usr/bin/bwrap");
-    } else {
-        // Whatever the environment leaked is closed by a shell first.
-        assert!(
-            wrapper.get_program().to_string_lossy().ends_with("sh"),
-            "{:?}",
-            wrapper.get_program()
-        );
-        assert!(argv_of(&wrapper).iter().any(|a| a.contains(">&-")));
-    }
-    Ok(())
 }
 
 fn fixture(name: &str) -> PathBuf {

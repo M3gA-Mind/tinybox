@@ -269,7 +269,13 @@ fn chdir_defaults_to_root_and_honours_the_command_cwd() -> io::Result<()> {
 #[test]
 fn relative_and_dotdot_paths_cannot_talk_around_the_private_mount_guard() -> io::Result<()> {
     let root = tempfile::tempdir()?;
-    for bad in ["/usr/../tmp", "/tmp/..", "/usr/../proc", "relative/dir", "/a/./../b"] {
+    for bad in [
+        "/usr/../tmp",
+        "/tmp/..",
+        "/usr/../proc",
+        "relative/dir",
+        "/a/./../b",
+    ] {
         for j in [
             jail(root.path()).add_read_only(bad),
             jail(root.path()).add_read_write(bad),

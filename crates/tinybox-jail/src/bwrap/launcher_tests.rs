@@ -34,7 +34,11 @@ fn the_args_file_is_private_nul_separated_and_never_reused() -> io::Result<()> {
     let file = ArgsFile::create(&["--setenv".into(), "TOKEN".into(), "s3cret".into()])?;
     assert_eq!(std::fs::read(file.path())?, b"--setenv\0TOKEN\0s3cret\0");
     assert_eq!(std::fs::metadata(file.path())?.mode() & 0o777, 0o600);
-    let dir = file.path().parent().map(Path::to_path_buf).unwrap_or_default();
+    let dir = file
+        .path()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
     assert_eq!(std::fs::metadata(&dir)?.mode() & 0o777, 0o700);
     let other = ArgsFile::create(&[])?;
     assert_ne!(other.path(), file.path());
@@ -75,7 +79,10 @@ fn the_launcher_runs_with_an_empty_environment() -> io::Result<()> {
     let out = command("/bin/sh", &bwrap, &file).output()?;
     file.discard();
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(!text.contains("HOME=") && !text.contains("LD_PRELOAD"), "{text}");
+    assert!(
+        !text.contains("HOME=") && !text.contains("LD_PRELOAD"),
+        "{text}"
+    );
     Ok(())
 }
 

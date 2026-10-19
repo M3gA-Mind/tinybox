@@ -69,8 +69,7 @@
 //! `dash` (no `bash` installed) a descriptor above 9 cannot be closed and the
 //! sandbox fails to start rather than leak it.
 
-use std::fmt::Write as _;
-use std::io::{self, Read as _};
+use std::io;
 use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 use std::os::unix::process::CommandExt as _;
@@ -219,13 +218,7 @@ fn probe(program: &Path, disable_userns: bool) -> bool {
 /// `$TMPDIR/tinybox-bwrap-probe-<random>`, created mode 0700 with `create`
 /// (which fails if the name exists).
 fn private_probe_dir() -> io::Result<PathBuf> {
-    let mut random = [0_u8; 12];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
-    let mut name = String::from("tinybox-bwrap-probe-");
-    for byte in random {
-        let _ = write!(name, "{byte:02x}");
-    }
-    let dir = std::env::temp_dir().join(name);
+    let dir = std::env::temp_dir().join(format!("tinybox-bwrap-probe-{}", launcher::random_hex()?));
     std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
     Ok(dir)
 }

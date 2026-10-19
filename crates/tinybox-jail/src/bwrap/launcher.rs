@@ -46,6 +46,20 @@ done
 exec "$0" --args 9
 "#;
 
+/// 24 hex characters from the kernel's random source.
+///
+/// # Errors
+/// Returns the error from reading `/dev/urandom`.
+pub(super) fn random_hex() -> io::Result<String> {
+    let mut random = [0_u8; 12];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+    let mut out = String::new();
+    for byte in random {
+        let _ = write!(out, "{byte:02x}");
+    }
+    Ok(out)
+}
+
 /// The shell for the launcher: `bash` when present, because `dash` (`/bin/sh`
 /// on Debian and Ubuntu) cannot close a descriptor above 9 and the script then
 /// fails closed.
@@ -69,13 +83,7 @@ impl ArgsFile {
     /// # Errors
     /// Returns the filesystem error from creating the directory or file.
     pub(super) fn create(argv: &[OsString]) -> io::Result<Self> {
-        let mut random = [0_u8; 12];
-        std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
-        let mut name = String::from("tinybox-bwrap-");
-        for byte in random {
-            let _ = write!(name, "{byte:02x}");
-        }
-        let dir = std::env::temp_dir().join(name);
+        let dir = std::env::temp_dir().join(format!("tinybox-bwrap-{}", random_hex()?));
         // `create`, not `create_all`: an existing path is an error, never reused.
         std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
         let file = dir.join("args");

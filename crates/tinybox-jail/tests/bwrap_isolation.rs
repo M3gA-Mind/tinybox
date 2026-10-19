@@ -21,19 +21,22 @@ mod support;
 use support::*;
 
 #[test]
-fn backend_is_suitable_for_untrusted_code_only_without_shared_network() -> io::Result<()> {
+fn only_a_jail_with_a_private_network_is_suitable_for_untrusted_code() -> io::Result<()> {
     let Some(backend) = backend()? else {
         return Ok(());
     };
     let start = Instant::now();
     let root = tempfile::tempdir()?;
+    // tinymcp's default configuration shares the host network: not suitable.
+    assert!(!backend.is_suitable_for_untrusted_jail(&jail(root.path())));
+    // The per-backend answer is the worst case, so it is never true.
+    assert!(!backend.is_suitable_for_untrusted_code());
+    // With a private network it is suitable, given `--disable-userns` support.
     let closed = jail(root.path()).deny_net();
-    // The stricter claim needs `--disable-userns` (bubblewrap 0.8+).
     assert_eq!(
         backend.is_suitable_for_untrusted_jail(&closed),
-        backend.is_suitable_for_untrusted_code()
+        backend.isolation() >= tinybox_core::IsolationLevel::Process
     );
-    assert!(!backend.is_suitable_for_untrusted_jail(&jail(root.path())));
     done("suitability", start);
     Ok(())
 }
@@ -147,6 +150,50 @@ fn grants_replacing_private_mounts_are_refused() -> io::Result<()> {
         );
     }
     done("private-mount-grants", start);
+    Ok(())
+}
+
+#[test]
+fn dotdot_paths_cannot_slip_past_the_private_mount_guard() -> io::Result<()> {
+    let Some(backend) = backend()? else {
+        return Ok(());
+    };
+    let start = Instant::now();
+    let root = tempfile::tempdir()?;
+    for bad in ["/usr/../tmp", "/tmp/..", "/usr/../proc"] {
+        // The trait method does not canonicalize first, so the backend itself
+        // must refuse what is lexically `..`.
+        let mut cmd = Command::new("/bin/true");
+        cmd.arg("x");
+        let err = backend
+            .spawn_captured(&jail(root.path()).add_read_only(bad), cmd)
+            .err()
+            .map(|e| e.kind());
+        assert_eq!(err, Some(io::ErrorKind::InvalidInput), "{bad}");
+    }
+    done("dotdot-grants", start);
+    Ok(())
+}
+
+#[test]
+fn a_symlink_planted_in_a_writable_root_cannot_redirect_a_nested_grant() -> io::Result<()> {
+    let Some(backend) = backend()? else {
+        return Ok(());
+    };
+    let start = Instant::now();
+    let root = tempfile::tempdir()?;
+    let secret = tempfile::tempdir()?;
+    std::fs::write(secret.path().join("token"), "host-secret")?;
+    // What a previous session's child could have left behind.
+    std::os::unix::fs::symlink(secret.path(), root.path().join("vendor"))?;
+    let j = jail(root.path()).add_read_only(root.path().join("vendor"));
+    // Through the public API (canonicalizing) and through the trait directly.
+    assert_eq!(refused(&backend, &j), Some(io::ErrorKind::InvalidInput));
+    let mut cmd = Command::new("/bin/true");
+    cmd.arg("x");
+    let direct = backend.spawn_captured(&j, cmd).err().map(|e| e.kind());
+    assert_eq!(direct, Some(io::ErrorKind::InvalidInput));
+    done("planted-symlink", start);
     Ok(())
 }
 
@@ -295,8 +342,24 @@ fn parent_environment_is_not_inherited_and_explicit_env_is_passed() -> io::Resul
     Ok(())
 }
 
+/// Waits until `pid` has exec'd `bwrap` (the launcher shell execs it), then
+/// returns its raw `cmdline` and `environ`.
+fn host_process_view(pid: u32) -> io::Result<(Vec<u8>, Vec<u8>)> {
+    for _ in 0..200 {
+        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+        if comm.trim() == "bwrap" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    Ok((
+        std::fs::read(format!("/proc/{pid}/cmdline"))?,
+        std::fs::read(format!("/proc/{pid}/environ")).unwrap_or_default(),
+    ))
+}
+
 #[test]
-fn caller_env_is_not_applied_to_the_host_bwrap_process() -> io::Result<()> {
+fn credentials_never_appear_in_the_host_bwrap_cmdline_or_environment() -> io::Result<()> {
     let Some(backend) = backend()? else {
         return Ok(());
     };
@@ -304,20 +367,46 @@ fn caller_env_is_not_applied_to_the_host_bwrap_process() -> io::Result<()> {
     let root = tempfile::tempdir()?;
     let mut cmd = Command::new("/bin/sleep");
     cmd.arg("5")
-        .env("LD_PRELOAD", "/nonexistent/evil.so")
-        .env("TINYBOX_CANARY", "1");
+        .env("GITHUB_TOKEN", "ghp_integration_s3cret")
+        .env("LD_PRELOAD", "/nonexistent/evil.so");
     let mut child = spawn_captured_with(&backend, &jail(root.path()).deny_net(), cmd)?;
-    // The child is the host-side bwrap (or its launcher): its environment is
-    // what a loader hook would run in.
-    let environ = std::fs::read(format!("/proc/{}/environ", child.id()))?;
+    let (cmdline, environ) = host_process_view(child.id())?;
     let _ = child.kill();
     let _ = child.wait();
-    let text = String::from_utf8_lossy(&environ);
-    assert!(
-        !text.contains("LD_PRELOAD") && !text.contains("TINYBOX_CANARY"),
-        "host bwrap saw the caller's env: {text:?}"
+    for (name, bytes) in [("cmdline", cmdline), ("environ", environ)] {
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            !text.contains("ghp_integration_s3cret") && !text.contains("evil.so"),
+            "{name} of the host bwrap exposes the caller's env: {text:?}"
+        );
+    }
+    done("host-cmdline-environ", start);
+    Ok(())
+}
+
+#[test]
+fn ld_preload_in_the_caller_env_only_takes_effect_inside_the_sandbox() -> io::Result<()> {
+    let Some(backend) = backend()? else {
+        return Ok(());
+    };
+    let start = Instant::now();
+    let root = tempfile::tempdir()?;
+    let mut cmd = Command::new("/bin/true");
+    cmd.env("LD_PRELOAD", "/nonexistent/tinybox-evil.so");
+    let out = run(&backend, &jail(root.path()).deny_net(), cmd)?;
+    // ld.so complains once per dynamic process that tries to preload. Exactly
+    // one is the sandboxed `true`; a host-side bwrap or launcher that honoured
+    // the variable would add more.
+    let complaints = String::from_utf8_lossy(&out.stderr)
+        .matches("cannot be preloaded")
+        .count();
+    assert_eq!(
+        complaints,
+        1,
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    done("host-env", start);
+    done("ld-preload", start);
     Ok(())
 }
 
