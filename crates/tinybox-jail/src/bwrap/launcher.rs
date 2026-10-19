@@ -32,12 +32,12 @@ use std::process::Command;
 /// reads options from the file but the command itself must be on its argv; a
 /// command line is visible to every local user anyway, in the sandbox as on
 /// any host).
-const SCRIPT: &str = r#"[ -d /proc/self/fd ] || exit 126
-f=$1
+const SCRIPT: &str = r#"f=$1
 shift
 exec 9<"$f" || exit 126
 command -p rm -f -- "$f"
 command -p rmdir -- "${f%/*}" 2>/dev/null
+[ -d /proc/self/fd ] || exit 126
 for fd in /proc/self/fd/*; do
   n=${fd##*/}
   case $n in
@@ -72,6 +72,30 @@ pub(super) fn pick_shell(exists: impl Fn(&str) -> bool) -> &'static str {
         .unwrap_or("/bin/sh")
 }
 
+/// Where the args file may live: `$XDG_RUNTIME_DIR` (a private per-user
+/// directory) when set, else the temp directory. A candidate that lies under
+/// any of the jail's mounts is refused, since the jailed program could then
+/// read or replace the file.
+///
+/// # Errors
+/// `PermissionDenied` when no candidate is outside the jail's grants.
+pub(super) fn base_dir(
+    grants: &[&Path],
+    xdg_runtime_dir: Option<PathBuf>,
+    temp_dir: PathBuf,
+) -> io::Result<PathBuf> {
+    xdg_runtime_dir
+        .into_iter()
+        .chain(std::iter::once(temp_dir))
+        .find(|dir| dir.is_dir() && !grants.iter().any(|grant| dir.starts_with(grant)))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "no private directory outside the jail's grants for the bwrap argument file",
+            )
+        })
+}
+
 /// A private file holding the `bwrap` argument list.
 #[derive(Debug)]
 pub(super) struct ArgsFile {
@@ -80,12 +104,21 @@ pub(super) struct ArgsFile {
 }
 
 impl ArgsFile {
-    /// Writes `argv` NUL-terminated into a fresh private directory.
+    /// Writes `argv` NUL-terminated into a fresh private directory under
+    /// `base`.
     ///
     /// # Errors
-    /// Returns the filesystem error from creating the directory or file.
-    pub(super) fn create(argv: &[OsString]) -> io::Result<Self> {
-        let dir = std::env::temp_dir().join(format!("tinybox-bwrap-{}", random_hex()?));
+    /// `InvalidInput` if any argument contains a NUL byte (it would end the
+    /// argument early and let the rest be read as further `bwrap` options);
+    /// otherwise the filesystem error from creating the directory or file.
+    pub(super) fn create(argv: &[OsString], base: &Path) -> io::Result<Self> {
+        if argv.iter().any(|arg| arg.as_bytes().contains(&0)) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a bwrap argument contains a NUL byte",
+            ));
+        }
+        let dir = base.join(format!("tinybox-bwrap-{}", random_hex()?));
         // `create`, not `create_all`: an existing path is an error, never reused.
         std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
         let file = dir.join("args");

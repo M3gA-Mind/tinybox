@@ -90,7 +90,9 @@ fn os(s: &str) -> OsString {
 /// Refuses a path the private-mount guard could be talked around with: only
 /// absolute paths without `..` are meaningful here (`/usr/../tmp` is `/tmp`).
 fn require_clean(path: &Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
     if path.is_absolute()
+        && !path.as_os_str().as_bytes().contains(&0)
         && !path
             .components()
             .any(|c| matches!(c, std::path::Component::ParentDir))
@@ -100,7 +102,7 @@ fn require_clean(path: &Path) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::InvalidInput,
         format!(
-            "jail path {} must be absolute and free of `..` components",
+            "jail path {} must be absolute, without `..` components or NUL bytes",
             path.display()
         ),
     ))
@@ -211,8 +213,12 @@ pub(super) fn jail_args(
         });
     }
 
+    // A denial spelled through a baseline symlink (`/bin/sh`) also denies where
+    // the link points (`/usr/bin/sh`): the sandbox mounts the target, not the
+    // link.
+    let denied = effective_denials(&jail.deny_read, &mounts);
     // A mount at or below a denied path is never mounted.
-    mounts.retain(|m| !jail.deny_read.iter().any(|deny| m.path.starts_with(deny)));
+    mounts.retain(|m| !denied.iter().any(|deny| m.path.starts_with(deny)));
     mounts.sort_by_key(Mount::order);
 
     let mut argv: Vec<OsString> = ["--unshare-user", "--unshare-pid", "--unshare-ipc"]
@@ -248,7 +254,7 @@ pub(super) fn jail_args(
         }
     }
 
-    argv.extend(deny_masks(jail, &mounts)?);
+    argv.extend(deny_masks(jail, &denied, &mounts)?);
 
     argv.extend([
         os("--chdir"),
@@ -257,10 +263,38 @@ pub(super) fn jail_args(
     Ok(argv)
 }
 
+/// `deny_read` plus, for each entry under a baseline symlink, the same path
+/// under the link's target.
+fn effective_denials(deny_read: &[PathBuf], mounts: &[Mount]) -> Vec<PathBuf> {
+    let mut denied = deny_read.to_vec();
+    for deny in deny_read {
+        for mount in mounts {
+            let Kind::Symlink(target) = &mount.kind else {
+                continue;
+            };
+            let Ok(rest) = deny.strip_prefix(&mount.path) else {
+                continue;
+            };
+            let base = if target.is_absolute() {
+                target.clone()
+            } else {
+                mount
+                    .path
+                    .parent()
+                    .map_or_else(|| target.clone(), |parent| parent.join(target))
+            };
+            denied.push(base.join(rest));
+        }
+    }
+    denied.sort();
+    denied.dedup();
+    denied
+}
+
 /// Arguments that subtract `deny_read` from the surviving mounts.
-fn deny_masks(jail: &Jail, mounts: &[Mount]) -> io::Result<Vec<OsString>> {
+fn deny_masks(jail: &Jail, denied: &[PathBuf], mounts: &[Mount]) -> io::Result<Vec<OsString>> {
     let mut argv: Vec<OsString> = Vec::new();
-    for deny in &jail.deny_read {
+    for deny in denied {
         // The deepest surviving mount that holds the denied path decides.
         let Some(holder) = mounts
             .iter()

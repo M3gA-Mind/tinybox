@@ -242,7 +242,10 @@ fn run_probe(program: &Path, disable_userns: bool, root: &Path, host_only: &Path
     .chain([host_only.into(), parent_pidns.into()])
     .collect();
     // The same launcher path as a real spawn, so it is exercised too.
-    let Ok(file) = launcher::ArgsFile::create(&argv) else {
+    let Ok(base) = launcher::base_dir(&[root], xdg_runtime_dir(), std::env::temp_dir()) else {
+        return false;
+    };
+    let Ok(file) = launcher::ArgsFile::create(&argv, &base) else {
         return false;
     };
     let shell = launcher::pick_shell(|path| Path::new(path).is_file());
@@ -254,6 +257,13 @@ fn run_probe(program: &Path, disable_userns: bool, root: &Path, host_only: &Path
         .output();
     file.discard();
     out.is_ok_and(|out| out.status.success() && out.stdout == b"isolated\n")
+}
+
+/// `$XDG_RUNTIME_DIR` when it is an absolute path.
+fn xdg_runtime_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
 }
 
 /// A command ready to spawn, plus the argument file it will consume.
@@ -282,7 +292,13 @@ fn prepare_command(verified: &Verified, jail: &Jail, cmd: &Command) -> io::Resul
         }
     }
 
-    let file = launcher::ArgsFile::create(&argv)?;
+    let grants: Vec<&Path> = std::iter::once(&jail.root)
+        .chain(&jail.read_write)
+        .chain(&jail.read_only)
+        .map(PathBuf::as_path)
+        .collect();
+    let base = launcher::base_dir(&grants, xdg_runtime_dir(), std::env::temp_dir())?;
+    let file = launcher::ArgsFile::create(&argv, &base)?;
     let shell = launcher::pick_shell(|path| Path::new(path).is_file());
     let program_args: Vec<OsString> = cmd.get_args().map(OsString::from).collect();
     let launcher = launcher::command(

@@ -305,3 +305,36 @@ fn a_nested_grant_through_a_planted_symlink_is_refused() -> io::Result<()> {
     assert_eq!(kind, Some(io::ErrorKind::InvalidInput));
     Ok(())
 }
+
+#[test]
+fn nul_bytes_in_paths_are_rejected() -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let root = tempfile::tempdir()?;
+    let evil = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/x\0--bind"));
+    for j in [jail(root.path()).add_read_only(evil), jail(evil)] {
+        let kind = jail_args(&j, None, OPTS).err().map(|e| e.kind());
+        assert_eq!(kind, Some(io::ErrorKind::InvalidInput));
+    }
+    Ok(())
+}
+
+#[test]
+fn a_denial_through_a_baseline_symlink_also_covers_the_link_target() -> io::Result<()> {
+    // `/bin` is a symlink to `usr/bin` on merged-/usr hosts.
+    let Ok(target) = std::fs::read_link("/bin") else {
+        return Ok(());
+    };
+    if target != Path::new("usr/bin") || !Path::new("/usr/bin/sh").exists() {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let mut j = jail(root.path());
+    j.deny_read = vec![PathBuf::from("/bin/sh")];
+    let argv = build(&j)?;
+    assert!(
+        argv.windows(3)
+            .any(|w| w[0] == "--ro-bind" && w[1] == "/dev/null" && w[2] == "/usr/bin/sh"),
+        "{argv:?}"
+    );
+    Ok(())
+}
