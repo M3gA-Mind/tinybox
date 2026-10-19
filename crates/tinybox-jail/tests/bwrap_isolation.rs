@@ -235,9 +235,15 @@ fn deny_read_masks_a_path_created_after_the_sandbox_starts() -> io::Result<()> {
     let mut stdout = io::BufReader::new(stdout);
     let mut marker = String::new();
     stdout.read_line(&mut marker)?;
-    assert_eq!(marker, "started\n", "sandbox did not start before the grant changed");
+    assert_eq!(
+        marker, "started\n",
+        "sandbox did not start before the grant changed"
+    );
 
-    assert!(denied.is_dir(), "the jail did not reserve the denied mountpoint");
+    assert!(
+        denied.is_dir(),
+        "the jail did not reserve the denied mountpoint"
+    );
     std::fs::write(denied.join("id_rsa"), "late-host-secret")?;
     child
         .stdin
