@@ -7,7 +7,7 @@
 //! duration for the CI log.
 #![cfg(target_os = "linux")]
 
-use std::io::{self, BufRead as _, Read as _, Write as _};
+use std::io;
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::Command;
@@ -215,7 +215,7 @@ fn deny_read_masks_a_file_inside_the_root() -> io::Result<()> {
 }
 
 #[test]
-fn deny_read_masks_a_path_created_after_the_sandbox_starts() -> io::Result<()> {
+fn deny_read_of_a_missing_path_refuses_without_creating_a_host_mountpoint() -> io::Result<()> {
     let Some(backend) = backend()? else {
         return Ok(());
     };
@@ -224,41 +224,14 @@ fn deny_read_masks_a_path_created_after_the_sandbox_starts() -> io::Result<()> {
     let denied = root.path().join(".ssh");
     let mut j = jail(root.path());
     j.deny_read = vec![denied.clone()];
-    let mut cmd = Command::new("/bin/sh");
-    cmd.arg("-c")
-        .arg("printf 'started\\n'; IFS= read -r _; cat .ssh/id_rsa 2>/dev/null || true");
-    let mut child = spawn_captured_with(&backend, &j, cmd)?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| io::Error::other("sandbox stdout was not captured"))?;
-    let mut stdout = io::BufReader::new(stdout);
-    let mut marker = String::new();
-    stdout.read_line(&mut marker)?;
-    assert_eq!(
-        marker, "started\n",
-        "sandbox did not start before the grant changed"
-    );
-
-    assert!(
-        denied.is_dir(),
-        "the jail did not reserve the denied mountpoint"
-    );
-    std::fs::write(denied.join("id_rsa"), "late-host-secret")?;
-    child
-        .stdin
-        .as_mut()
-        .ok_or_else(|| io::Error::other("sandbox stdin was not captured"))?
-        .write_all(b"continue\n")?;
-    let mut remaining = String::new();
-    stdout.read_to_string(&mut remaining)?;
-    let status = child.wait()?;
-    assert!(status.success());
-    assert!(
-        !remaining.contains("late-host-secret"),
-        "a denied path created after launch became readable: {remaining}"
-    );
-    done("deny-late-created-path", start);
+    let mut cmd = Command::new("/bin/true");
+    let error = spawn_captured_with(&backend, &j, cmd)
+        .expect_err("a missing denial must fail before bwrap starts");
+    assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    assert!(!denied.exists(), "refusal mutated the host filesystem");
+    std::fs::write(&denied, "host-file-remains-creatable")?;
+    assert_eq!(std::fs::read_to_string(&denied)?, "host-file-remains-creatable");
+    done("deny-missing-refused-without-host-mutation", start);
     Ok(())
 }
 
