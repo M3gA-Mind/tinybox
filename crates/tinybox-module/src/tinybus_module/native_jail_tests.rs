@@ -79,6 +79,42 @@ fn config() -> NativeJailConfig {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn native_resource_runtime_available() -> bool {
+    use std::process::Command;
+
+    let manager_socket = std::env::var("DBUS_SESSION_BUS_ADDRESS")
+        .ok()
+        .and_then(|address| address.strip_prefix("unix:path=").map(str::to_owned))
+        .is_some_and(|path| {
+            std::fs::metadata(path)
+                .is_ok_and(|metadata| metadata.file_type().is_socket())
+        });
+    let scope = Command::new("systemd-run")
+        .args([
+            "--user", "--scope", "--quiet", "--property=CPUQuota=100%",
+            "--property=MemoryMax=67108864", "--property=MemorySwapMax=0",
+            "--property=TasksMax=16", "--", "/bin/true",
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+    let namespaces = Command::new("bwrap")
+        .args([
+            "--unshare-user", "--unshare-pid", "--unshare-net", "--ro-bind", "/usr",
+            "/usr", "--", "/usr/bin/true",
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+    let available = manager_socket && scope && namespaces;
+    if std::env::var_os("TINYBOX_REQUIRE_NATIVE_RESOURCE_TESTS").is_some() {
+        assert!(
+            available,
+            "required native resource test environment is unavailable: manager={manager_socket}, systemd-scope={scope}, namespaces={namespaces}"
+        );
+    }
+    available
+}
+
 #[cfg(unix)]
 #[test]
 fn requested_native_resource_limits_are_refused_before_spawn()
