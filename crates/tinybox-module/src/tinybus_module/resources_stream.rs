@@ -415,8 +415,21 @@ impl Resources {
         request: SpawnRequest,
         config: tinybox_bus::NativeJailConfig,
     ) -> Result<ProcessRef> {
-        self.start_with_jail(request, Some(config), None, None)
+        self.start_with_jail(request, Some(NativeJailRequest::Legacy(config)), None, None)
             .await
+    }
+    pub(in crate::tinybus_module) async fn start_jailed_exec_with_resources(
+        &self,
+        request: SpawnRequest,
+        config: tinybox_bus::NativeJailRequest,
+    ) -> Result<ProcessRef> {
+        self.start_with_jail(
+            request,
+            Some(NativeJailRequest::Resources(config)),
+            None,
+            None,
+        )
+        .await
     }
     pub(in crate::tinybus_module) async fn start_shell_exec(
         &self,
@@ -432,7 +445,12 @@ impl Resources {
                 stdin: shell.stdin.clone(),
             },
         };
-        self.start_with_jail(request, shell.jail.clone(), Some(shell), None)
+        self.start_with_jail(
+            request,
+            shell.jail.clone().map(NativeJailRequest::Legacy),
+            Some(shell),
+            None,
+        )
             .await
     }
     pub(in crate::tinybus_module) async fn start_platform_shell_exec(
@@ -451,7 +469,7 @@ impl Resources {
     async fn start_with_jail(
         &self,
         request: SpawnRequest,
-        jail: Option<tinybox_bus::NativeJailConfig>,
+        jail: Option<NativeJailRequest>,
         shell: Option<tinybox_bus::ShellExecRequest>,
         platform_shell: Option<tinybox_bus::SelectShellRequest>,
     ) -> Result<ProcessRef> {
@@ -467,7 +485,7 @@ impl Resources {
     async fn start_with_preparation<Fut>(
         &self,
         request: SpawnRequest,
-        jail: Option<tinybox_bus::NativeJailConfig>,
+        jail: Option<NativeJailRequest>,
         shell: Option<tinybox_bus::ShellExecRequest>,
         platform_shell: Option<tinybox_bus::SelectShellRequest>,
         prepare: impl FnOnce(CollectorPreparation) -> Fut,
