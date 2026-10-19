@@ -616,6 +616,123 @@ fn native_scope_exit_kills_double_forked_setsid_descendants()
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn native_cancellation_kills_detached_descendants_and_preserves_stream_events()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use std::{
+        process::Command,
+        time::{Duration, Instant},
+    };
+
+    let root = tempfile::tempdir()?;
+    let pid_file = root.path().join("cancelled-descendant");
+    let python = format!(
+        "import os,time,sys\nfirst=os.fork()\nif first == 0:\n os.setsid()\n second=os.fork()\n if second == 0:\n  with open({},'w') as f: f.write(f'{{os.getpid()}} {{os.stat(\"/proc/self/ns/pid\").st_ino}}')\n  while True: time.sleep(1)\n os._exit(0)\nos.waitpid(first,0)\nwhile not os.path.exists({}) or os.path.getsize({}) == 0: time.sleep(0.01)\nprint('stdout-ready',flush=True)\nprint('stderr-ready',file=sys.stderr,flush=True)\ntime.sleep(600)",
+        shell_quote(&pid_file.display().to_string()),
+        shell_quote(&pid_file.display().to_string()),
+        shell_quote(&pid_file.display().to_string())
+    );
+    let mut jail_config = config();
+    jail_config.allow_subprocess = true;
+    jail_config.require_process_isolation = true;
+    let request = tinybox_bus::NativeJailRequest {
+        jail: jail_config,
+        resources: Some(tinybox_bus::NativeJailResourceRequest {
+            cpu_millis: Some(1000),
+            memory_bytes: Some(64 * 1024 * 1024),
+            pids_max: Some(16),
+            disk_bytes: None,
+        }),
+    };
+    let mut exec = tinybox_core::ExecRequest::new(["python3", "-c", &python]);
+    exec.cwd = Some(root.path().into());
+    let backend = resource_backend();
+    let jail = prepare_with_resources(root.path(), &request, &mut exec, backend.as_ref())?;
+    let host = Arc::new(tinybox_host::JailLocalHost::with_backend(
+        jail,
+        backend,
+        tinybox_bus::MAX_OUTPUT_BYTES,
+    )?);
+    let mut command = Command::new(exec.argv.first().ok_or("missing target")?);
+    command
+        .args(exec.argv.iter().skip(1))
+        .env_clear()
+        .envs(exec.env);
+    let journal = Arc::new(super::super::output::OutputJournal::default());
+    let runner = host.clone();
+    let observer = journal.clone();
+    let task = tokio::spawn(async move {
+        runner
+            .run_command_observed(command, None, observer)
+            .await
+    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut ready = false;
+    while tokio::time::Instant::now() < deadline {
+        let output = journal.read(0)?;
+        let stdout = output
+            .chunks
+            .iter()
+            .any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stdout && chunk.bytes == b"stdout-ready");
+        let stderr = output
+            .chunks
+            .iter()
+            .any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stderr && chunk.bytes == b"stderr-ready");
+        if stdout && stderr && pid_file.metadata().is_ok() {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(ready, "native exec did not deliver both output streams and descendant identity");
+    let identity = std::fs::read_to_string(&pid_file)?;
+    let mut identity = identity.split_whitespace();
+    let detached: i32 = identity.next().ok_or("missing detached PID")?.parse()?;
+    let pid_namespace: u64 = identity.next().ok_or("missing PID namespace")?.parse()?;
+    journal.cancel();
+    assert!(task.await?.is_err(), "cancelled native command unexpectedly succeeded");
+    assert!(!host.has_pending_cleanup(), "cancel did not acknowledge child cleanup");
+    assert_eq!(journal.read(0)?.state, tinybox_bus::ExecutionState::Cancelled);
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let still_alive = std::fs::read_dir("/proc")?
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                if !entry.file_name().to_string_lossy().bytes().all(|byte| byte.is_ascii_digit()) {
+                    return false;
+                }
+                let status = std::fs::read_to_string(entry.path().join("status"));
+                let namespaces = std::fs::read_link(entry.path().join("ns/pid"));
+                let same_pid = status.ok().is_some_and(|status| {
+                    status
+                        .lines()
+                        .find_map(|line| line.strip_prefix("NSpid:"))
+                        .and_then(|pids| pids.split_whitespace().last())
+                        .and_then(|pid| pid.parse::<i32>().ok())
+                        == Some(detached)
+                });
+                let same_namespace = namespaces.ok().is_some_and(|path| {
+                    path.to_string_lossy()
+                        .strip_prefix("pid:[")
+                        .and_then(|inode| inode.strip_suffix(']'))
+                        .and_then(|inode| inode.parse::<u64>().ok())
+                        == Some(pid_namespace)
+                });
+                same_pid && same_namespace
+            });
+        if !still_alive {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("cancelled descendant {detached} survived cleanup").into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
+
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
