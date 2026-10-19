@@ -81,29 +81,45 @@ fn config() -> NativeJailConfig {
 
 #[cfg(target_os = "linux")]
 fn native_resource_runtime_available() -> bool {
-    use std::process::Command;
     use std::os::unix::fs::FileTypeExt;
+    use std::process::Command;
 
     let manager_socket = std::env::var("DBUS_SESSION_BUS_ADDRESS")
         .ok()
         .and_then(|address| address.strip_prefix("unix:path=").map(str::to_owned))
         .is_some_and(|path| {
-            std::fs::metadata(path)
-                .is_ok_and(|metadata| metadata.file_type().is_socket())
+            std::fs::metadata(path).is_ok_and(|metadata| metadata.file_type().is_socket())
         });
     let scope = Command::new("systemd-run")
         .args([
-            "--user", "--scope", "--quiet", "--property=CPUQuota=100%",
-            "--property=MemoryMax=67108864", "--property=MemorySwapMax=0",
-            "--property=TasksMax=16", "--", "/bin/true",
+            "--user",
+            "--scope",
+            "--quiet",
+            "--property=CPUQuota=100%",
+            "--property=MemoryMax=67108864",
+            "--property=MemorySwapMax=0",
+            "--property=TasksMax=16",
+            "--",
+            "/bin/true",
         ])
         .status()
         .is_ok_and(|status| status.success());
     let namespaces = Command::new("bwrap")
         .args([
-            "--unshare-user", "--unshare-pid", "--unshare-net", "--ro-bind", "/usr",
-            "/usr", "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib64", "/lib64",
-            "--", "/usr/bin/true",
+            "--unshare-user",
+            "--unshare-pid",
+            "--unshare-net",
+            "--ro-bind",
+            "/usr",
+            "/usr",
+            "--symlink",
+            "usr/lib",
+            "/lib",
+            "--symlink",
+            "usr/lib64",
+            "/lib64",
+            "--",
+            "/usr/bin/true",
         ])
         .status()
         .is_ok_and(|status| status.success());
@@ -500,11 +516,13 @@ fn native_memory_limit_kills_a_workload_that_touches_past_its_budget()
         "scope {unit} has no cgroup path; systemd-run status is {:?}",
         child.try_wait()?
     );
-    let cgroup = std::path::Path::new("/sys/fs/cgroup").join(
-        control_group.trim_start_matches('/').trim(),
-    );
+    let cgroup =
+        std::path::Path::new("/sys/fs/cgroup").join(control_group.trim_start_matches('/').trim());
     let memory_events = std::fs::read_to_string(cgroup.join("memory.events")).map_err(|error| {
-        std::io::Error::other(format!("cannot read {}: {error}", cgroup.join("memory.events").display()))
+        std::io::Error::other(format!(
+            "cannot read {}: {error}",
+            cgroup.join("memory.events").display()
+        ))
     })?;
     let oom_kills: u64 = memory_events
         .lines()
@@ -691,7 +709,10 @@ fn native_scope_exit_kills_double_forked_setsid_descendants()
     let identity = std::fs::read_to_string(&pid_file)?;
     let mut identity = identity.split_whitespace();
     let detached: i32 = identity.next().ok_or("missing detached PID")?.parse()?;
-    let pid_namespace: u64 = identity.next().ok_or("missing PID namespace inode")?.parse()?;
+    let pid_namespace: u64 = identity
+        .next()
+        .ok_or("missing PID namespace inode")?
+        .parse()?;
     assert!(
         pid_namespace_contains_process(detached, pid_namespace)?,
         "fixture did not expose its detached process in the host proc view"
@@ -702,7 +723,11 @@ fn native_scope_exit_kills_double_forked_setsid_descendants()
         .ok_or("missing release pipe")?
         .write_all(b"continue\n")?;
     let output = child.wait_with_output()?;
-    assert!(output.status.success(), "jail supervisor failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "jail supervisor failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
@@ -768,11 +793,8 @@ async fn native_cancellation_kills_detached_descendants_and_preserves_stream_eve
     let journal = Arc::new(super::super::output::OutputJournal::default());
     let runner = host.clone();
     let observer = journal.clone();
-    let task = tokio::spawn(async move {
-        runner
-            .run_command_observed(command, None, observer)
-            .await
-    });
+    let task =
+        tokio::spawn(async move { runner.run_command_observed(command, None, observer).await });
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let mut ready = false;
     while tokio::time::Instant::now() < deadline {
@@ -808,8 +830,14 @@ async fn native_cancellation_kills_detached_descendants_and_preserves_stream_eve
         "fixture did not expose its detached process in the host proc view"
     );
     journal.cancel();
-    assert!(task.await?.is_err(), "cancelled native command unexpectedly succeeded");
-    assert!(!host.has_pending_cleanup(), "cancel did not acknowledge child cleanup");
+    assert!(
+        task.await?.is_err(),
+        "cancelled native command unexpectedly succeeded"
+    );
+    assert!(
+        !host.has_pending_cleanup(),
+        "cancel did not acknowledge child cleanup"
+    );
 
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {

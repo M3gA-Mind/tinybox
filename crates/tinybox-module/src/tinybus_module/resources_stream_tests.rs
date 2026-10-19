@@ -1316,29 +1316,45 @@ async fn concurrent_preparations_share_a_bounded_admission_budget()
 #[tokio::test]
 async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendants()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
-    use std::{
-        os::unix::fs::FileTypeExt,
-        process::Command,
-        time::Duration,
-    };
+    use std::{os::unix::fs::FileTypeExt, process::Command, time::Duration};
 
     let bus_available = std::env::var("DBUS_SESSION_BUS_ADDRESS")
         .ok()
         .and_then(|address| address.strip_prefix("unix:path=").map(str::to_owned))
-        .is_some_and(|path| std::fs::metadata(path).is_ok_and(|metadata| metadata.file_type().is_socket()));
+        .is_some_and(|path| {
+            std::fs::metadata(path).is_ok_and(|metadata| metadata.file_type().is_socket())
+        });
     let scope_available = Command::new("systemd-run")
         .args([
-            "--user", "--scope", "--quiet", "--property=MemoryMax=67108864",
-            "--property=MemorySwapMax=0", "--property=OOMPolicy=continue",
-            "--property=CPUQuota=100%", "--property=TasksMax=16", "--", "/bin/true",
+            "--user",
+            "--scope",
+            "--quiet",
+            "--property=MemoryMax=67108864",
+            "--property=MemorySwapMax=0",
+            "--property=OOMPolicy=continue",
+            "--property=CPUQuota=100%",
+            "--property=TasksMax=16",
+            "--",
+            "/bin/true",
         ])
         .status()
         .is_ok_and(|status| status.success());
     let namespaces_available = Command::new("bwrap")
         .args([
-            "--unshare-user", "--unshare-pid", "--unshare-net", "--ro-bind", "/usr",
-            "/usr", "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib64", "/lib64",
-            "--", "/usr/bin/true",
+            "--unshare-user",
+            "--unshare-pid",
+            "--unshare-net",
+            "--ro-bind",
+            "/usr",
+            "/usr",
+            "--symlink",
+            "usr/lib",
+            "/lib",
+            "--symlink",
+            "usr/lib64",
+            "/lib64",
+            "--",
+            "/usr/bin/true",
         ])
         .status()
         .is_ok_and(|status| status.success());
@@ -1422,14 +1438,24 @@ async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendan
         };
         let stdout = collect(tinybox_bus::OutputStream::Stdout);
         let stderr = collect(tinybox_bus::OutputStream::Stderr);
-        let has_stdout = stdout.windows(b"stdout-ready".len()).any(|w| w == b"stdout-ready");
-        let has_stderr = stderr.windows(b"stderr-ready".len()).any(|w| w == b"stderr-ready");
+        let has_stdout = stdout
+            .windows(b"stdout-ready".len())
+            .any(|w| w == b"stdout-ready");
+        let has_stderr = stderr
+            .windows(b"stderr-ready".len())
+            .any(|w| w == b"stderr-ready");
         if has_stdout && has_stderr && std::fs::metadata(&pid_file).is_ok() {
             let identity = std::fs::read_to_string(&pid_file)?;
             let mut identity = identity.split_whitespace();
             break (
-                identity.next().ok_or("missing detached PID")?.parse::<i32>()?,
-                identity.next().ok_or("missing PID namespace")?.parse::<u64>()?,
+                identity
+                    .next()
+                    .ok_or("missing detached PID")?
+                    .parse::<i32>()?,
+                identity
+                    .next()
+                    .ok_or("missing PID namespace")?
+                    .parse::<u64>()?,
             );
         }
         if batch.state != ExecutionState::Running || tokio::time::Instant::now() >= deadline {
@@ -1445,8 +1471,14 @@ async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendan
     let cancelled = resources.read_output(&process, 0).await?;
     assert_eq!(cancelled.state, ExecutionState::Cancelled);
     assert!(
-        cancelled.chunks.iter().any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stdout)
-            && cancelled.chunks.iter().any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stderr),
+        cancelled
+            .chunks
+            .iter()
+            .any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stdout)
+            && cancelled
+                .chunks
+                .iter()
+                .any(|chunk| chunk.stream == tinybox_bus::OutputStream::Stderr),
         "cancellation must preserve both output streams"
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
@@ -1510,8 +1542,14 @@ async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendan
             let identity = std::fs::read_to_string(&destroyed_file)?;
             let mut identity = identity.split_whitespace();
             break (
-                identity.next().ok_or("missing destroy fixture PID")?.parse::<i32>()?,
-                identity.next().ok_or("missing destroy fixture namespace")?.parse::<u64>()?,
+                identity
+                    .next()
+                    .ok_or("missing destroy fixture PID")?
+                    .parse::<i32>()?,
+                identity
+                    .next()
+                    .ok_or("missing destroy fixture namespace")?
+                    .parse::<u64>()?,
             );
         }
         if batch.state != ExecutionState::Running || tokio::time::Instant::now() >= deadline {
@@ -1533,11 +1571,20 @@ async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendan
 fn process_in_namespace(pid: i32, namespace_inode: u64) -> std::io::Result<bool> {
     for entry in std::fs::read_dir("/proc")? {
         let Ok(entry) = entry else { continue };
-        if !entry.file_name().to_string_lossy().bytes().all(|byte| byte.is_ascii_digit()) {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+        {
             continue;
         }
-        let Ok(status) = std::fs::read_to_string(entry.path().join("status")) else { continue };
-        let Ok(namespace) = std::fs::read_link(entry.path().join("ns/pid")) else { continue };
+        let Ok(status) = std::fs::read_to_string(entry.path().join("status")) else {
+            continue;
+        };
+        let Ok(namespace) = std::fs::read_link(entry.path().join("ns/pid")) else {
+            continue;
+        };
         let same_pid = status
             .lines()
             .find_map(|line| line.strip_prefix("NSpid:"))

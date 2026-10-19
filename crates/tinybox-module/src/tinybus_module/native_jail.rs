@@ -331,10 +331,14 @@ fn prepare_with_resources(
     if request.jail.resources.is_some() || resources.disk_bytes.is_some() {
         return Err(unavailable());
     }
-    if [resources.cpu_millis, resources.memory_bytes, resources.pids_max]
-        .into_iter()
-        .flatten()
-        .any(|value| value == 0)
+    if [
+        resources.cpu_millis,
+        resources.memory_bytes,
+        resources.pids_max,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value == 0)
         || (resources.cpu_millis.is_none()
             && resources.memory_bytes.is_none()
             && resources.pids_max.is_none())
