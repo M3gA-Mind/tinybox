@@ -226,7 +226,8 @@ fn deny_read_of_a_missing_path_refuses_without_creating_a_host_mountpoint() -> i
     j.deny_read = vec![denied.clone()];
     let cmd = Command::new("/bin/true");
     let error = spawn_captured_with(&backend, &j, cmd)
-        .expect_err("a missing denial must fail before bwrap starts");
+        .err()
+        .ok_or_else(|| io::Error::other("a missing denial must fail before bwrap starts"))?;
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
     assert!(!denied.exists(), "refusal mutated the host filesystem");
     std::fs::write(&denied, "host-file-remains-creatable")?;
