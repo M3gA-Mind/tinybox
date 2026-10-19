@@ -141,6 +141,7 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::{
         io::Write,
+        os::unix::fs::FileTypeExt,
         process::{Command, Stdio},
     };
 
