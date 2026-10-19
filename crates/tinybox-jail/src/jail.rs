@@ -44,6 +44,9 @@ pub struct Jail {
     /// Backends include the corresponding constraints in preflight. A backend
     /// that does not enforce every requested limit refuses before spawning.
     pub resources: Option<tinybox_core::Resources>,
+    /// Contract 2.1 resource subset for the namespace-backed native jail.
+    /// This does not change the all-four-dimensions legacy `resources` field.
+    pub native_resources: Option<tinybox_bus::NativeJailResourceRequest>,
     /// Allow outbound network. Most agent tools need this; some risky tools
     /// (untrusted code execution) should disable it.
     pub allow_net: bool,
@@ -65,6 +68,7 @@ impl Jail {
             read_write: Vec::new(),
             deny_read: Vec::new(),
             resources: None,
+            native_resources: None,
             allow_net: true,
             allow_subprocess: true,
             label: label.into(),
@@ -122,6 +126,19 @@ impl Jail {
                 Constraint::Pids,
                 Constraint::Disk,
             ]);
+        } else if let Some(resources) = self.native_resources {
+            if resources.cpu_millis.is_some() {
+                constraints.push(Constraint::Cpu);
+            }
+            if resources.memory_bytes.is_some() {
+                constraints.push(Constraint::Memory);
+            }
+            if resources.pids_max.is_some() {
+                constraints.push(Constraint::Pids);
+            }
+            if resources.disk_bytes.is_some() {
+                constraints.push(Constraint::Disk);
+            }
         }
         constraints
     }
