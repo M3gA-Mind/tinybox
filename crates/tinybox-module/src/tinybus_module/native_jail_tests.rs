@@ -534,7 +534,6 @@ fn fractional_cpu_limit_throttles_the_live_native_scope()
 fn native_scope_exit_kills_double_forked_setsid_descendants()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::{
-        io::BufRead,
         process::{Command, Stdio},
         time::{Duration, Instant},
     };
@@ -543,8 +542,7 @@ fn native_scope_exit_kills_double_forked_setsid_descendants()
     let pid_file = root.path().join("detached.pid");
     let python = format!(
         "import os,time\nfirst=os.fork()\nif first == 0:\n os.setsid()\n second=os.fork()\n if second == 0:\n  with open({},'w') as pidfile: pidfile.write(str(os.getpid()))\n  while True: time.sleep(1)\n os._exit(0)\nos.waitpid(first,0)\nwhile not os.path.exists({}): time.sleep(0.01)\nprint('READY',flush=True)",
-        shell_quote(&pid_file.display().to_string())
-            ,
+        shell_quote(&pid_file.display().to_string()),
         shell_quote(&pid_file.display().to_string())
     );
     let script = format!("python3 -c {}; exit $?", shell_quote(&python));
