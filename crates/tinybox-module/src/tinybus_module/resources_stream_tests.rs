@@ -1457,7 +1457,74 @@ async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendan
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     resources.release_output(&process).await?;
+
+    let destroyed_file = root.path().join("destroyed-descendant");
+    let destroyed_id = resources
+        .reserve(ReserveRequest::Process(resource.clone()))
+        .await?;
+    let destroyed_process = ProcessRef {
+        resource: resource.clone(),
+        process: destroyed_id.clone(),
+    };
+    resources
+        .start_jailed_exec_with_resources(
+            SpawnRequest {
+                process: destroyed_id,
+                command: ExecRequest {
+                    resource: resource.clone(),
+                    argv: vec![
+                        "python3".into(),
+                        "-c".into(),
+                        python.into(),
+                        destroyed_file.display().to_string(),
+                    ],
+                    cwd: Some(root.path().display().to_string()),
+                    env: Default::default(),
+                    stdin: None,
+                },
+            },
+            tinybox_bus::NativeJailRequest {
+                jail: tinybox_bus::NativeJailConfig {
+                    read_only: vec![],
+                    read_write: vec![],
+                    allow_net: false,
+                    allow_subprocess: true,
+                    enforcement: tinybox_bus::JailEnforcement::Enforced,
+                    require_process_isolation: true,
+                    deny_read: vec![],
+                    resources: None,
+                },
+                resources: Some(tinybox_bus::NativeJailResourceRequest {
+                    cpu_millis: Some(1000),
+                    memory_bytes: Some(64 * 1024 * 1024),
+                    pids_max: Some(16),
+                    disk_bytes: None,
+                }),
+            },
+        )
+        .await?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let (destroyed_pid, destroyed_namespace) = loop {
+        let batch = resources.read_output(&destroyed_process, 0).await?;
+        if std::fs::metadata(&destroyed_file).is_ok() {
+            let identity = std::fs::read_to_string(&destroyed_file)?;
+            let mut identity = identity.split_whitespace();
+            break (
+                identity.next().ok_or("missing destroy fixture PID")?.parse::<i32>()?,
+                identity.next().ok_or("missing destroy fixture namespace")?.parse::<u64>()?,
+            );
+        }
+        if batch.state != ExecutionState::Running || tokio::time::Instant::now() >= deadline {
+            return Err(format!("native destroy fixture failed before ready: {batch:?}").into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    assert!(process_in_namespace(destroyed_pid, destroyed_namespace)?);
     resources.close(&resource).await?;
+    assert!(
+        !process_in_namespace(destroyed_pid, destroyed_namespace)?,
+        "resource destroy returned with a detached namespace process alive"
+    );
     resources.shutdown().await?;
     Ok(())
 }
