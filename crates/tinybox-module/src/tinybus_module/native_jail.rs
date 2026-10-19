@@ -271,16 +271,14 @@ impl JailBackend for NativeResourceBackend {
     }
 
     fn spawn(&self, jail: &Jail, mut cmd: Command) -> std::io::Result<Child> {
-        use std::os::unix::ffi::OsStrExt;
         if jail.native_resources.is_none() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "resource backend requires a 2.1 native request",
             ));
         }
-        let program = cmd.get_program().as_bytes();
-        let mut actual = vec![OsString::from_vec(program.to_vec())];
-        actual.extend(cmd.get_args().map(OsString::from));
+        let mut actual = vec![cmd.get_program().to_os_string()];
+        actual.extend(cmd.get_args().map(|arg| arg.to_os_string()));
         let mut expected = self
             .expected
             .lock()

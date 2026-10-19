@@ -151,9 +151,12 @@ fn select_collector(
             )
         })?;
         Collector::Jailed(match config {
-            NativeJailRequest::Legacy(config) => {
-                super::super::native_jail::collector(root, config, resolved)?
-            }
+            NativeJailRequest::Legacy(config) => super::super::native_jail::collector(
+                root,
+                config,
+                resolved,
+                tinybox_jail::default_backend(),
+            )?,
             NativeJailRequest::Resources(config) => {
                 super::super::native_jail::collector_with_resources(root, config, resolved)?
             }
