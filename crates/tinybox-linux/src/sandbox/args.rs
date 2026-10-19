@@ -116,11 +116,23 @@ fn cgroup_prefix(resources: &Resources) -> Vec<String> {
         "--property".to_owned(),
         // systemd takes CPU as a percentage where 100% is one core, and
         // thousandths convert by a factor of ten.
-        format!("CPUQuota={}%", resources.cpu_millis / 10),
+        format!("CPUQuota={}%", cpu_quota(resources.cpu_millis)),
         "--property".to_owned(),
         format!("TasksMax={}", resources.pids_max),
         "--".to_owned(),
     ]
+}
+
+/// Convert thousandths of one CPU to systemd's percentage without dropping
+/// the tenth-percent digit (one milli-CPU is `0.1%`, not `0%`).
+fn cpu_quota(cpu_millis: u32) -> String {
+    let whole = cpu_millis / 10;
+    let tenth = cpu_millis % 10;
+    if tenth == 0 {
+        whole.to_string()
+    } else {
+        format!("{whole}.{tenth}")
+    }
 }
 
 /// The `bwrap` invocation itself.

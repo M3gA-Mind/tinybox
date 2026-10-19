@@ -325,6 +325,25 @@ async fn limits_wrap_the_sandbox_in_a_systemd_scope() -> Result<()> {
 }
 
 #[tokio::test]
+async fn fractional_cpu_quota_is_not_rounded_down_to_zero() -> Result<()> {
+    let host = Arc::new(RecordingHost::default());
+    let sandbox =
+        NamespaceSandbox::new(host.clone(), Arc::new(MemoryStore::new())).with_cgroup_limits();
+    let spec = spec()?.with_resources(Resources {
+        cpu_millis: 1,
+        memory_bytes: 64 * 1024 * 1024,
+        pids_max: 16,
+        disk_bytes: 1,
+    });
+    let info = sandbox.create(&spec).await?;
+    sandbox.exec(&info.id, &ExecRequest::new(["true"])).await?;
+    let argv = host.last();
+    assert!(has(&argv, "CPUQuota=0.1%"));
+    assert!(!has(&argv, "CPUQuota=0%"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn without_limits_there_is_no_scope_at_all() -> Result<()> {
     let (sandbox, host) = sandbox();
     let info = sandbox.create(&spec()?).await?;
