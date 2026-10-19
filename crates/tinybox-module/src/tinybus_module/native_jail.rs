@@ -289,6 +289,8 @@ impl JailBackend for NativeResourceBackend {
                 "native resource launcher differs from validated plan",
             ));
         }
+        // Bubblewrap closes inherited descriptors above stdio before execing
+        // the target. The live manager-FD escape test pins this behavior.
         // JailLocalHost clears inherited variables before installing this
         // fixed launcher environment. The target environment is carried only
         // inside bubblewrap after its namespaces are active.

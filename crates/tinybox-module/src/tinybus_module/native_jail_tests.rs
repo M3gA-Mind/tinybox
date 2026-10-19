@@ -141,7 +141,13 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::{
         io::Write,
-        os::unix::fs::FileTypeExt,
+        os::{
+            fd::AsRawFd,
+            unix::{
+                fs::{FileTypeExt, MetadataExt},
+                net::UnixStream,
+            },
+        },
         process::{Command, Stdio},
     };
 
@@ -159,6 +165,15 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         .to_owned();
     let manager_socket = std::path::PathBuf::from(manager_socket);
     assert!(manager_socket.metadata()?.file_type().is_socket());
+    let inherited_manager = UnixStream::connect(&manager_socket)?;
+    let inherited_fd = inherited_manager.as_raw_fd();
+    let flags = nix::fcntl::fcntl(&inherited_manager, nix::fcntl::FcntlArg::F_GETFD)?;
+    assert_ne!(flags & nix::libc::FD_CLOEXEC, 0);
+    nix::fcntl::fcntl(
+        &inherited_manager,
+        nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
+    )?;
+    let inherited_inode = std::fs::metadata(format!("/proc/self/fd/{inherited_fd}"))?.ino();
     let manager_alias = workspace.join("manager-socket-alias");
     std::os::unix::fs::symlink(&manager_socket, &manager_alias)?;
     let outside = std::env::temp_dir().join(format!("tinybox-escape-proof-{}", std::process::id()));
@@ -205,7 +220,7 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         }),
     };
     let script = format!(
-        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; python3 -c 'data=bytearray(8388608); data[0]=1' || exit 45; python3 -c {} || exit 44; python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX)\ntry: s.connect(sys.argv[1])\nexcept OSError: sys.exit(0)\nsys.exit(1)' {} || exit 46; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; printf 'READY\\n'; read -r _; exit 0",
+        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; python3 -c 'data=bytearray(8388608); data[0]=1' || exit 45; python3 -c {} || exit 44; python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX)\ntry: s.connect(sys.argv[1])\nexcept OSError: sys.exit(0)\nsys.exit(1)' {} || exit 46; python3 -c 'import os,sys; fd=int(os.environ[\"TINYBOX_MANAGER_FD\"]); expected=int(os.environ[\"TINYBOX_MANAGER_INODE\"])\ntry: actual=os.stat(f\"/proc/self/fd/{fd}\").st_ino\nexcept OSError: sys.exit(0)\nsys.exit(1 if actual==expected else 0)' || exit 47; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; printf 'READY\\n'; read -r _; exit 0",
         shell_quote(&workspace.join("control").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
@@ -220,6 +235,12 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
     command
         .env
         .insert("BASH_ENV".into(), bash_env.display().to_string());
+    command
+        .env
+        .insert("TINYBOX_MANAGER_FD".into(), inherited_fd.to_string());
+    command
+        .env
+        .insert("TINYBOX_MANAGER_INODE".into(), inherited_inode.to_string());
     let backend = resource_backend();
     let jail = prepare_with_resources(
         root.path().join("workspace").as_path(),
