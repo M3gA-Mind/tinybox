@@ -1558,7 +1558,10 @@ async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendan
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     };
-    assert!(process_in_namespace(destroyed_descendant_pid, destroyed_namespace)?);
+    assert!(process_in_namespace(
+        destroyed_descendant_pid,
+        destroyed_namespace
+    )?);
     resources.close(&resource).await?;
     assert!(
         !process_in_namespace(destroyed_descendant_pid, destroyed_namespace)?,
