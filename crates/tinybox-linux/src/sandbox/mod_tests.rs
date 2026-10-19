@@ -7,6 +7,7 @@
 
 use std::{
     collections::BTreeMap,
+    os::unix::fs::PermissionsExt as _,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 
@@ -464,16 +465,13 @@ fn native_jail_command_keeps_limits_and_target_environment_after_namespace_setup
         env: BTreeMap::from([("BASH_ENV".into(), "/tmp/target-init".into())]),
     })?;
     assert_eq!(argv.first().map(String::as_str), Some("/bin/bash"));
-    let systemd_command = argv
-        .iter()
-        .position(|part| part == "--")
-        .and_then(|position| argv.get(position + 1))
-        .ok_or("missing systemd command")?;
-    assert!(std::path::Path::new(systemd_command).is_absolute());
+    let systemd_run = crate::trusted_systemd_run_program()?;
+    assert!(argv.contains(&systemd_run.display().to_string()));
+    assert!(systemd_run.is_absolute());
     let bubblewrap = argv
         .iter()
         .position(|part| part == "--")
-        .and_then(|position| argv.get(position + 2))
+        .and_then(|position| argv.get(position + 1))
         .ok_or("missing bubblewrap command")?;
     assert!(std::path::Path::new(bubblewrap).is_absolute());
     assert!(has(&argv, "--property=CPUQuota=0.1%"));
@@ -535,7 +533,6 @@ fn native_jail_does_not_resolve_trusted_launchers_from_target_path()
         &helper,
         "#!/bin/sh\nprintf hijacked > \"$TINYBOX_PATH_HIJACK_MARKER\"\nprintf '%s\\n' '--expand-environment BOOL'\n",
     )?;
-    use std::os::unix::fs::PermissionsExt as _;
     std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755))?;
 
     let output = std::process::Command::new(std::env::current_exe()?)
