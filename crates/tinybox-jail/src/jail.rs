@@ -262,8 +262,10 @@ pub trait JailBackend: Send + Sync {
                 && resources.pids_max.is_none()
                 && resources.disk_bytes.is_none()
             {
-                return Err(tinybox_core::Error::InvalidResourceLimit {
-                    limit: "empty native resource request",
+                return Err(tinybox_core::Error::ConstraintNotEnforced {
+                    sandbox: self.name().to_owned(),
+                    constraint: tinybox_core::Constraint::Cpu,
+                    enforcement: tinybox_core::Enforcement::Unsupported,
                 });
             }
             self.constraint_support()
