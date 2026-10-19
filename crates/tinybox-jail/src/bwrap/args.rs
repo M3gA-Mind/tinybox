@@ -324,9 +324,23 @@ fn deny_masks(denied: &[PathBuf], mounts: &[Mount]) -> io::Result<Vec<OsString>>
                 os("/dev/null"),
                 deny.clone().into_os_string(),
             ]),
-            // Nothing there to hide. A path created after spawn is NOT
-            // protected; deny paths must exist when the jail starts.
-            Err(_) => {}
+            // Reserve a mountpoint for a prospective denial so a path created
+            // under a granted directory after spawn cannot become visible.
+            // Refuse deeper missing parents: bwrap must not guess at creating
+            // an arbitrary path outside an existing mountpoint.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if !deny.parent().is_some_and(Path::is_dir) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!(
+                            "cannot pre-create deny_read mountpoint {} without an existing parent",
+                            deny.display()
+                        ),
+                    ));
+                }
+                argv.extend([os("--tmpfs"), deny.clone().into_os_string()]);
+            }
+            Err(error) => return Err(error),
         }
     }
     Ok(argv)
