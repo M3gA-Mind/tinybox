@@ -8,7 +8,7 @@ use std::time::Instant;
 use tinybox_jail::{BubblewrapBackend, Jail, JailBackend, spawn_captured_with};
 
 /// The backend, `None` to skip, or an error when it is required but absent.
-pub fn backend() -> io::Result<Option<BubblewrapBackend>> {
+pub(crate) fn backend() -> io::Result<Option<BubblewrapBackend>> {
     let backend = BubblewrapBackend::new();
     if backend.is_available() {
         return Ok(Some(backend));
@@ -23,11 +23,11 @@ pub fn backend() -> io::Result<Option<BubblewrapBackend>> {
     Ok(None)
 }
 
-pub fn done(name: &str, start: Instant) {
+pub(crate) fn done(name: &str, start: Instant) {
     eprintln!("[bwrap-real] {name} ok in {:?}", start.elapsed());
 }
 
-pub fn run(
+pub(crate) fn run(
     backend: &BubblewrapBackend,
     jail: &Jail,
     cmd: Command,
@@ -39,7 +39,7 @@ pub fn run(
 }
 
 /// Runs `script` under `sh -c` inside `jail`; returns (success, stdout).
-pub fn sh(backend: &BubblewrapBackend, jail: &Jail, script: &str) -> io::Result<(bool, String)> {
+pub(crate) fn sh(backend: &BubblewrapBackend, jail: &Jail, script: &str) -> io::Result<(bool, String)> {
     let mut cmd = Command::new("/bin/sh");
     cmd.arg("-c").arg(script);
     let out = run(backend, jail, cmd)?;
@@ -49,12 +49,12 @@ pub fn sh(backend: &BubblewrapBackend, jail: &Jail, script: &str) -> io::Result<
     ))
 }
 
-pub fn jail(root: &Path) -> Jail {
+pub(crate) fn jail(root: &Path) -> Jail {
     Jail::new(root, "bwrap-it")
 }
 
 /// Like `sh` but returns the spawn error kind when the jail is refused.
-pub fn refused(backend: &BubblewrapBackend, jail: &Jail) -> Option<io::ErrorKind> {
+pub(crate) fn refused(backend: &BubblewrapBackend, jail: &Jail) -> Option<io::ErrorKind> {
     let mut cmd = Command::new("/bin/true");
     cmd.arg("x");
     spawn_captured_with(backend, jail, cmd)
