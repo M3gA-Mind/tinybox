@@ -283,6 +283,30 @@ pub(super) fn collector(
         .map_err(|_| unavailable())
 }
 
+pub(super) fn collector_with_resources(
+    root: &Path,
+    config: &tinybox_bus::NativeJailRequest,
+    command: &mut tinybox_core::ExecRequest,
+) -> Result<Arc<tinybox_host::JailLocalHost>> {
+    #[cfg(target_os = "linux")]
+    {
+        let backend = resource_backend();
+        let jail = prepare_with_resources(root, config, command, backend.as_ref())?;
+        tinybox_host::JailLocalHost::with_backend(
+            jail,
+            backend,
+            tinybox_bus::MAX_OUTPUT_BYTES,
+        )
+        .map(Arc::new)
+        .map_err(|_| unavailable())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (root, config, command);
+        Err(unavailable())
+    }
+}
+
 #[cfg(test)]
 #[path = "native_jail_tests.rs"]
 mod tests;

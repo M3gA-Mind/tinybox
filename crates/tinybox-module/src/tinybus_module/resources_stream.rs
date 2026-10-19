@@ -241,7 +241,7 @@ fn prepare_execution(
         // Resolve resource cwd and environment; the shell builder supplies argv.
         native_request.argv = vec!["shell".into()];
     }
-    let resolved = if let Some(sandbox) = &entry.local_sandbox {
+    let mut resolved = if let Some(sandbox) = &entry.local_sandbox {
         sandbox
             .resolve_command(&entry.id, &native_request)
             .map_err(|error| backend_error(&error))?
@@ -260,7 +260,7 @@ fn prepare_execution(
             shell.clone(),
         ))
     } else {
-        select_execution_collector(entry, jail, shell, &resolved)?
+        select_execution_collector(entry, jail, shell, &mut resolved)?
     };
     Ok((resolved, collector))
 }
@@ -268,7 +268,7 @@ impl StreamExecution {
     fn check_replay(
         &self,
         request: &SpawnRequest,
-        jail: Option<&tinybox_bus::NativeJailConfig>,
+        jail: Option<&NativeJailRequest>,
         shell: Option<&tinybox_bus::ShellExecRequest>,
         platform_shell: Option<&tinybox_bus::SelectShellRequest>,
     ) -> Result<()> {
@@ -292,7 +292,7 @@ impl StreamExecution {
         request: SpawnRequest,
         resolved: tinybox_core::ExecRequest,
         collector: Collector,
-        jail: Option<tinybox_bus::NativeJailConfig>,
+        jail: Option<NativeJailRequest>,
         shell: Option<tinybox_bus::ShellExecRequest>,
         platform_shell: Option<tinybox_bus::SelectShellRequest>,
     ) -> Self {
