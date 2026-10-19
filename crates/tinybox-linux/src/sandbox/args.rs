@@ -216,7 +216,7 @@ pub struct NativeJailCommand {
 pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<String>> {
     validate_native_jail_command(request)?;
     let supports_expand_environment = systemd_run_supports_safe_arguments()?;
-    let argv = native_bwrap_argv(request, supports_expand_environment)?;
+    let argv = native_bwrap_argv(request, supports_expand_environment);
     Ok(native_launcher_argv(argv))
 }
 
@@ -306,7 +306,7 @@ fn systemd_run_supports_safe_arguments() -> std::io::Result<bool> {
 fn native_bwrap_argv(
     request: &NativeJailCommand,
     supports_expand_environment: bool,
-) -> std::io::Result<Vec<String>> {
+) -> Vec<String> {
     let mut argv = vec![
         "systemd-run".to_owned(),
         "--user".to_owned(),
@@ -402,7 +402,7 @@ fn native_bwrap_argv(
     // starting bubblewrap, preventing a pre-opened manager/cgroup FD from
     // bypassing the mount and network namespaces. Target values remain argv
     // data and the shim receives only a fixed, sanitized launcher environment.
-    Ok(argv)
+    argv
 }
 
 fn native_launcher_argv(argv: Vec<String>) -> Vec<String> {
