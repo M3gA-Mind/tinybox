@@ -93,8 +93,7 @@ pub const NATIVE_JAIL_RESOURCES_VERSION: (u32, u32) = (2, 1);
 /// native jail members. Hosts must check this before sending a 2.1 request.
 #[must_use]
 pub fn supports_native_jail_resources(module: (u32, u32)) -> bool {
-    module.0 == NATIVE_JAIL_RESOURCES_VERSION.0
-        && module.1 >= NATIVE_JAIL_RESOURCES_VERSION.1
+    module.0 == NATIVE_JAIL_RESOURCES_VERSION.0 && module.1 >= NATIVE_JAIL_RESOURCES_VERSION.1
 }
 
 /// Whether this host vocabulary can bind to a module's advertised version.

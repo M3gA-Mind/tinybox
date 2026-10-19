@@ -5,9 +5,9 @@
 //! should be a value a test can assert on rather than something that only
 //! happens at runtime.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
-use std::collections::BTreeMap;
 
 use tinybox_core::{BoxSpec, Error, ExecRequest, Resources, Result, WorkspaceSource};
 
@@ -178,22 +178,25 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
     if request.argv.is_empty()
         || request.argv.iter().any(|part| part.contains('\0'))
         || request.argv[0].is_empty()
-        || request.env.iter().any(|(key, value)| {
-            key.is_empty() || key.contains(['=', '\0']) || value.contains('\0')
-        })
+        || request
+            .env
+            .iter()
+            .any(|(key, value)| key.is_empty() || key.contains(['=', '\0']) || value.contains('\0'))
         || request.deny_read.iter().any(|denied| {
-            request
-                .root
-                .starts_with(denied)
-                || request.read_write.iter().any(|grant| grant.starts_with(denied))
+            request.root.starts_with(denied)
+                || request
+                    .read_write
+                    .iter()
+                    .any(|grant| grant.starts_with(denied))
         })
         || !request.cwd.starts_with(&request.root)
-        || request
-            .root
-            .canonicalize()
-            .is_err_or(|root| !root.is_dir())
+        || request.root.canonicalize().is_err_or(|root| !root.is_dir())
         || request.cwd.canonicalize().is_err()
-        || request.read_only.iter().chain(&request.read_write).any(|path| path.canonicalize().is_err())
+        || request
+            .read_only
+            .iter()
+            .chain(&request.read_write)
+            .any(|path| path.canonicalize().is_err())
     {
         return Err(invalid());
     }
@@ -203,11 +206,15 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
     {
         return Err(invalid());
     }
-    if request.cpu_millis.is_none() && request.memory_bytes.is_none() && request.pids_max.is_none() {
+    if request.cpu_millis.is_none() && request.memory_bytes.is_none() && request.pids_max.is_none()
+    {
         return Err(invalid());
     }
     if !request.allow_subprocess {
-        return Err(Error::new(ErrorKind::Unsupported, "subprocess denial is unsupported"));
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            "subprocess denial is unsupported",
+        ));
     }
 
     let mut argv = vec![
@@ -244,21 +251,36 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
     argv.extend(["--die-with-parent".into(), "--new-session".into()]);
     argv.extend(root_filesystem());
     ensure_mount_parents(&mut argv, request);
-    argv.extend(["--bind".into(), request.root.display().to_string(), "/workspace".into()]);
+    argv.extend([
+        "--bind".into(),
+        request.root.display().to_string(),
+        "/workspace".into(),
+    ]);
     for (source, destination, mode) in request
         .read_only
         .iter()
         .map(|path| (path, path, "--ro-bind"))
         .chain(request.read_write.iter().map(|path| (path, path, "--bind")))
     {
-        argv.extend([mode.into(), source.display().to_string(), destination.display().to_string()]);
+        argv.extend([
+            mode.into(),
+            source.display().to_string(),
+            destination.display().to_string(),
+        ]);
     }
     for denied in &request.deny_read {
         argv.extend(["--tmpfs".into(), denied.display().to_string()]);
     }
-    let cwd = request.cwd.strip_prefix(&request.root).map_err(|_| invalid())?;
+    let cwd = request
+        .cwd
+        .strip_prefix(&request.root)
+        .map_err(|_| invalid())?;
     let cwd = Path::new("/workspace").join(cwd);
-    argv.extend(["--chdir".into(), cwd.display().to_string(), "--clearenv".into()]);
+    argv.extend([
+        "--chdir".into(),
+        cwd.display().to_string(),
+        "--clearenv".into(),
+    ]);
     for (key, value) in &request.env {
         argv.extend(["--setenv".into(), key.clone(), value.clone()]);
     }
@@ -270,7 +292,11 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
 fn cpu_quota_u64(cpu_millis: u64) -> String {
     let whole = cpu_millis / 10;
     let tenth = cpu_millis % 10;
-    if tenth == 0 { whole.to_string() } else { format!("{whole}.{tenth}") }
+    if tenth == 0 {
+        whole.to_string()
+    } else {
+        format!("{whole}.{tenth}")
+    }
 }
 
 fn ensure_mount_parents(argv: &mut Vec<String>, request: &NativeJailCommand) {
@@ -283,7 +309,9 @@ fn ensure_mount_parents(argv: &mut Vec<String>, request: &NativeJailCommand) {
     {
         let mut parent = path.parent();
         while let Some(path) = parent {
-            if path == Path::new("/") { break; }
+            if path == Path::new("/") {
+                break;
+            }
             dirs.insert(path.to_path_buf());
             parent = path.parent();
         }

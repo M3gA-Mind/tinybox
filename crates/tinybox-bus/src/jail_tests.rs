@@ -93,7 +93,10 @@ fn native_jail_21_resource_subset_is_additive_and_keeps_disk_explicit()
     let decoded: NativeJailRequest = serde_json::from_value(encoded.clone())?;
     assert_eq!(decoded, request);
     assert_eq!(decoded.jail, jail);
-    assert_eq!(decoded.resources.and_then(|limits| limits.disk_bytes), Some(1024));
+    assert_eq!(
+        decoded.resources.and_then(|limits| limits.disk_bytes),
+        Some(1024)
+    );
     assert_eq!(crate::NATIVE_JAIL_RESOURCES_VERSION, (2, 1));
     Ok(())
 }

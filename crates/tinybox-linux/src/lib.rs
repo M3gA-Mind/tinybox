@@ -45,4 +45,4 @@ mod sandbox;
 
 pub use probe::{NamespaceProbe, UsernsStatus};
 
-pub use sandbox::{NAME, NativeJailCommand, NamespaceSandbox, WORKSPACE_MOUNT, native_jail_argv};
+pub use sandbox::{NAME, NamespaceSandbox, NativeJailCommand, WORKSPACE_MOUNT, native_jail_argv};
