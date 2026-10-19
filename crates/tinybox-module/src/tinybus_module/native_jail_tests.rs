@@ -273,12 +273,6 @@ fn shell_quote(value: &str) -> String {
 #[cfg(target_os = "linux")]
 fn find_cgroup_for_pid(pid: u32) -> std::io::Result<Option<std::path::PathBuf>> {
     fn visit(directory: &std::path::Path, pid: u32) -> std::io::Result<Option<std::path::PathBuf>> {
-        if std::fs::read_to_string(directory.join("cgroup.procs"))?
-            .lines()
-            .any(|line| line.parse::<u32>() == Ok(pid))
-        {
-            return Ok(Some(directory.to_path_buf()));
-        }
         for entry in std::fs::read_dir(directory)? {
             let entry = entry?;
             if entry.file_type()?.is_dir()
@@ -286,6 +280,12 @@ fn find_cgroup_for_pid(pid: u32) -> std::io::Result<Option<std::path::PathBuf>> 
             {
                 return Ok(Some(found));
             }
+        }
+        if std::fs::read_to_string(directory.join("cgroup.procs"))?
+            .lines()
+            .any(|line| line.parse::<u32>() == Ok(pid))
+        {
+            return Ok(Some(directory.to_path_buf()));
         }
         Ok(None)
     }
