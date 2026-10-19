@@ -101,6 +101,7 @@ pub fn spawn(jail: &Jail, cmd: Command) -> std::io::Result<Child> {
     jail.canonicalize()?;
     let backend = default_backend();
     require_resources(backend.as_ref(), &jail)?;
+    jail.validate_denials(backend.carves_denials(), &backend.implicit_grants())?;
     backend.spawn(&jail, cmd)
 }
 
@@ -119,6 +120,7 @@ pub fn spawn_with(backend: &dyn JailBackend, jail: &Jail, cmd: Command) -> std::
     let mut jail = jail.clone();
     jail.canonicalize()?;
     require_resources(backend, &jail)?;
+    jail.validate_denials(backend.carves_denials(), &backend.implicit_grants())?;
     backend.spawn(&jail, cmd)
 }
 
@@ -134,6 +136,7 @@ pub fn spawn_captured_with(
     let mut jail = jail.clone();
     jail.canonicalize()?;
     require_resources(backend, &jail)?;
+    jail.validate_denials(backend.carves_denials(), &backend.implicit_grants())?;
     backend.spawn_captured(&jail, cmd)
 }
 

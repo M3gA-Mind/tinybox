@@ -683,7 +683,11 @@ pub struct ProcessRef {
 pub struct ShellAnalysis {
     /// Live shell segments after quoted heredoc bodies are removed.
     pub segments: Vec<String>,
-    /// Whether shell syntax can execute hidden commands.
+    /// Whether the scan found syntax that can execute hidden commands.
+    ///
+    /// Deprecated for policy decisions as of contract 1.22. Hosts must use
+    /// `TinySecurity` for authorization and command policy; this structural fact
+    /// remains during the 1.x transition and is removed in contract 2.0.
     pub hidden_execution: bool,
     /// Whether an unquoted redirect occurs outside heredoc data.
     pub redirection: bool,
