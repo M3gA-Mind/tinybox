@@ -152,6 +152,14 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
     let denied_inside = workspace.join("denied-inside");
     std::fs::create_dir_all(&denied_inside)?;
     std::fs::write(denied_inside.join("secret"), "secret")?;
+    let manager_socket = std::env::var("DBUS_SESSION_BUS_ADDRESS")?
+        .strip_prefix("unix:path=")
+        .ok_or("filesystem DBus manager socket is required for this escape test")?
+        .to_owned();
+    let manager_socket = std::path::PathBuf::from(manager_socket);
+    assert!(manager_socket.metadata()?.file_type().is_socket());
+    let manager_alias = workspace.join("manager-socket-alias");
+    std::os::unix::fs::symlink(&manager_socket, &manager_alias)?;
     let outside = std::env::temp_dir().join(format!("tinybox-escape-proof-{}", std::process::id()));
     let _ = std::fs::remove_file(&outside);
     let bash_env = workspace.join("startup.sh");
@@ -196,13 +204,14 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         }),
     };
     let script = format!(
-        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; python3 -c 'data=bytearray(8388608); data[0]=1' || exit 45; python3 -c {} || exit 44; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; printf 'READY\\n'; read -r _; exit 0",
+        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; python3 -c 'data=bytearray(8388608); data[0]=1' || exit 45; python3 -c {} || exit 44; python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX)\ntry: s.connect(sys.argv[1])\nexcept OSError: sys.exit(0)\nsys.exit(1)' {} || exit 46; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; printf 'READY\\n'; read -r _; exit 0",
         shell_quote(&workspace.join("control").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
         shell_quote(
             "import errno,os,signal\nchildren=[]\nblocked=False\ntry:\n for _ in range(64):\n  pid=os.fork()\n  if pid==0:\n   while True: os.pause()\n  children.append(pid)\nexcept OSError as e:\n blocked=e.errno==errno.EAGAIN\nfor pid in children: os.kill(pid,signal.SIGKILL)\nfor pid in children: os.waitpid(pid,0)\nassert blocked\n"
         ),
+        shell_quote(&manager_alias.display().to_string()),
         shell_quote(&outside.display().to_string()),
     );
     let mut command = tinybox_core::ExecRequest::new(["/bin/bash", "-c", &script]);
