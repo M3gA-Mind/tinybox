@@ -219,12 +219,12 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let child = tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, child_command)?;
-    let cgroup = std::fs::read_to_string(format!("/proc/{}/cgroup", child.id()))?;
-    let relative = cgroup
-        .lines()
-        .find_map(|line| line.strip_prefix("0::/"))
-        .ok_or("launcher has no cgroup-v2 membership")?;
-    let cgroup = std::path::Path::new("/sys/fs/cgroup").join(relative);
+    let cgroup = find_cgroup_for_pid(child.id())?.ok_or_else(|| {
+        format!(
+            "launcher {} was not found in the user's cgroup tree",
+            child.id()
+        )
+    })?;
     assert_eq!(
         std::fs::read_to_string(cgroup.join("memory.max"))?.trim(),
         "67108864"
@@ -260,6 +260,41 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(target_os = "linux")]
+fn find_cgroup_for_pid(pid: u32) -> std::io::Result<Option<std::path::PathBuf>> {
+    fn visit(directory: &std::path::Path, pid: u32) -> std::io::Result<Option<std::path::PathBuf>> {
+        if std::fs::read_to_string(directory.join("cgroup.procs"))?
+            .lines()
+            .any(|line| line.parse::<u32>() == Ok(pid))
+        {
+            return Ok(Some(directory.to_path_buf()));
+        }
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir()
+                && let Some(found) = visit(&entry.path(), pid)?
+            {
+                return Ok(Some(found));
+            }
+        }
+        Ok(None)
+    }
+    let uid = std::fs::read_to_string("/proc/self/status")?
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("Uid:")
+                .and_then(|uid| uid.split_whitespace().next())
+                .and_then(|uid| uid.parse::<u32>().ok())
+        })
+        .ok_or_else(|| std::io::Error::other("cannot determine effective uid"))?;
+    visit(
+        &std::path::PathBuf::from(format!(
+            "/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service"
+        )),
+        pid,
+    )
 }
 #[test]
 fn native_grants_reject_relative_parent_null_and_missing_paths() {
