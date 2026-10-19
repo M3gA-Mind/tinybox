@@ -228,7 +228,6 @@ fn legacy_resource_limits_still_fail_closed_on_linux()
 
 #[cfg(target_os = "linux")]
 #[test]
-#[allow(clippy::too_many_lines)] // Keep the live policy and escape assertions together.
 fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::{
@@ -429,7 +428,6 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
 
 #[cfg(target_os = "linux")]
 #[test]
-#[allow(clippy::too_many_lines)] // One live fixture records cgroup events and workload status.
 fn native_memory_limit_kills_a_workload_that_touches_past_its_budget()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::{
