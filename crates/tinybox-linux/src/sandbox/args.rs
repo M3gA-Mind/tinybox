@@ -371,7 +371,21 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
     }
     argv.push("--".into());
     argv.extend(request.argv.iter().cloned());
-    Ok(argv)
+    // A scope launcher inherits the host process's descriptors. The trusted
+    // shim closes every non-stdio descriptor before opening systemd's bus or
+    // starting bubblewrap, preventing a pre-opened manager/cgroup FD from
+    // bypassing the mount and network namespaces. Target values remain argv
+    // data and the shim receives only a fixed, sanitized launcher environment.
+    let mut launcher = vec![
+        "/bin/bash".to_owned(),
+        "--noprofile".to_owned(),
+        "--norc".to_owned(),
+        "-c".to_owned(),
+        "for fdpath in /proc/self/fd/*; do fd=${fdpath##*/}; case $fd in 0|1|2|*[!0-9]*) continue;; esac; eval \"exec ${fd}>&-\"; done; exec \"$@\"".to_owned(),
+        "tinybox-native-launcher".to_owned(),
+    ];
+    launcher.extend(argv);
+    Ok(launcher)
 }
 
 fn cpu_quota_u64(cpu_millis: u64) -> String {
