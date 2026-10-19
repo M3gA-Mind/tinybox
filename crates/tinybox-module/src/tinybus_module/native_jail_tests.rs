@@ -494,12 +494,15 @@ fn native_memory_limit_kills_a_workload_that_touches_past_its_budget()
         .args(["--user", "show", "--property=ControlGroup", "--value", unit])
         .output()?;
     assert!(control_group.status.success());
+    let control_group = String::from_utf8(control_group.stdout)?;
+    assert!(!control_group.trim().is_empty(), "scope has no cgroup path");
     let cgroup = std::path::Path::new("/sys/fs/cgroup").join(
-        String::from_utf8(control_group.stdout)?
-            .trim_start_matches('/')
-            .trim(),
+        control_group.trim_start_matches('/').trim(),
     );
-    let oom_kills: u64 = std::fs::read_to_string(cgroup.join("memory.events"))?
+    let memory_events = std::fs::read_to_string(cgroup.join("memory.events")).map_err(|error| {
+        std::io::Error::other(format!("cannot read {}: {error}", cgroup.join("memory.events").display()))
+    })?;
+    let oom_kills: u64 = memory_events
         .lines()
         .find_map(|line| line.strip_prefix("oom_kill "))
         .ok_or("missing memory OOM counter")?
