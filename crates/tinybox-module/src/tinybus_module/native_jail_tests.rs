@@ -327,42 +327,15 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         return Ok(());
     }
 
-    let mut jail = config();
-    jail.allow_net = false;
-    jail.allow_subprocess = true;
-    jail.require_process_isolation = true;
-    jail.deny_read = vec![denied_inside.display().to_string()];
-    let request = tinybox_bus::NativeJailRequest {
-        jail,
-        resources: Some(tinybox_bus::NativeJailResourceRequest {
-            cpu_millis: Some(1000),
-            memory_bytes: Some(64 * 1024 * 1024),
-            pids_max: Some(16),
-            disk_bytes: None,
-        }),
-    };
-    let script = format!(
-        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; python3 -c 'data=bytearray(8388608); data[0]=1' || exit 45; python3 -c {} || exit 44; python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX)\ntry: s.connect(sys.argv[1])\nexcept OSError: sys.exit(0)\nsys.exit(1)' {} || exit 46; python3 -c 'import os,sys; fd=int(os.environ[\"TINYBOX_MANAGER_FD\"]); expected=int(os.environ[\"TINYBOX_MANAGER_INODE\"])\ntry: actual=os.stat(f\"/proc/self/fd/{{fd}}\").st_ino\nexcept OSError: sys.exit(0)\nsys.exit(1 if actual==expected else 0)' || exit 47; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; printf 'READY\\n'; read -r _; exit 0",
-        shell_quote(&workspace.join("control").display().to_string()),
-        shell_quote(&denied_inside.join("secret").display().to_string()),
-        shell_quote(&denied_inside.join("secret").display().to_string()),
-        shell_quote(
-            "import errno,os,signal\nchildren=[]\nblocked=False\ntry:\n for _ in range(64):\n  pid=os.fork()\n  if pid==0:\n   while True: os.pause()\n  children.append(pid)\nexcept OSError as e:\n blocked=e.errno==errno.EAGAIN\nfor pid in children: os.kill(pid,signal.SIGKILL)\nfor pid in children: os.waitpid(pid,0)\nassert blocked\n"
-        ),
-        shell_quote(&manager_alias.display().to_string()),
-        shell_quote(&outside.display().to_string()),
+    let (request, mut command) = resource_escape_command(
+        &workspace,
+        &denied_inside,
+        &bash_env,
+        &manager_alias,
+        inherited_fd,
+        inherited_inode,
+        &outside,
     );
-    let mut command = tinybox_core::ExecRequest::new(["/bin/bash", "-c", &script]);
-    command.cwd = Some(workspace.clone());
-    command
-        .env
-        .insert("BASH_ENV".into(), bash_env.display().to_string());
-    command
-        .env
-        .insert("TINYBOX_MANAGER_FD".into(), inherited_fd.to_string());
-    command
-        .env
-        .insert("TINYBOX_MANAGER_INODE".into(), inherited_inode.to_string());
     let backend = resource_backend();
     let jail = prepare_with_resources(
         root.path().join("workspace").as_path(),
@@ -393,12 +366,84 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         )
         .into());
     }
-    let unit = command
-        .argv
+    assert_resource_cgroup(&command.argv, &mut child)?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or("missing stdin pipe")?
+        .write_all(b"continue\n")?;
+    let output = child.wait_with_output()?;
+    assert!(
+        output.status.success(),
+        "launcher failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read(workspace.join("control"))?, b"allowed");
+    assert_eq!(std::fs::read(workspace.join("from-bash-env"))?, b"startup");
+    assert!(!outside.exists(), "jail wrote outside its granted roots");
+    let _ = std::fs::remove_file(outside);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn resource_escape_command(
+    workspace: &std::path::Path,
+    denied_inside: &std::path::Path,
+    bash_env: &std::path::Path,
+    manager_alias: &std::path::Path,
+    inherited_fd: i32,
+    inherited_inode: u64,
+    outside: &std::path::Path,
+) -> (tinybox_bus::NativeJailRequest, tinybox_core::ExecRequest) {
+    let mut jail = config();
+    jail.allow_net = false;
+    jail.allow_subprocess = true;
+    jail.require_process_isolation = true;
+    jail.deny_read = vec![denied_inside.display().to_string()];
+    let request = tinybox_bus::NativeJailRequest {
+        jail,
+        resources: Some(tinybox_bus::NativeJailResourceRequest {
+            cpu_millis: Some(1000),
+            memory_bytes: Some(64 * 1024 * 1024),
+            pids_max: Some(16),
+            disk_bytes: None,
+        }),
+    };
+    let script = format!(
+        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; python3 -c 'data=bytearray(8388608); data[0]=1' || exit 45; python3 -c {} || exit 44; python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX)\ntry: s.connect(sys.argv[1])\nexcept OSError: sys.exit(0)\nsys.exit(1)' {} || exit 46; python3 -c 'import os,sys; fd=int(os.environ[\"TINYBOX_MANAGER_FD\"]); expected=int(os.environ[\"TINYBOX_MANAGER_INODE\"])\ntry: actual=os.stat(f\"/proc/self/fd/{{fd}}\").st_ino\nexcept OSError: sys.exit(0)\nsys.exit(1 if actual==expected else 0)' || exit 47; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; printf 'READY\\n'; read -r _; exit 0",
+        shell_quote(&workspace.join("control").display().to_string()),
+        shell_quote(&denied_inside.join("secret").display().to_string()),
+        shell_quote(&denied_inside.join("secret").display().to_string()),
+        shell_quote(
+            "import errno,os,signal\nchildren=[]\nblocked=False\ntry:\n for _ in range(64):\n  pid=os.fork()\n  if pid==0:\n   while True: os.pause()\n  children.append(pid)\nexcept OSError as e:\n blocked=e.errno==errno.EAGAIN\nfor pid in children: os.kill(pid,signal.SIGKILL)\nfor pid in children: os.waitpid(pid,0)\nassert blocked\n"
+        ),
+        shell_quote(&manager_alias.display().to_string()),
+        shell_quote(&outside.display().to_string()),
+    );
+    let mut command = tinybox_core::ExecRequest::new(["/bin/bash", "-c", &script]);
+    command.cwd = Some(workspace.into());
+    command
+        .env
+        .insert("BASH_ENV".into(), bash_env.display().to_string());
+    command
+        .env
+        .insert("TINYBOX_MANAGER_FD".into(), inherited_fd.to_string());
+    command
+        .env
+        .insert("TINYBOX_MANAGER_INODE".into(), inherited_inode.to_string());
+    (request, command)
+}
+
+#[cfg(target_os = "linux")]
+fn assert_resource_cgroup(
+    argv: &[String],
+    child: &mut std::process::Child,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let unit = argv
         .iter()
         .find_map(|part| part.strip_prefix("--unit="))
         .ok_or("launcher has no unique transient-scope unit")?;
-    let control_group = Command::new("systemctl")
+    let control_group = std::process::Command::new("systemctl")
         .args(["--user", "show", "--property=ControlGroup", "--value", unit])
         .output()?;
     assert!(
@@ -433,23 +478,9 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
     let period: u64 = cpu_max.next().ok_or("missing CPU period")?.parse()?;
     assert!(
         quota > 0 && quota <= period,
-        "CPU quota exceeded requested 1 CPU: {quota}/{period}"
+        "CPU quota exceeded request: {quota}/{period}"
     );
-    child
-        .stdin
-        .as_mut()
-        .ok_or("missing stdin pipe")?
-        .write_all(b"continue\n")?;
-    let output = child.wait_with_output()?;
-    assert!(
-        output.status.success(),
-        "launcher failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(std::fs::read(workspace.join("control"))?, b"allowed");
-    assert_eq!(std::fs::read(workspace.join("from-bash-env"))?, b"startup");
-    assert!(!outside.exists(), "jail wrote outside its granted roots");
-    let _ = std::fs::remove_file(outside);
+    let _ = child.try_wait()?;
     Ok(())
 }
 
