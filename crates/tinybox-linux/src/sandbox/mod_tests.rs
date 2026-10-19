@@ -490,6 +490,58 @@ fn native_jail_command_keeps_limits_and_target_environment_after_namespace_setup
 
 #[test]
 #[cfg(target_os = "linux")]
+fn native_jail_does_not_resolve_trusted_launchers_from_target_path()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    const CHILD: &str = "sandbox::test::native_jail_does_not_resolve_trusted_launchers_from_target_path";
+    if let Some(marker) = std::env::var_os("TINYBOX_PATH_HIJACK_MARKER") {
+        let root = tempfile::tempdir()?;
+        let cwd = root.path().join("work");
+        std::fs::create_dir(&cwd)?;
+        let _ = crate::native_jail_argv(&crate::NativeJailCommand {
+            root: root.path().to_path_buf(),
+            cwd,
+            read_only: Vec::new(),
+            read_write: Vec::new(),
+            deny_read: Vec::new(),
+            allow_net: false,
+            allow_subprocess: true,
+            cpu_millis: Some(1),
+            memory_bytes: None,
+            pids_max: None,
+            argv: vec!["/bin/true".into()],
+            env: BTreeMap::new(),
+        })?;
+        assert!(!std::path::Path::new(&marker).exists());
+        return Ok(());
+    }
+
+    let fixture = tempfile::tempdir()?;
+    let marker = fixture.path().join("helper-ran");
+    let helper = fixture.path().join("systemd-run");
+    std::fs::write(
+        &helper,
+        "#!/bin/sh\nprintf hijacked > \"$TINYBOX_PATH_HIJACK_MARKER\"\nprintf '%s\\n' '--expand-environment BOOL'\n",
+    )?;
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755))?;
+
+    let output = std::process::Command::new(std::env::current_exe()?)
+        .args(["--exact", CHILD, "--nocapture"])
+        .env("PATH", fixture.path())
+        .env("TINYBOX_PATH_HIJACK_MARKER", &marker)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "child failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!marker.exists(), "a PATH-controlled launcher executed");
+    Ok(())
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn native_jail_command_refuses_invalid_resource_and_isolation_requests()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;

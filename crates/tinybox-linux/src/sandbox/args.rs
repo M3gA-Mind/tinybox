@@ -214,10 +214,81 @@ pub struct NativeJailCommand {
 /// Returns an error when a request is invalid, unsupported, or systemd's
 /// command-argument expansion behavior cannot be verified.
 pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<String>> {
+    native_jail_argv_with_programs(
+        request,
+        &trusted_systemd_run_program()?,
+        &trusted_bwrap_program()?,
+    )
+}
+
+/// Build the native jail launcher using the already verified Bubblewrap binary
+/// selected by the owning `tinybox-jail` backend.
+///
+/// # Errors
+/// Returns an error unless both launchers are absolute trusted executables and
+/// systemd's command-argument expansion behavior can be verified.
+pub fn native_jail_argv_with_programs(
+    request: &NativeJailCommand,
+    systemd_run: &Path,
+    bwrap: &Path,
+) -> std::io::Result<Vec<String>> {
     validate_native_jail_command(request)?;
-    let supports_expand_environment = systemd_run_supports_safe_arguments()?;
-    let argv = native_bwrap_argv(request, supports_expand_environment);
+    let systemd_run = validate_trusted_program(systemd_run)?;
+    let bwrap = validate_trusted_program(bwrap)?;
+    let supports_expand_environment = systemd_run_supports_safe_arguments(&systemd_run)?;
+    let argv = native_bwrap_argv(request, supports_expand_environment, &systemd_run, &bwrap);
     Ok(native_launcher_argv(argv))
+}
+
+/// Find systemd-run only in fixed system locations and return its trusted
+/// canonical path. This does not consult the caller's `PATH`.
+pub fn trusted_systemd_run_program() -> std::io::Result<std::path::PathBuf> {
+    [Path::new("/usr/bin/systemd-run"), Path::new("/bin/systemd-run")]
+        .into_iter()
+        .find_map(|path| validate_trusted_program(path).ok())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no trusted systemd-run executable in fixed system locations",
+            )
+        })
+}
+
+fn trusted_bwrap_program() -> std::io::Result<std::path::PathBuf> {
+    [Path::new("/usr/bin/bwrap"), Path::new("/bin/bwrap")]
+        .into_iter()
+        .find_map(|path| validate_trusted_program(path).ok())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no trusted bwrap executable in fixed system locations",
+            )
+        })
+}
+
+fn validate_trusted_program(path: &Path) -> std::io::Result<std::path::PathBuf> {
+    use std::os::unix::fs::MetadataExt as _;
+    use std::io::{Error, ErrorKind};
+    if !path.is_absolute() {
+        return Err(Error::new(ErrorKind::PermissionDenied, "launcher path must be absolute"));
+    }
+    let canonical = path.canonicalize()?;
+    let mut current = std::path::PathBuf::from("/");
+    for component in canonical.components().skip(1) {
+        current.push(component);
+        let metadata = std::fs::metadata(&current)?;
+        if metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+            return Err(Error::new(
+                ErrorKind::PermissionDenied,
+                "launcher path has a non-root-owned or writable ancestor",
+            ));
+        }
+    }
+    let metadata = std::fs::metadata(&canonical)?;
+    if !metadata.is_file() || metadata.mode() & 0o111 == 0 {
+        return Err(Error::new(ErrorKind::PermissionDenied, "launcher is not executable"));
+    }
+    Ok(canonical)
 }
 
 fn validate_native_jail_command(request: &NativeJailCommand) -> std::io::Result<()> {
@@ -282,13 +353,13 @@ fn validate_native_jail_command(request: &NativeJailCommand) -> std::io::Result<
     Ok(())
 }
 
-fn systemd_run_supports_safe_arguments() -> std::io::Result<bool> {
+fn systemd_run_supports_safe_arguments(systemd_run: &Path) -> std::io::Result<bool> {
     use std::io::{Error, ErrorKind};
     // `systemd-run` versions that support variable expansion apply it to
     // command arguments before starting bwrap. Probe the same advertised
     // capability used by the owning namespace backend and disable expansion
     // before placing any target-controlled argv on the command line.
-    let probe = std::process::Command::new("systemd-run")
+    let probe = std::process::Command::new(systemd_run)
         .arg("--help")
         .env("LC_ALL", "C")
         .output()?;
@@ -306,9 +377,11 @@ fn systemd_run_supports_safe_arguments() -> std::io::Result<bool> {
 fn native_bwrap_argv(
     request: &NativeJailCommand,
     supports_expand_environment: bool,
+    systemd_run: &Path,
+    bwrap: &Path,
 ) -> Vec<String> {
     let mut argv = vec![
-        "systemd-run".to_owned(),
+        systemd_run.display().to_string(),
         "--user".to_owned(),
         "--scope".to_owned(),
         "--quiet".to_owned(),
@@ -335,7 +408,7 @@ fn native_bwrap_argv(
         argv.push(format!("--property=TasksMax={value}"));
     }
     argv.push("--".to_owned());
-    argv.push("bwrap".to_owned());
+    argv.push(bwrap.display().to_string());
     for flag in [
         "--unshare-user",
         "--unshare-pid",
