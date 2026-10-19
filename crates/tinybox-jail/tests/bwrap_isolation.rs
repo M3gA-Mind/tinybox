@@ -7,7 +7,7 @@
 //! duration for the CI log.
 #![cfg(target_os = "linux")]
 
-use std::io;
+use std::io::{self, BufRead as _, Read as _, Write as _};
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::Command;
@@ -211,6 +211,48 @@ fn deny_read_masks_a_file_inside_the_root() -> io::Result<()> {
     let (_, out) = sh(&backend, &j, &format!("cat '{}'", secret.display()))?;
     assert!(!out.contains("token"), "denied file leaked: {out}");
     done("deny-file", start);
+    Ok(())
+}
+
+#[test]
+fn deny_read_masks_a_path_created_after_the_sandbox_starts() -> io::Result<()> {
+    let Some(backend) = backend()? else {
+        return Ok(());
+    };
+    let start = Instant::now();
+    let root = tempfile::tempdir()?;
+    let denied = root.path().join(".ssh");
+    let mut j = jail(root.path());
+    j.deny_read = vec![denied.clone()];
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg("-c")
+        .arg("printf 'started\\n'; IFS= read -r _; cat .ssh/id_rsa 2>/dev/null || true");
+    let mut child = spawn_captured_with(&backend, &j, cmd)?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("sandbox stdout was not captured"))?;
+    let mut stdout = io::BufReader::new(stdout);
+    let mut marker = String::new();
+    stdout.read_line(&mut marker)?;
+    assert_eq!(marker, "started\n", "sandbox did not start before the grant changed");
+
+    std::fs::create_dir(&denied)?;
+    std::fs::write(denied.join("id_rsa"), "late-host-secret")?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| io::Error::other("sandbox stdin was not captured"))?
+        .write_all(b"continue\n")?;
+    let mut remaining = String::new();
+    stdout.read_to_string(&mut remaining)?;
+    let status = child.wait()?;
+    assert!(status.success());
+    assert!(
+        !remaining.contains("late-host-secret"),
+        "a denied path created after launch became readable: {remaining}"
+    );
+    done("deny-late-created-path", start);
     Ok(())
 }
 
