@@ -362,6 +362,7 @@ fn named_members_resolve_to_the_method_catalogue_in_order() {
         CLOSE_STDIN,
         KILL_STDIO,
         STDIO_STATUS,
+        START_JAILED_EXEC_WITH_RESOURCES,
     ];
     assert_eq!(METHODS, &expected[..]);
     assert_eq!(DESCRIBE, "Describe");
