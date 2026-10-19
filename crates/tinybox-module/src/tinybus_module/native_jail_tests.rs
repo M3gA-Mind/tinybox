@@ -139,7 +139,10 @@ fn legacy_resource_limits_still_fail_closed_on_linux()
 #[test]
 fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
-    use std::process::{Command, Stdio};
+    use std::{
+        io::Write,
+        process::{Command, Stdio},
+    };
 
     let root = tempfile::tempdir()?;
     let workspace = root.path().join("workspace");
@@ -193,7 +196,7 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         }),
     };
     let script = format!(
-        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; python3 -c {} || exit 44; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; sleep 3; exit 0",
+        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; python3 -c {} || exit 44; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; printf 'READY\\n'; read -r _; exit 0",
         shell_quote(&workspace.join("control").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
@@ -222,6 +225,15 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let child = tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, child_command)?;
+    let mut ready = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(child.stdout.as_mut().ok_or("missing stdout pipe")?),
+        &mut ready,
+    )?;
+    assert_eq!(
+        ready, "READY\n",
+        "launcher did not complete resource probes"
+    );
     let unit = command
         .argv
         .iter()
@@ -249,6 +261,13 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         std::fs::read_to_string(cgroup.join("pids.max"))?.trim(),
         "16"
     );
+    let pids_events = std::fs::read_to_string(cgroup.join("pids.events"))?;
+    let max_events: u64 = pids_events
+        .lines()
+        .find_map(|line| line.strip_prefix("max "))
+        .ok_or("missing pids max event counter")?
+        .parse()?;
+    assert!(max_events > 0, "fork fixture never hit the pids limit");
     let cpu_max = std::fs::read_to_string(cgroup.join("cpu.max"))?;
     let mut cpu_max = cpu_max.split_whitespace();
     let quota: u64 = cpu_max.next().ok_or("missing CPU quota")?.parse()?;
@@ -257,6 +276,11 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         quota > 0 && quota * 1000 <= period,
         "CPU quota exceeded requested 1 milli-CPU: {quota}/{period}"
     );
+    child
+        .stdin
+        .as_mut()
+        .ok_or("missing stdin pipe")?
+        .write_all(b"continue\n")?;
     let output = child.wait_with_output()?;
     assert!(
         output.status.success(),
