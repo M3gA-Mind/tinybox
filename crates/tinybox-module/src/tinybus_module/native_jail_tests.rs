@@ -193,10 +193,11 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         }),
     };
     let script = format!(
-        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; sleep 3; exit 0",
+        "printf allowed > {}; test ! -e {} || exit 41; test ! -r {} || exit 42; python3 -c {} || exit 44; if systemd-run --user --scope --quiet -- /usr/bin/touch {} 2>/dev/null; then exit 43; fi; sleep 3; exit 0",
         shell_quote(&workspace.join("control").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
         shell_quote(&denied_inside.join("secret").display().to_string()),
+        shell_quote("import errno,os,signal\nchildren=[]\nblocked=False\ntry:\n for _ in range(64):\n  pid=os.fork()\n  if pid==0:\n   while True: os.pause()\n  children.append(pid)\nexcept OSError as e:\n blocked=e.errno==errno.EAGAIN\nfor pid in children: os.kill(pid,signal.SIGKILL)\nfor pid in children: os.waitpid(pid,0)\nassert blocked\n"),
         shell_quote(&outside.display().to_string()),
     );
     let mut command = tinybox_core::ExecRequest::new(["/bin/bash", "-c", &script]);
@@ -264,6 +265,76 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
     assert_eq!(std::fs::read(workspace.join("from-bash-env"))?, b"startup");
     assert!(!outside.exists(), "jail wrote outside its granted roots");
     let _ = std::fs::remove_file(outside);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_memory_limit_kills_a_workload_that_touches_past_its_budget()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{Command, Stdio};
+
+    if !Command::new("python3").arg("--version").status()?.success() {
+        eprintln!("skipped: python3 is unavailable for the memory pressure fixture");
+        return Ok(());
+    }
+    let probe = Command::new("systemd-run")
+        .args([
+            "--user",
+            "--scope",
+            "--quiet",
+            "--property=MemoryMax=67108864",
+            "--property=MemorySwapMax=0",
+            "--property=CPUQuota=100%",
+            "--property=TasksMax=16",
+            "--",
+            "/bin/true",
+        ])
+        .status()?;
+    if !probe.success() {
+        eprintln!("skipped: user systemd scope constraints are unavailable");
+        return Ok(());
+    }
+
+    let root = tempfile::tempdir()?;
+    let mut jail_config = config();
+    jail_config.allow_subprocess = true;
+    jail_config.require_process_isolation = true;
+    let request = tinybox_bus::NativeJailRequest {
+        jail: jail_config,
+        resources: Some(tinybox_bus::NativeJailResourceRequest {
+            cpu_millis: Some(1000),
+            memory_bytes: Some(64 * 1024 * 1024),
+            pids_max: Some(16),
+            disk_bytes: None,
+        }),
+    };
+    let mut command = tinybox_core::ExecRequest::new([
+        "python3",
+        "-c",
+        "data=bytearray(256*1024*1024)\nfor i in range(0,len(data),4096): data[i]=1\nprint('allocation survived')",
+    ]);
+    command.cwd = Some(root.path().into());
+    let backend = resource_backend();
+    let jail = prepare_with_resources(root.path(), &request, &mut command, backend.as_ref())?;
+    let mut launcher = Command::new(command.argv.first().ok_or("missing launcher")?);
+    launcher
+        .args(command.argv.iter().skip(1))
+        .env_clear()
+        .envs(&command.env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, launcher)?
+        .wait_with_output()?;
+    assert_eq!(
+        output.status.signal(),
+        Some(9),
+        "memory overrun must be killed by the cgroup, status={:?}, stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("allocation survived"));
     Ok(())
 }
 
