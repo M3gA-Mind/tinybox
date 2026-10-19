@@ -81,6 +81,34 @@ fn requested_native_resource_limits_are_refused_before_spawn()
     assert!(prepare(root.path(), &config, &command, &backend).is_err());
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn explicit_native_disk_limit_is_not_ignored_by_linux_jail()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.path().into());
+    let backend = tinybox_jail::LandlockBackend::new();
+    if !backend.is_available() {
+        return Ok(());
+    }
+
+    // Contract 2.1 introduces this field. Older serde behavior silently drops
+    // unknown fields, which would turn an explicit unsupported hard limit into
+    // an unrestricted native launch.
+    let mut value = serde_json::to_value(config())?;
+    value["allow_net"] = serde_json::Value::Bool(true);
+    value["allow_subprocess"] = serde_json::Value::Bool(true);
+    value["resource_request"] = serde_json::json!({ "disk_bytes": 1024 });
+    let config: NativeJailConfig = serde_json::from_value(value)?;
+
+    assert!(
+        prepare(root.path(), &config, &command, &backend).is_err(),
+        "the Linux native jail must refuse an explicit disk limit it cannot enforce"
+    );
+    Ok(())
+}
 #[test]
 fn native_grants_reject_relative_parent_null_and_missing_paths() {
     assert!(grants(&["/".repeat(tinybox_bus::MAX_FILE_PATH_BYTES + 1)]).is_err());
