@@ -530,6 +530,70 @@ fn fractional_cpu_limit_throttles_the_live_native_scope()
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn native_scope_exit_kills_double_forked_setsid_descendants()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use std::{
+        io::BufRead,
+        process::{Command, Stdio},
+        time::{Duration, Instant},
+    };
+
+    let root = tempfile::tempdir()?;
+    let pid_file = root.path().join("detached.pid");
+    let python = format!(
+        "import os,time\nfirst=os.fork()\nif first == 0:\n os.setsid()\n second=os.fork()\n if second == 0:\n  open({},'w').write(str(os.getpid()))\n  while True: time.sleep(1)\n os._exit(0)\nos.waitpid(first,0)\nprint('READY',flush=True)",
+        shell_quote(&pid_file.display().to_string())
+    );
+    let script = format!("python3 -c {}; exit $?", shell_quote(&python));
+    let mut config = config();
+    config.allow_subprocess = true;
+    config.require_process_isolation = true;
+    let request = tinybox_bus::NativeJailRequest {
+        jail: config,
+        resources: Some(tinybox_bus::NativeJailResourceRequest {
+            cpu_millis: Some(1000),
+            memory_bytes: Some(64 * 1024 * 1024),
+            pids_max: Some(16),
+            disk_bytes: None,
+        }),
+    };
+    let mut command = tinybox_core::ExecRequest::new(["/bin/bash", "-c", &script]);
+    command.cwd = Some(root.path().into());
+    let backend = resource_backend();
+    let jail = prepare_with_resources(root.path(), &request, &mut command, backend.as_ref())?;
+    let mut launcher = Command::new(command.argv.first().ok_or("missing launcher")?);
+    launcher
+        .args(command.argv.iter().skip(1))
+        .env_clear()
+        .envs(&command.env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, launcher)?;
+    let mut ready = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(child.stdout.as_mut().ok_or("missing stdout pipe")?),
+        &mut ready,
+    )?;
+    assert_eq!(ready, "READY\n");
+    let detached: i32 = std::fs::read_to_string(&pid_file)?.parse()?;
+    let output = child.wait_with_output()?;
+    assert!(output.status.success(), "jail supervisor failed: {}", String::from_utf8_lossy(&output.stderr));
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match nix::sys::signal::kill(nix::unistd::Pid::from_raw(detached), None) {
+            Err(nix::errno::Errno::ESRCH) => break,
+            Ok(()) | Err(_) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            status => return Err(format!("detached descendant {detached} survived scope exit: {status:?}").into()),
+        }
+    }
+    Ok(())
+}
+
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
