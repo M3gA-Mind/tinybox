@@ -164,3 +164,26 @@ fn a_symlinked_grant_outside_any_writable_ancestor_is_still_allowed() -> std::io
     assert_eq!(jail.read_only, vec![target.path().canonicalize()?]);
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn the_check_sees_a_planted_link_however_the_root_is_spelled() -> std::io::Result<()> {
+    let root = tempfile::tempdir()?;
+    let secret = tempfile::tempdir()?;
+    std::os::unix::fs::symlink(secret.path(), root.path().join("vendor"))?;
+    let holder = tempfile::tempdir()?;
+    let alias = holder.path().join("alias");
+    std::os::unix::fs::symlink(root.path(), &alias)?;
+    // Root given by its real path, grant spelled through the alias (and the
+    // reverse): both must be refused.
+    for (writable, grant) in [
+        (root.path().to_path_buf(), alias.join("vendor")),
+        (alias.clone(), root.path().join("vendor")),
+    ] {
+        let err = crate::reject_symlinked_grants(&[writable.as_path()], &[grant.as_path()])
+            .err()
+            .map(|e| e.kind());
+        assert_eq!(err, Some(std::io::ErrorKind::InvalidInput), "{grant:?}");
+    }
+    Ok(())
+}

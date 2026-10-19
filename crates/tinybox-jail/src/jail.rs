@@ -156,25 +156,19 @@ impl Jail {
         Ok(())
     }
 
-    /// Refuses a read-only or read-write grant that sits inside a writable
-    /// root or grant and reaches its target through a symlink below that
-    /// ancestor. The jailed program can plant such a link (`vendor -> /secret`)
-    /// in a writable directory; canonicalizing it would silently turn a later
-    /// session's grant into a mount of the link's target.
+    /// Runs [`reject_symlinked_grants`] over this jail's own paths.
     fn reject_symlinked_grants(&self) -> std::io::Result<()> {
-        let mut writable: Vec<PathBuf> = Vec::new();
-        for path in std::iter::once(&self.root).chain(&self.read_write) {
-            writable.push(path.clone());
-            if let Ok(canonical) = path.canonicalize() {
-                writable.push(canonical);
-            }
-        }
-        for grant in self.read_only.iter().chain(&self.read_write) {
-            for ancestor in &writable {
-                reject_symlink_below(ancestor, grant)?;
-            }
-        }
-        Ok(())
+        let writable: Vec<&Path> = std::iter::once(&self.root)
+            .chain(&self.read_write)
+            .map(PathBuf::as_path)
+            .collect();
+        let grants: Vec<&Path> = self
+            .read_only
+            .iter()
+            .chain(&self.read_write)
+            .map(PathBuf::as_path)
+            .collect();
+        reject_symlinked_grants(&writable, &grants)
     }
 
     /// Refuse denials that a non-carving backend cannot preserve against its
@@ -219,6 +213,43 @@ impl Jail {
             );
         }
     }
+}
+
+/// Refuses a read-only or read-write grant that sits inside a writable root or
+/// grant and reaches its target through a symlink below that ancestor.
+///
+/// The jailed program can plant such a link (`vendor -> /secret`) in a writable
+/// directory; canonicalizing the grant would silently turn a later session's
+/// grant into a mount of the link's target. **Call this on the raw,
+/// un-canonicalized paths**: once a grant is canonicalized the link is gone and
+/// there is nothing left to detect. The ancestor is matched however the grant
+/// spells it (the path itself, its canonical form, or any alias that resolves
+/// to it).
+///
+/// # Errors
+/// `InvalidInput` naming the symlink.
+pub fn reject_symlinked_grants(writable: &[&Path], grants: &[&Path]) -> std::io::Result<()> {
+    for ancestor in writable {
+        let canonical = ancestor.canonicalize().ok();
+        for grant in grants {
+            if grant == ancestor {
+                continue;
+            }
+            // The shortest prefix of the grant that names the ancestor.
+            let mut prefixes: Vec<&Path> = grant.ancestors().collect();
+            prefixes.reverse();
+            let anchor = prefixes.into_iter().find(|prefix| {
+                *prefix == *ancestor
+                    || canonical
+                        .as_ref()
+                        .is_some_and(|c| prefix.canonicalize().is_ok_and(|p| p == *c))
+            });
+            if let Some(anchor) = anchor {
+                reject_symlink_below(anchor, grant)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Errors when `path` lies inside `ancestor` (lexically) and any component

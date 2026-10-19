@@ -605,3 +605,52 @@ fn process_isolation_is_decided_per_jail_so_shared_network_is_refused()
     assert!(prepare(root.path(), &config, &command, &backend).is_ok());
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_planted_in_the_writable_root_cannot_redirect_a_grant()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let secret = tempfile::tempdir()?;
+    let backend = Backend {
+        available: true,
+        suitable: true,
+        name: "fixture",
+        full: true,
+    };
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.path().into());
+    let planted = root.path().join("vendor");
+    std::os::unix::fs::symlink(secret.path(), &planted)?;
+
+    let mut read_only = config();
+    read_only
+        .read_only
+        .push(planted.to_string_lossy().into_owned());
+    assert!(prepare(root.path(), &read_only, &command, &backend).is_err());
+
+    let mut read_write = config();
+    read_write
+        .read_write
+        .push(planted.to_string_lossy().into_owned());
+    assert!(prepare(root.path(), &read_write, &command, &backend).is_err());
+
+    // Also when the root is spelled through an alias of its real path.
+    let alias_holder = tempfile::tempdir()?;
+    let alias = alias_holder.path().join("alias");
+    std::os::unix::fs::symlink(root.path(), &alias)?;
+    let mut aliased = config();
+    aliased
+        .read_only
+        .push(planted.to_string_lossy().into_owned());
+    assert!(prepare(&alias, &aliased, &command, &backend).is_err());
+
+    // A symlink outside every writable ancestor is still a fine grant.
+    let holder = tempfile::tempdir()?;
+    let tools = holder.path().join("tools");
+    std::os::unix::fs::symlink(secret.path(), &tools)?;
+    let mut outside = config();
+    outside.read_only.push(tools.to_string_lossy().into_owned());
+    assert!(prepare(root.path(), &outside, &command, &backend).is_ok());
+    Ok(())
+}

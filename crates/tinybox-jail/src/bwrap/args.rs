@@ -174,11 +174,17 @@ pub(super) fn jail_args(
     }
     // A grant inside a writable one must not reach its target through a
     // symlink the jailed program could have planted.
-    for grant in jail.read_only.iter().chain(&jail.read_write) {
-        for ancestor in std::iter::once(&jail.root).chain(&jail.read_write) {
-            crate::jail::reject_symlink_below(ancestor, grant)?;
-        }
-    }
+    let writable: Vec<&Path> = std::iter::once(&jail.root)
+        .chain(&jail.read_write)
+        .map(PathBuf::as_path)
+        .collect();
+    let nested: Vec<&Path> = jail
+        .read_only
+        .iter()
+        .chain(&jail.read_write)
+        .map(PathBuf::as_path)
+        .collect();
+    crate::jail::reject_symlinked_grants(&writable, &nested)?;
     let mut mounts = baseline_mounts();
     for (path, writable) in std::iter::once((&jail.root, true))
         .chain(jail.read_write.iter().map(|p| (p, true)))

@@ -22,6 +22,20 @@ pub(super) fn prepare(
     {
         return Err(invalid());
     }
+    // Before anything is canonicalized: a link the jailed program planted
+    // (`<root>/vendor -> <secret>`) is only visible in the raw spellings.
+    {
+        let writable: Vec<&Path> = std::iter::once(root)
+            .chain(config.read_write.iter().map(Path::new))
+            .collect();
+        let nested: Vec<&Path> = config
+            .read_only
+            .iter()
+            .chain(&config.read_write)
+            .map(Path::new)
+            .collect();
+        tinybox_jail::reject_symlinked_grants(&writable, &nested).map_err(|_| invalid())?;
+    }
     let root = root.canonicalize().map_err(|_| invalid())?;
     if !root.is_dir() {
         return Err(invalid());
