@@ -38,19 +38,34 @@ pub(crate) fn run(
     spawn_captured_with(backend, jail, cmd)?.wait_with_output()
 }
 
-/// Runs `script` under `sh -c` inside `jail`; returns (success, stdout).
+/// Output of a script that first printed `started`: `(exit success, stdout
+/// after the marker)`.
+///
+/// # Errors
+/// An error when the marker is missing, so a sandbox that failed to start can
+/// never satisfy a negative assertion ("the secret is not readable") by
+/// producing no output at all.
+pub(crate) fn started(out: &std::process::Output) -> io::Result<(bool, String)> {
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let Some(rest) = text.strip_prefix("started\n") else {
+        return Err(io::Error::other(format!(
+            "the sandboxed script never started (status {:?}): stdout {text:?}, stderr {:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    };
+    Ok((out.status.success(), rest.to_owned()))
+}
+
+/// Runs `script` under `sh -c` inside `jail` after a `started` marker.
 pub(crate) fn sh(
     backend: &BubblewrapBackend,
     jail: &Jail,
     script: &str,
 ) -> io::Result<(bool, String)> {
     let mut cmd = Command::new("/bin/sh");
-    cmd.arg("-c").arg(script);
-    let out = run(backend, jail, cmd)?;
-    Ok((
-        out.status.success(),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-    ))
+    cmd.arg("-c").arg(format!("echo started; {script}"));
+    started(&run(backend, jail, cmd)?)
 }
 
 pub(crate) fn jail(root: &Path) -> Jail {
