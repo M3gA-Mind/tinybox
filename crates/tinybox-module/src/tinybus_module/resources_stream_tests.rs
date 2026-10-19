@@ -1314,7 +1314,6 @@ async fn concurrent_preparations_share_a_bounded_admission_budget()
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-#[allow(clippy::too_many_lines)] // Cancel and destroy are both pinned through the public bus-owned stream.
 async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendants()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::{os::unix::fs::FileTypeExt, process::Command, time::Duration};
