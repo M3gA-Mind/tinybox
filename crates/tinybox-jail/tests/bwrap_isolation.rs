@@ -387,6 +387,27 @@ fn credentials_never_appear_in_the_host_bwrap_cmdline_or_environment() -> io::Re
 }
 
 #[test]
+fn a_nul_byte_in_the_environment_cannot_inject_bwrap_options() -> io::Result<()> {
+    let Some(backend) = backend()? else {
+        return Ok(());
+    };
+    let start = Instant::now();
+    let root = tempfile::tempdir()?;
+    let host_file = tempfile::tempdir()?;
+    let mut cmd = Command::new("/bin/true");
+    // Without the check this would end the value early and make the rest a
+    // further bwrap option: here, a bind of the host directory into the jail.
+    let dir = host_file.path().display();
+    cmd.env("K", format!("v\0--bind\0{dir}\0{dir}"));
+    let err = spawn_captured_with(&backend, &jail(root.path()).deny_net(), cmd)
+        .err()
+        .map(|e| e.kind());
+    assert_eq!(err, Some(io::ErrorKind::InvalidInput));
+    done("nul-injection", start);
+    Ok(())
+}
+
+#[test]
 fn the_private_args_file_is_not_reachable_from_inside_the_sandbox() -> io::Result<()> {
     let Some(backend) = backend()? else {
         return Ok(());
