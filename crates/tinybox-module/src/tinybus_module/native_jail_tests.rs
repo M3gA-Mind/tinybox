@@ -219,6 +219,11 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let child = tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, child_command)?;
+    eprintln!(
+        "parent pid {}, launcher pid {}",
+        std::process::id(),
+        child.id()
+    );
     let cgroup = find_cgroup_for_pid(child.id())?.ok_or_else(|| {
         format!(
             "launcher {} was not found in the user's cgroup tree",
