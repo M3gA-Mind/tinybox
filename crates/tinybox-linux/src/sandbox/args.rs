@@ -273,6 +273,7 @@ fn trusted_bwrap_program() -> std::io::Result<std::path::PathBuf> {
         })
 }
 
+#[cfg(unix)]
 fn validate_trusted_program(path: &Path) -> std::io::Result<std::path::PathBuf> {
     use std::io::{Error, ErrorKind};
     use std::os::unix::fs::MetadataExt as _;
@@ -302,6 +303,14 @@ fn validate_trusted_program(path: &Path) -> std::io::Result<std::path::PathBuf> 
         ));
     }
     Ok(canonical)
+}
+
+#[cfg(not(unix))]
+fn validate_trusted_program(_path: &Path) -> std::io::Result<std::path::PathBuf> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "native Linux launchers require Unix filesystem ownership and mode checks",
+    ))
 }
 
 fn validate_native_jail_command(request: &NativeJailCommand) -> std::io::Result<()> {
