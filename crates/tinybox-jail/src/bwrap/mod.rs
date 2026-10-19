@@ -287,10 +287,13 @@ fn prepare_command(verified: &Verified, jail: &Jail, cmd: &Command) -> io::Resul
     argv.push(cmd.get_program().to_os_string());
     argv.extend(cmd.get_args().map(std::ffi::OsStr::to_os_string));
 
-    let args = launcher::ArgsFile::create(&argv)?;
+    let file = launcher::ArgsFile::create(&argv)?;
     let shell = launcher::pick_shell(|path| Path::new(path).is_file());
-    let launcher = launcher::command(shell, &verified.program, &args);
-    Ok(Prepared { launcher, args })
+    let launcher = launcher::command(shell, &verified.program, &file);
+    Ok(Prepared {
+        launcher,
+        args: file,
+    })
 }
 
 impl JailBackend for BubblewrapBackend {

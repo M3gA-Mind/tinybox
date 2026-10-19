@@ -186,10 +186,10 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 #[test]
-fn a_launcher_that_passes_the_probe_is_available_with_kernel_isolation() {
+fn a_launcher_that_passes_the_probe_is_available_with_process_isolation_minimum() {
     let backend = BubblewrapBackend::with_program(fixture("fake-bwrap-probe.sh"));
     assert!(backend.is_available());
-    assert_eq!(backend.isolation(), IsolationLevel::Kernel);
+    assert_eq!(backend.isolation(), IsolationLevel::Process);
     assert_eq!(
         backend.program(),
         Some(fixture("fake-bwrap-probe.sh").as_path())

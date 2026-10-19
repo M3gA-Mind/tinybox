@@ -26,9 +26,6 @@ use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The descriptor `bwrap --args` reads, kept open by the launcher.
-pub(super) const ARGS_FD: &str = "9";
-
 /// The script: open and delete the args file, close every other inherited
 /// descriptor above 2, then `exec bwrap --args 9`. `$0` is `bwrap`, `$1` the
 /// args file.
