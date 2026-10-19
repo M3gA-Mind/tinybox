@@ -91,6 +91,9 @@ impl tinybox_jail::JailBackend for Backend {
     fn is_suitable_for_untrusted_code(&self) -> bool {
         true
     }
+    fn is_suitable_for_untrusted_jail(&self, _: &tinybox_jail::Jail) -> bool {
+        true
+    }
     fn constraint_support(&self) -> tinybox_core::ConstraintSupport {
         use tinybox_core::{Constraint, ConstraintSupport, Enforcement};
         if self.full {
