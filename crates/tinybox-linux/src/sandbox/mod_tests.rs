@@ -327,7 +327,7 @@ async fn limits_wrap_the_sandbox_in_a_systemd_scope() -> Result<()> {
     sandbox.exec(&info.id, &ExecRequest::new(["true"])).await?;
 
     let argv = host.last();
-    assert_eq!(argv.first().map(String::as_str), Some("/bin/bash"));
+    assert_eq!(argv.first().map(String::as_str), Some("systemd-run"));
     assert!(has(&argv, "systemd-run"));
     assert!(has(&argv, "--user"));
     assert!(has(&argv, "--scope"));
@@ -462,7 +462,7 @@ fn native_jail_command_keeps_limits_and_target_environment_after_namespace_setup
         argv: vec!["/usr/bin/env".into()],
         env: BTreeMap::from([("BASH_ENV".into(), "/tmp/target-init".into())]),
     })?;
-    assert_eq!(argv.first().map(String::as_str), Some("systemd-run"));
+    assert_eq!(argv.first().map(String::as_str), Some("/bin/bash"));
     assert!(has(&argv, "--property=CPUQuota=0.1%"));
     assert!(has(&argv, "--property=MemoryMax=67108864"));
     assert!(has(&argv, "--property=MemorySwapMax=0"));
