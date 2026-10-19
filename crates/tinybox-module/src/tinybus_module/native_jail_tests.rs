@@ -20,6 +20,9 @@ impl JailBackend for Backend {
     fn is_suitable_for_untrusted_code(&self) -> bool {
         self.suitable
     }
+    fn is_suitable_for_untrusted_jail(&self, _: &Jail) -> bool {
+        self.suitable
+    }
     fn carves_denials(&self) -> bool {
         self.name == "seatbelt"
     }
@@ -546,5 +549,108 @@ fn landlock_keeps_a_denied_path_unreadable_when_created_after_preflight()
     .wait_with_output()?;
     assert_eq!(output.stdout, b"allowed-read-control\n");
     assert!(!output.status.success());
+    Ok(())
+}
+
+/// Isolation that depends on the configuration, as the bubblewrap backend's does.
+struct NetworkSensitiveBackend;
+impl JailBackend for NetworkSensitiveBackend {
+    fn name(&self) -> &'static str {
+        "network-sensitive"
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn isolation(&self) -> tinybox_core::IsolationLevel {
+        tinybox_core::IsolationLevel::Process
+    }
+    fn isolation_for(&self, jail: &Jail) -> tinybox_core::IsolationLevel {
+        if jail.allow_net {
+            tinybox_core::IsolationLevel::Process
+        } else {
+            tinybox_core::IsolationLevel::Kernel
+        }
+    }
+    fn constraint_support(&self) -> tinybox_core::ConstraintSupport {
+        use tinybox_core::{Constraint, ConstraintSupport, Enforcement};
+        ConstraintSupport::NONE
+            .with(Constraint::Filesystem, Enforcement::Enforced)
+            .with(Constraint::Network, Enforcement::Enforced)
+    }
+    fn spawn(&self, _: &Jail, _: std::process::Command) -> std::io::Result<std::process::Child> {
+        Err(std::io::Error::other("preflight fixture never spawns"))
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn process_isolation_is_decided_per_jail_so_shared_network_is_refused()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.path().into());
+    let mut config = config();
+    config.enforcement = JailEnforcement::Enforced;
+    config.require_process_isolation = true;
+    // tinymcp's default: network allowed, isolation required.
+    config.allow_net = true;
+    config.allow_subprocess = true;
+    let backend = NetworkSensitiveBackend;
+    assert!(
+        prepare(root.path(), &config, &command, &backend).is_err(),
+        "a shared network namespace must not satisfy require_process_isolation"
+    );
+    config.allow_net = false;
+    // Subprocess denial is not enforced by this fixture, so leave it allowed.
+    assert!(prepare(root.path(), &config, &command, &backend).is_ok());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_planted_in_the_writable_root_cannot_redirect_a_grant()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let secret = tempfile::tempdir()?;
+    let backend = Backend {
+        available: true,
+        suitable: true,
+        name: "fixture",
+        full: true,
+    };
+    let mut command = tinybox_core::ExecRequest::new(["irrelevant"]);
+    command.cwd = Some(root.path().into());
+    let planted = root.path().join("vendor");
+    std::os::unix::fs::symlink(secret.path(), &planted)?;
+
+    let mut read_only = config();
+    read_only
+        .read_only
+        .push(planted.to_string_lossy().into_owned());
+    assert!(prepare(root.path(), &read_only, &command, &backend).is_err());
+
+    let mut read_write = config();
+    read_write
+        .read_write
+        .push(planted.to_string_lossy().into_owned());
+    assert!(prepare(root.path(), &read_write, &command, &backend).is_err());
+
+    // Also when the root is spelled through an alias of its real path.
+    let alias_holder = tempfile::tempdir()?;
+    let alias = alias_holder.path().join("alias");
+    std::os::unix::fs::symlink(root.path(), &alias)?;
+    let mut aliased = config();
+    aliased
+        .read_only
+        .push(planted.to_string_lossy().into_owned());
+    assert!(prepare(&alias, &aliased, &command, &backend).is_err());
+
+    // A symlink outside every writable ancestor is still a fine grant.
+    let holder = tempfile::tempdir()?;
+    let tools = holder.path().join("tools");
+    std::os::unix::fs::symlink(secret.path(), &tools)?;
+    let mut outside = config();
+    outside.read_only.push(tools.to_string_lossy().into_owned());
+    assert!(prepare(root.path(), &outside, &command, &backend).is_ok());
     Ok(())
 }
