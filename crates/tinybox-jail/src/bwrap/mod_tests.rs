@@ -106,13 +106,9 @@ fn secrets_stay_out_of_argv_and_the_launcher_environment() -> io::Result<()> {
             "{k} missing from the args file"
         );
     }
-    let clear = fields.iter().position(|f| *f == b"--clearenv");
-    let sep = fields.iter().position(|f| *f == b"--");
-    assert!(clear.is_some() && clear < sep);
-    assert_eq!(
-        sep.map(|i| &fields[i + 1..i + 3]),
-        Some(&[&b"node"[..], &b"server.js"[..]][..])
-    );
+    assert!(fields.iter().any(|f| *f == b"--clearenv"));
+    // The command itself rides on the launcher's argv, after the file path.
+    assert_eq!(&argv[argv.len() - 2..], ["node", "server.js"]);
     prepared.args.discard();
     Ok(())
 }

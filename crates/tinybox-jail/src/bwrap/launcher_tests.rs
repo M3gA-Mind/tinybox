@@ -73,7 +73,11 @@ fn the_args_file_is_gone_once_the_launcher_has_started_bwrap() -> io::Result<()>
     let bwrap = stand_in(dir.path(), "exit 0")?;
     let file = ArgsFile::create(&["x".into()])?;
     let path = file.path().to_path_buf();
-    assert!(command(shell(), &bwrap, &file, "prog".as_ref(), &[]).status()?.success());
+    assert!(
+        command(shell(), &bwrap, &file, "prog".as_ref(), &[])
+            .status()?
+            .success()
+    );
     assert!(!path.exists() && !path.parent().is_some_and(Path::exists));
     Ok(())
 }

@@ -385,6 +385,29 @@ fn credentials_never_appear_in_the_host_bwrap_cmdline_or_environment() -> io::Re
 }
 
 #[test]
+fn the_private_args_file_is_not_reachable_from_inside_the_sandbox() -> io::Result<()> {
+    let Some(backend) = backend()? else {
+        return Ok(());
+    };
+    let start = Instant::now();
+    let root = tempfile::tempdir()?;
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg("-c")
+        .arg("ls -l /proc/self/fd; ls /tmp")
+        .env("GITHUB_TOKEN", "ghp_inside_s3cret");
+    let out = run(&backend, &jail(root.path()).deny_net(), cmd)?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !text.contains("tinybox-bwrap"),
+        "args file reachable: {text}"
+    );
+    // The host's temp directory (where the file lived) is not the sandbox's.
+    assert!(!text.contains("args"), "{text}");
+    done("args-fd-closed", start);
+    Ok(())
+}
+
+#[test]
 fn ld_preload_in_the_caller_env_only_takes_effect_inside_the_sandbox() -> io::Result<()> {
     let Some(backend) = backend()? else {
         return Ok(());
