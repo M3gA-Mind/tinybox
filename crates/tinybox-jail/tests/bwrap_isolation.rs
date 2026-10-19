@@ -230,7 +230,10 @@ fn deny_read_of_a_missing_path_refuses_without_creating_a_host_mountpoint() -> i
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
     assert!(!denied.exists(), "refusal mutated the host filesystem");
     std::fs::write(&denied, "host-file-remains-creatable")?;
-    assert_eq!(std::fs::read_to_string(&denied)?, "host-file-remains-creatable");
+    assert_eq!(
+        std::fs::read_to_string(&denied)?,
+        "host-file-remains-creatable"
+    );
     done("deny-missing-refused-without-host-mutation", start);
     Ok(())
 }
