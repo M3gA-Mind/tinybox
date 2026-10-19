@@ -401,7 +401,11 @@ fn native_memory_limit_kills_a_workload_that_touches_past_its_budget()
 #[test]
 fn fractional_cpu_limit_throttles_the_live_native_scope()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
-    use std::{io::{BufRead, Write}, process::{Command, Stdio}, time::{Duration, Instant}};
+    use std::{
+        io::BufRead,
+        process::{Command, Stdio},
+        time::{Duration, Instant},
+    };
 
     let root = tempfile::tempdir()?;
     let release = root.path().join("release-cpu-loop");
@@ -448,13 +452,19 @@ fn fractional_cpu_limit_throttles_the_live_native_scope()
         .args(["--user", "show", "--property=ControlGroup", "--value", unit])
         .output()?;
     assert!(control_group.status.success());
-    let cgroup = std::path::Path::new("/sys/fs/cgroup")
-        .join(String::from_utf8(control_group.stdout)?.trim_start_matches('/').trim());
+    let cgroup = std::path::Path::new("/sys/fs/cgroup").join(
+        String::from_utf8(control_group.stdout)?
+            .trim_start_matches('/')
+            .trim(),
+    );
     let cpu_max = std::fs::read_to_string(cgroup.join("cpu.max"))?;
     let mut cpu_max = cpu_max.split_whitespace();
     let quota: u64 = cpu_max.next().ok_or("missing CPU quota")?.parse()?;
     let period: u64 = cpu_max.next().ok_or("missing CPU period")?.parse()?;
-    assert!(quota > 0 && quota * 1000 <= period, "CPU ratio exceeds 1 milli-CPU: {quota}/{period}");
+    assert!(
+        quota > 0 && quota * 1000 <= period,
+        "CPU ratio exceeds 1 milli-CPU: {quota}/{period}"
+    );
 
     let deadline = Instant::now() + Duration::from_secs(5);
     let throttled = loop {
@@ -472,7 +482,10 @@ fn fractional_cpu_limit_throttles_the_live_native_scope()
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    assert!(throttled, "CPU-bound workload was never throttled by cpu.max");
+    assert!(
+        throttled,
+        "CPU-bound workload was never throttled by cpu.max"
+    );
     std::fs::write(&release, b"release")?;
     let output = child.wait_with_output()?;
     assert!(output.status.success());
