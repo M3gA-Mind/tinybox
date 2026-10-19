@@ -441,6 +441,7 @@ async fn fractional_cpu_quota_is_not_rounded_down_to_zero() -> Result<()> {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn native_jail_command_keeps_limits_and_target_environment_after_namespace_setup()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
