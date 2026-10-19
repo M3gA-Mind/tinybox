@@ -324,21 +324,18 @@ fn deny_masks(denied: &[PathBuf], mounts: &[Mount]) -> io::Result<Vec<OsString>>
                 os("/dev/null"),
                 deny.clone().into_os_string(),
             ]),
-            // Reserve a mountpoint for a prospective denial so a path created
-            // under a granted directory after spawn cannot become visible.
-            // Refuse deeper missing parents: bwrap must not guess at creating
-            // an arbitrary path outside an existing mountpoint.
+            // Bubblewrap's `--tmpfs` creates a missing destination on the host
+            // before mounting it. Refuse prospective denials rather than
+            // mutating a granted host directory or preventing that path from
+            // later being created as a file.
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                if !deny.parent().is_some_and(Path::is_dir) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::NotFound,
-                        format!(
-                            "cannot pre-create deny_read mountpoint {} without an existing parent",
-                            deny.display()
-                        ),
-                    ));
-                }
-                argv.extend([os("--tmpfs"), deny.clone().into_os_string()]);
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "deny_read path {} must exist before starting the jail",
+                        deny.display()
+                    ),
+                ));
             }
             Err(error) => return Err(error),
         }

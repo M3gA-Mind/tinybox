@@ -189,7 +189,7 @@ fn a_symlink_planted_in_a_writable_root_cannot_redirect_a_nested_grant() -> io::
     let j = jail(root.path()).add_read_only(root.path().join("vendor"));
     // Through the public API (canonicalizing) and through the trait directly.
     assert_eq!(refused(&backend, &j), Some(io::ErrorKind::InvalidInput));
-    let mut cmd = Command::new("/bin/true");
+    let cmd = Command::new("/bin/true");
     cmd.arg("x");
     let direct = backend.spawn_captured(&j, cmd).err().map(|e| e.kind());
     assert_eq!(direct, Some(io::ErrorKind::InvalidInput));
