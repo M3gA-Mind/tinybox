@@ -24,3 +24,13 @@ the compatibility check can silently lose the requested limits. The native
 jail currently enforces none of these resource controls; it refuses a request
 containing limits before process startup. This addition does not claim to
 enforce native CPU, memory, process or disk limits.
+
+Contract 1.22 is also the final one-release deprecation window for TinyBox's
+legacy command-policy vocabulary: `AnalyzeCommand`, `CommandClass` and its
+classification fields, executor/environment-guard signals, and
+`AnalyzeShell.hidden_execution`. TinySecurity owns command policy. Hosts must
+not use these legacy results to make policy decisions and should use
+TinySecurity's policy contract instead. The next contract major removes this
+policy vocabulary while retaining generic shell structure parsing and shell
+transport helpers. Hosts must reject a module with a different contract major;
+there is no silent compatibility fallback.
