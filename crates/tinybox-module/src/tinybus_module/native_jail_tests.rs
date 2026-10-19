@@ -114,7 +114,7 @@ fn legacy_resource_limits_still_fail_closed_on_linux()
 #[cfg(target_os = "linux")]
 #[test]
 fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
--> std::result::Result<(), Box<dyn Error>> {
+-> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::process::{Command, Stdio};
 
     let root = tempfile::tempdir()?;
