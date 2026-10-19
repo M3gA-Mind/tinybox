@@ -259,8 +259,8 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::{
         io::Write,
-        process::{Command, Stdio},
         os::unix::fs::MetadataExt,
+        process::{Command, Stdio},
     };
 
     if !native_resource_runtime_available() {
@@ -339,7 +339,10 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         "launcher failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(std::fs::read(fixture.workspace.join("control"))?, b"allowed");
+    assert_eq!(
+        std::fs::read(fixture.workspace.join("control"))?,
+        b"allowed"
+    );
     assert_eq!(
         std::fs::read(fixture.workspace.join("from-bash-env"))?,
         b"startup"
