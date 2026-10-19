@@ -246,6 +246,28 @@ pub trait JailBackend: Send + Sync {
             resources.validate()?;
             self.constraint_support()
                 .require(self.name(), &RESOURCE_CONSTRAINTS)?;
+        } else if let Some(resources) = jail.native_resources {
+            for (limit, value) in [
+                ("cpu_millis", resources.cpu_millis),
+                ("memory_bytes", resources.memory_bytes),
+                ("pids_max", resources.pids_max),
+                ("disk_bytes", resources.disk_bytes),
+            ] {
+                if value == Some(0) {
+                    return Err(tinybox_core::Error::ZeroResourceLimit { limit });
+                }
+            }
+            if resources.cpu_millis.is_none()
+                && resources.memory_bytes.is_none()
+                && resources.pids_max.is_none()
+                && resources.disk_bytes.is_none()
+            {
+                return Err(tinybox_core::Error::InvalidResourceLimit {
+                    limit: "empty native resource request",
+                });
+            }
+            self.constraint_support()
+                .require(self.name(), &jail.constraints())?;
         }
         Ok(())
     }
