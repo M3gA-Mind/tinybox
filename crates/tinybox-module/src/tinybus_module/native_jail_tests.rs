@@ -397,6 +397,89 @@ fn native_memory_limit_kills_a_workload_that_touches_past_its_budget()
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn fractional_cpu_limit_throttles_the_live_native_scope()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use std::{io::{BufRead, Write}, process::{Command, Stdio}, time::{Duration, Instant}};
+
+    let root = tempfile::tempdir()?;
+    let release = root.path().join("release-cpu-loop");
+    let script = format!(
+        "printf 'READY\\n'; while [ ! -e {} ]; do :; done; printf 'DONE\\n'",
+        shell_quote(&release.display().to_string())
+    );
+    let mut config = config();
+    config.allow_subprocess = true;
+    config.require_process_isolation = true;
+    let request = tinybox_bus::NativeJailRequest {
+        jail: config,
+        resources: Some(tinybox_bus::NativeJailResourceRequest {
+            cpu_millis: Some(1),
+            memory_bytes: Some(64 * 1024 * 1024),
+            pids_max: Some(16),
+            disk_bytes: None,
+        }),
+    };
+    let mut command = tinybox_core::ExecRequest::new(["/bin/bash", "-c", &script]);
+    command.cwd = Some(root.path().into());
+    let backend = resource_backend();
+    let jail = prepare_with_resources(root.path(), &request, &mut command, backend.as_ref())?;
+    let mut launcher = Command::new(command.argv.first().ok_or("missing launcher")?);
+    launcher
+        .args(command.argv.iter().skip(1))
+        .env_clear()
+        .envs(&command.env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = tinybox_jail::spawn_captured_with(backend.as_ref(), &jail, launcher)?;
+    let mut ready = String::new();
+    BufRead::read_line(
+        &mut std::io::BufReader::new(child.stdout.as_mut().ok_or("missing stdout pipe")?),
+        &mut ready,
+    )?;
+    assert_eq!(ready, "READY\n");
+    let unit = command
+        .argv
+        .iter()
+        .find_map(|part| part.strip_prefix("--unit="))
+        .ok_or("launcher has no transient scope unit")?;
+    let control_group = Command::new("systemctl")
+        .args(["--user", "show", "--property=ControlGroup", "--value", unit])
+        .output()?;
+    assert!(control_group.status.success());
+    let cgroup = std::path::Path::new("/sys/fs/cgroup")
+        .join(String::from_utf8(control_group.stdout)?.trim_start_matches('/').trim());
+    let cpu_max = std::fs::read_to_string(cgroup.join("cpu.max"))?;
+    let mut cpu_max = cpu_max.split_whitespace();
+    let quota: u64 = cpu_max.next().ok_or("missing CPU quota")?.parse()?;
+    let period: u64 = cpu_max.next().ok_or("missing CPU period")?.parse()?;
+    assert!(quota > 0 && quota * 1000 <= period, "CPU ratio exceeds 1 milli-CPU: {quota}/{period}");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let throttled = loop {
+        let stats = std::fs::read_to_string(cgroup.join("cpu.stat"))?;
+        let count: u64 = stats
+            .lines()
+            .find_map(|line| line.strip_prefix("nr_throttled "))
+            .ok_or("missing CPU throttle counter")?
+            .parse()?;
+        if count > 0 {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(throttled, "CPU-bound workload was never throttled by cpu.max");
+    std::fs::write(&release, b"release")?;
+    let output = child.wait_with_output()?;
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("DONE"));
+    Ok(())
+}
+
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
