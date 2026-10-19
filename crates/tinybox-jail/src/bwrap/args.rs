@@ -254,7 +254,7 @@ pub(super) fn jail_args(
         }
     }
 
-    argv.extend(deny_masks(jail, &denied, &mounts)?);
+    argv.extend(deny_masks(&denied, &mounts)?);
 
     argv.extend([
         os("--chdir"),
@@ -292,7 +292,7 @@ fn effective_denials(deny_read: &[PathBuf], mounts: &[Mount]) -> Vec<PathBuf> {
 }
 
 /// Arguments that subtract `deny_read` from the surviving mounts.
-fn deny_masks(jail: &Jail, denied: &[PathBuf], mounts: &[Mount]) -> io::Result<Vec<OsString>> {
+fn deny_masks(denied: &[PathBuf], mounts: &[Mount]) -> io::Result<Vec<OsString>> {
     let mut argv: Vec<OsString> = Vec::new();
     for deny in denied {
         // The deepest surviving mount that holds the denied path decides.
