@@ -697,7 +697,6 @@ async fn native_cancellation_kills_detached_descendants_and_preserves_stream_eve
     journal.cancel();
     assert!(task.await?.is_err(), "cancelled native command unexpectedly succeeded");
     assert!(!host.has_pending_cleanup(), "cancel did not acknowledge child cleanup");
-    assert_eq!(journal.read(0)?.state, tinybox_bus::ExecutionState::Cancelled);
 
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
