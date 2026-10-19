@@ -31,10 +31,12 @@ fn inheritable_host_descriptors_do_not_reach_the_sandbox() -> io::Result<()> {
     }
     let fds: Vec<i32> = files.iter().map(AsRawFd::as_raw_fd).collect();
     assert!(fds.iter().any(|fd| *fd > 9), "{fds:?}");
-    let script: String = fds
-        .iter()
-        .map(|fd| format!("cat /proc/self/fd/{fd} 2>/dev/null; "))
-        .collect();
+    let mut script = String::new();
+    for fd in &fds {
+        script.push_str("cat /proc/self/fd/");
+        script.push_str(&fd.to_string());
+        script.push_str(" 2>/dev/null; ");
+    }
     let (_, out) = sh(&backend, &jail(root.path()).deny_net(), &script)?;
     assert!(
         !out.contains("host-secret"),
