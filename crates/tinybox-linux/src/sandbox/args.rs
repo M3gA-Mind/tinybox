@@ -213,8 +213,14 @@ pub struct NativeJailCommand {
 /// # Errors
 /// Returns an error when a request is invalid, unsupported, or systemd's
 /// command-argument expansion behavior cannot be verified.
-#[allow(clippy::too_many_lines)] // Keep this ordered security-sensitive argv plan together for audit.
 pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<String>> {
+    validate_native_jail_command(request)?;
+    let supports_expand_environment = systemd_run_supports_safe_arguments()?;
+    let argv = native_bwrap_argv(request, supports_expand_environment)?;
+    Ok(native_launcher_argv(argv))
+}
+
+fn validate_native_jail_command(request: &NativeJailCommand) -> std::io::Result<()> {
     use std::io::{Error, ErrorKind};
     let invalid = || Error::new(ErrorKind::InvalidInput, "invalid native jail command");
     if request.argv.is_empty()
@@ -273,6 +279,11 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
         ));
     }
 
+    Ok(())
+}
+
+fn systemd_run_supports_safe_arguments() -> std::io::Result<bool> {
+    use std::io::{Error, ErrorKind};
     // `systemd-run` versions that support variable expansion apply it to
     // command arguments before starting bwrap. Probe the same advertised
     // capability used by the owning namespace backend and disable expansion
@@ -289,6 +300,13 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
                     "cannot verify systemd-run argument handling",
                 )
             })?;
+    Ok(supports_expand_environment)
+}
+
+fn native_bwrap_argv(
+    request: &NativeJailCommand,
+    supports_expand_environment: bool,
+) -> std::io::Result<Vec<String>> {
     let mut argv = vec![
         "systemd-run".to_owned(),
         "--user".to_owned(),
@@ -384,6 +402,10 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
     // starting bubblewrap, preventing a pre-opened manager/cgroup FD from
     // bypassing the mount and network namespaces. Target values remain argv
     // data and the shim receives only a fixed, sanitized launcher environment.
+    Ok(argv)
+}
+
+fn native_launcher_argv(argv: Vec<String>) -> Vec<String> {
     let mut launcher = vec![
         "/bin/bash".to_owned(),
         "--noprofile".to_owned(),
@@ -393,7 +415,7 @@ pub fn native_jail_argv(request: &NativeJailCommand) -> std::io::Result<Vec<Stri
         "tinybox-native-launcher".to_owned(),
     ];
     launcher.extend(argv);
-    Ok(launcher)
+    launcher
 }
 
 fn cpu_quota_u64(cpu_millis: u64) -> String {
