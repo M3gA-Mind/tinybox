@@ -242,9 +242,13 @@ pub fn native_jail_argv_with_programs(
 
 /// Find systemd-run only in fixed system locations and return its trusted
 /// canonical path. This does not consult the caller's `PATH`.
+///
+/// # Errors
+/// Returns `NotFound` when no trusted executable is available in those paths.
 pub fn trusted_systemd_run_program() -> std::io::Result<std::path::PathBuf> {
     [
         Path::new("/usr/bin/systemd-run"),
+        Path::new("/usr/local/bin/systemd-run"),
         Path::new("/bin/systemd-run"),
     ]
     .into_iter()
