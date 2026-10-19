@@ -199,6 +199,33 @@ fn requested_native_resource_limits_are_refused_before_spawn()
 
 #[cfg(target_os = "linux")]
 #[test]
+fn resource_backend_consumes_one_validated_launcher_plan()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use std::process::Command;
+
+    let backend = super::NativeResourceBackend::new();
+    assert_eq!(backend.isolation(), tinybox_core::IsolationLevel::Kernel);
+    let jail = tinybox_jail::Jail::new(std::env::temp_dir(), "resource-plan-test");
+    assert!(backend.spawn(&jail, Command::new("true")).is_err());
+
+    let backend = super::NativeResourceBackend::new();
+    let request = tinybox_bus::NativeJailResourceRequest {
+        cpu_millis: Some(1000),
+        memory_bytes: None,
+        pids_max: None,
+        disk_bytes: None,
+    };
+    backend.bind_resources(request)?;
+    assert!(backend.bind_resources(request).is_err());
+    backend.bind(&["/bin/true".into()])?;
+    assert!(backend.bind(&["/bin/false".into()]).is_err());
+    let command = Command::new("/bin/false");
+    assert!(backend.spawn(&jail, command).is_err());
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn legacy_resource_limits_still_fail_closed_on_linux()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
