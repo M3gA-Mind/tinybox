@@ -268,9 +268,7 @@ impl JailBackend for NativeResourceBackend {
     }
 
     fn is_available(&self) -> bool {
-        cfg!(target_os = "linux")
-            && tinybox_linux::trusted_systemd_run_program().is_ok()
-            && tinybox_jail::BubblewrapBackend::new().program().is_some()
+        native_launchers_available()
     }
 
     fn isolation(&self) -> tinybox_core::IsolationLevel {
@@ -380,18 +378,36 @@ fn prepare_with_resources(
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
     };
+    #[cfg(target_os = "linux")]
     let bwrap = tinybox_jail::BubblewrapBackend::new()
         .program()
         .map(Path::to_path_buf)
         .ok_or_else(unavailable)?;
-    let systemd_run = tinybox_linux::trusted_systemd_run_program().map_err(|_| unavailable())?;
-    let argv = tinybox_linux::native_jail_argv_with_programs(&native, &systemd_run, &bwrap)
+    #[cfg(target_os = "linux")]
+    let argv = tinybox_linux::native_jail_argv_with_programs(
+        &native,
+        &tinybox_linux::trusted_systemd_run_program().map_err(|_| unavailable())?,
+        &bwrap,
+    )
         .map_err(|_| unavailable())?;
+    #[cfg(not(target_os = "linux"))]
+    return Err(unavailable());
     backend.bind(&argv)?;
     command.argv = argv;
     command.env = launcher_environment();
     command.cwd = None;
     Ok(jail)
+}
+
+#[cfg(target_os = "linux")]
+fn native_launchers_available() -> bool {
+    tinybox_linux::trusted_systemd_run_program().is_ok()
+        && tinybox_jail::BubblewrapBackend::new().program().is_some()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn native_launchers_available() -> bool {
+    false
 }
 
 fn launcher_environment() -> std::collections::BTreeMap<String, String> {

@@ -246,6 +246,18 @@ fn deny_read_of_a_missing_path_is_masked_prospectively() -> io::Result<()> {
 }
 
 #[test]
+fn prospective_denial_inside_a_read_only_grant_is_masked() -> io::Result<()> {
+    let root = tempfile::tempdir()?;
+    let grant = tempfile::tempdir()?;
+    let denied = grant.path().join("later");
+    let mut j = jail(root.path()).add_read_only(grant.path());
+    j.deny_read = vec![denied.clone()];
+    let argv = build(&j)?;
+    assert!(pair(&argv, "--tmpfs", &denied).is_some());
+    Ok(())
+}
+
+#[test]
 fn missing_root_is_not_found() {
     let missing = jail(Path::new("/nonexistent/tinybox-jail-root"));
     let err = jail_args(&missing, None, OPTS).err().map(|e| e.kind());
