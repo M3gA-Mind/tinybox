@@ -261,10 +261,16 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
         &mut std::io::BufReader::new(child.stdout.as_mut().ok_or("missing stdout pipe")?),
         &mut ready,
     )?;
-    assert_eq!(
-        ready, "READY\n",
-        "launcher did not complete resource probes"
-    );
+    if ready != "READY\n" {
+        let output = child.wait_with_output()?;
+        return Err(format!(
+            "launcher did not complete resource probes: status {:?}, stdout {}, stderr {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
     let unit = command
         .argv
         .iter()
