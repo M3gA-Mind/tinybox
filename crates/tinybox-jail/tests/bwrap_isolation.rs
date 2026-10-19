@@ -287,7 +287,7 @@ fn host_processes_are_invisible() -> io::Result<()> {
     let root = tempfile::tempdir()?;
     let (ok, out) = sh(&backend, &jail(root.path()), "ls /proc | grep -c '^[0-9]'")?;
     assert!(ok);
-    let visible: u32 = out.trim().parse().unwrap_or(u32::MAX);
+    let visible: u32 = out.trim().parse().map_err(io::Error::other)?;
     assert!(visible <= 8, "only the jail's own processes: {visible}");
     done("pids", start);
     Ok(())
@@ -306,21 +306,18 @@ fn network_is_unreachable_when_denied_and_reachable_when_shared() -> io::Result<
     let root = tempfile::tempdir()?;
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
-    let connect = format!("exec 3<>/dev/tcp/127.0.0.1/{port}");
+    let connect = format!("echo started; exec 3<>/dev/tcp/127.0.0.1/{port}");
     let mut cmd = Command::new("/usr/bin/env");
     cmd.args(["bash", "-c", &connect]);
-    let denied = run(&backend, &jail(root.path()).deny_net(), cmd)?;
-    assert!(!denied.status.success(), "connect must fail under deny_net");
+    let (connected, _) = started(&run(&backend, &jail(root.path()).deny_net(), cmd)?)?;
+    assert!(!connected, "connect must fail under deny_net");
 
     // Control: with the host network shared the same connect succeeds, which
     // is exactly the exposure `allow_net` carries.
     let mut cmd = Command::new("/usr/bin/env");
     cmd.args(["bash", "-c", &connect]);
-    let shared = run(&backend, &jail(root.path()), cmd)?;
-    assert!(
-        shared.status.success(),
-        "control connect should reach the host listener"
-    );
+    let (connected, _) = started(&run(&backend, &jail(root.path()), cmd)?)?;
+    assert!(connected, "control connect should reach the host listener");
     done("network", start);
     Ok(())
 }
@@ -345,12 +342,17 @@ fn parent_environment_is_not_inherited_and_explicit_env_is_passed() -> io::Resul
 /// Waits until `pid` has exec'd `bwrap` (the launcher shell execs it), then
 /// returns its raw `cmdline` and `environ`.
 fn host_process_view(pid: u32) -> io::Result<(Vec<u8>, Vec<u8>)> {
-    for _ in 0..200 {
+    let mut reached = false;
+    for _ in 0..300 {
         let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
         if comm.trim() == "bwrap" {
+            reached = true;
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    if !reached {
+        return Err(io::Error::other("the launcher never exec'd bwrap"));
     }
     Ok((
         std::fs::read(format!("/proc/{pid}/cmdline"))?,
@@ -393,10 +395,9 @@ fn the_private_args_file_is_not_reachable_from_inside_the_sandbox() -> io::Resul
     let root = tempfile::tempdir()?;
     let mut cmd = Command::new("/bin/sh");
     cmd.arg("-c")
-        .arg("ls -l /proc/self/fd; ls /tmp")
+        .arg("echo started; ls -l /proc/self/fd; ls /tmp")
         .env("GITHUB_TOKEN", "ghp_inside_s3cret");
-    let out = run(&backend, &jail(root.path()).deny_net(), cmd)?;
-    let text = String::from_utf8_lossy(&out.stdout);
+    let (_, text) = started(&run(&backend, &jail(root.path()).deny_net(), cmd)?)?;
     assert!(
         !text.contains("tinybox-bwrap"),
         "args file reachable: {text}"

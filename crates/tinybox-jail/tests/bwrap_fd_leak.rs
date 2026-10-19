@@ -80,7 +80,7 @@ fn descriptors_opened_by_another_thread_during_the_spawn_do_not_leak() -> io::Re
             &jail(root.path()).deny_net(),
             "ls -l /proc/self/fd | grep -c leak-canary-file",
         )?;
-        leaks += out.trim().parse::<u32>().unwrap_or(0);
+        leaks += out.trim().parse::<u32>().map_err(io::Error::other)?;
     }
     stop.store(true, Ordering::Relaxed);
     opener
