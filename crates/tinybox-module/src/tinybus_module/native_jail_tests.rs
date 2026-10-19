@@ -550,9 +550,7 @@ fn active_scope_cgroup(
         "scope {unit} has no cgroup path; systemd-run status is {:?}",
         child.try_wait()?
     );
-    Ok(std::path::Path::new("/sys/fs/cgroup").join(
-        control_group.trim_start_matches('/').trim(),
-    ))
+    Ok(std::path::Path::new("/sys/fs/cgroup").join(control_group.trim_start_matches('/').trim()))
 }
 
 #[cfg(target_os = "linux")]
@@ -754,10 +752,7 @@ fn native_scope_exit_kills_double_forked_setsid_descendants()
 #[tokio::test]
 async fn native_cancellation_kills_detached_descendants_and_preserves_stream_events()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
-    use std::{
-        process::Command,
-        time::Duration,
-    };
+    use std::{process::Command, time::Duration};
 
     if !native_resource_runtime_available() {
         eprintln!("skipped: rootless systemd scope and bubblewrap namespaces are unavailable");
