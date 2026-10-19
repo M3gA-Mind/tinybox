@@ -110,3 +110,22 @@ fn canonicalize_keeps_missing_read_write_as_is() {
     j.canonicalize().unwrap();
     assert_eq!(j.read_write, vec![PathBuf::from("/this/never/existed")]);
 }
+
+#[cfg(unix)]
+#[test]
+fn canonicalize_deduplicates_denials_that_resolve_through_symlink_aliases() -> std::io::Result<()> {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir()?;
+    let store = tempfile::tempdir()?;
+    let credential = store.path().join("credential");
+    std::fs::write(&credential, b"secret")?;
+    let alias = root.path().join("credential-alias");
+    symlink(&credential, &alias)?;
+    let mut jail = Jail::new(root.path(), "alias-denial");
+    jail.deny_read = vec![alias, credential.clone()];
+
+    jail.canonicalize()?;
+
+    assert_eq!(jail.deny_read, vec![credential.canonicalize()?]);
+    Ok(())
+}
