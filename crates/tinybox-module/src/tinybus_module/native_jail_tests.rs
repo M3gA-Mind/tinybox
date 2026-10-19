@@ -745,7 +745,6 @@ fn native_scope_exit_kills_double_forked_setsid_descendants()
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-#[allow(clippy::too_many_lines)] // Cancellation and event cleanup are one live lifecycle proof.
 async fn native_cancellation_kills_detached_descendants_and_preserves_stream_events()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use std::{
@@ -840,18 +839,25 @@ async fn native_cancellation_kills_detached_descendants_and_preserves_stream_eve
         "cancel did not acknowledge child cleanup"
     );
 
-    let deadline = Instant::now() + Duration::from_secs(3);
+    assert_process_disappears(detached, pid_namespace, "cancelled descendant")
+}
+
+#[cfg(target_os = "linux")]
+fn assert_process_disappears(
+    pid: i32,
+    namespace_inode: u64,
+    description: &str,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
-        let still_alive = pid_namespace_contains_process(detached, pid_namespace)?;
-        if !still_alive {
-            break;
+        if !pid_namespace_contains_process(pid, namespace_inode)? {
+            return Ok(());
         }
-        if Instant::now() >= deadline {
-            return Err(format!("cancelled descendant {detached} survived cleanup").into());
+        if std::time::Instant::now() >= deadline {
+            return Err(format!("{description} {pid} survived cleanup").into());
         }
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    Ok(())
 }
 
 fn shell_quote(value: &str) -> String {
