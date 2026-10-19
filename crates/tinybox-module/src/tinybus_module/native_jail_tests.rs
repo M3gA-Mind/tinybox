@@ -189,7 +189,7 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
     let request = tinybox_bus::NativeJailRequest {
         jail,
         resources: Some(tinybox_bus::NativeJailResourceRequest {
-            cpu_millis: Some(1),
+            cpu_millis: Some(1000),
             memory_bytes: Some(64 * 1024 * 1024),
             pids_max: Some(16),
             disk_bytes: None,
@@ -273,8 +273,8 @@ fn resource_aware_namespace_jail_preserves_grants_and_blocks_manager_escape()
     let quota: u64 = cpu_max.next().ok_or("missing CPU quota")?.parse()?;
     let period: u64 = cpu_max.next().ok_or("missing CPU period")?.parse()?;
     assert!(
-        quota > 0 && quota * 1000 <= period,
-        "CPU quota exceeded requested 1 milli-CPU: {quota}/{period}"
+        quota > 0 && quota <= period,
+        "CPU quota exceeded requested 1 CPU: {quota}/{period}"
     );
     child
         .stdin
