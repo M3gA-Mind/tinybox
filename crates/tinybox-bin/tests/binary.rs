@@ -106,7 +106,11 @@ fn unsupported_legacy_box_fields_fail_closed_without_recording_completion()
 
     let mut record = serde_json::to_value(old_box("box-future")?)?;
     // Historical files may omit the supported ports field; that remains valid.
-    record["spec"].as_object_mut().unwrap().remove("ports");
+    record
+        .get_mut("spec")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or("serialized box spec was not an object")?
+        .remove("ports");
     let valid = [("box-future".to_owned(), record)]
         .into_iter()
         .collect::<std::collections::BTreeMap<_, _>>();
