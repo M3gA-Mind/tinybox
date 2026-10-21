@@ -574,7 +574,7 @@ async fn deleting_rows_while_scanning_does_not_skip_a_later_page() -> TestResult
         .documents()
         .query_all(BOX_COLLECTION, &Query::all())
         .await?;
-    assert!(source.is_empty());
+    assert_eq!(source, Vec::<Versioned<Value>>::new());
     assert_eq!(target.len(), 180);
     assert_eq!(target.first().map(|row| row.id.as_str()), Some("box-000"));
     assert_eq!(target.last().map(|row| row.id.as_str()), Some("box-179"));

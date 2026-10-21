@@ -63,12 +63,15 @@ fn a_stopped_bridge_and_a_bridge_callback_fail_without_waiting() -> TestResult {
     let (jobs, receiver) = tokio::sync::mpsc::unbounded_channel::<Job>();
     drop(receiver);
     let stopped = Blocking { jobs };
-    assert!(stopped.run(async { () }).is_err());
+    assert!(stopped.run(async {}).is_err());
 
     let bridge = Blocking::new()?;
     let callback = bridge.clone();
-    let outer = bridge.run(async move { callback.run(async { () }) })?;
-    let recursive = outer.expect_err("a bridge callback must not block on itself");
+    let outer = bridge.run(async move { callback.run(async {}) })?;
+    let recursive = match outer {
+        Ok(()) => return Err("a bridge callback must be rejected".into()),
+        Err(error) => error,
+    };
     assert_eq!(
         recursive.kind(),
         tinystoragedrivers_types::ErrorKind::Backend
@@ -79,9 +82,12 @@ fn a_stopped_bridge_and_a_bridge_callback_fail_without_waiting() -> TestResult {
 #[test]
 fn a_panicking_storage_future_is_reported_as_a_dropped_bridge_reply() -> TestResult {
     let bridge = Blocking::new()?;
-    let error = bridge
-        .run(async { panic!("simulated storage task panic") })
-        .expect_err("the bridge must report a dropped reply");
+    let error =
+        bridge.run(async { std::panic::resume_unwind(Box::new("simulated storage task panic")) });
+    let error = match error {
+        Ok(()) => return Err("a panicking task must drop its reply".into()),
+        Err(error) => error,
+    };
     assert!(error.to_string().contains("dropped a call"));
     Ok(())
 }
