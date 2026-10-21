@@ -154,7 +154,8 @@ fn baseline_mounts() -> Vec<Mount> {
 /// - `deny_read` subtracted last.
 ///
 /// # Errors
-/// - `NotFound` when the root or a `read_write` grant does not exist;
+/// - `NotFound` when the root, a `read_write` grant, or a `deny_read` path does
+///   not exist;
 /// - `InvalidInput` for a relative path or one containing `..`, for a symlink
 ///   below a writable grant that a nested grant goes through, for a grant that is `/`, `/tmp`, or at or under `/proc` or
 ///   `/dev` (it would replace a private mount and expose the host's), and for
@@ -324,9 +325,19 @@ fn deny_masks(denied: &[PathBuf], mounts: &[Mount]) -> io::Result<Vec<OsString>>
                 os("/dev/null"),
                 deny.clone().into_os_string(),
             ]),
-            // Nothing there to hide. A path created after spawn is NOT
-            // protected; deny paths must exist when the jail starts.
-            Err(_) => {}
+            // Bubblewrap creates a missing --tmpfs destination on the host
+            // before mounting over it. Refuse instead of mutating a granted
+            // directory or preventing a future file from being created there.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "deny_read path {} must exist before starting the jail",
+                        deny.display()
+                    ),
+                ));
+            }
+            Err(error) => return Err(error),
         }
     }
     Ok(argv)
