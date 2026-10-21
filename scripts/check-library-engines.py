@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 ROOT = Path(__file__).resolve().parent.parent
 LIBRARY_KINDS = {
@@ -28,12 +29,22 @@ ALLOWED_STORAGE_PACKAGES = {
 STORAGE_IMPLEMENTATION = re.compile(r"^tinystoragedrivers(?:-|$)")
 OTHER_ENGINES = {
     "rusqlite",
+    "libsqlite3-sys",
     "sqlx",
     "mongodb",
+    "bson",
+    "aws-sdk-s3",
+    "lapin",
     "keyring",
     "sled",
     "redb",
+    "rocksdb",
 }
+FEATURE_MODES = (
+    ("default", []),
+    ("no-default", ["--no-default-features"]),
+    ("all", ["--all-features"]),
+)
 
 
 def tree_names(output: str) -> list[str]:
@@ -64,6 +75,25 @@ def forbidden(names: list[str]) -> list[str]:
     )
 
 
+def library_packages(metadata: dict) -> dict[str, dict]:
+    """Select library targets by workspace member ID, failing closed on bad metadata."""
+    packages_by_id = {package["id"]: package for package in metadata.get("packages", [])}
+    members = metadata.get("workspace_members", [])
+    if not members:
+        raise RuntimeError("cargo metadata reported no workspace members")
+
+    packages: dict[str, dict] = {}
+    for member_id in members:
+        package = packages_by_id.get(member_id)
+        if package is None:
+            raise RuntimeError(f"workspace member ID was not returned: {member_id}")
+        if any(set(target["kind"]) & LIBRARY_KINDS for target in package["targets"]):
+            packages[package["name"]] = package
+    if not packages:
+        raise RuntimeError("no workspace library targets found; refusing empty pass")
+    return packages
+
+
 def self_test() -> None:
     parsed = tree_names(
         "tinybox-core v0.1.40\r\n"
@@ -80,13 +110,94 @@ def self_test() -> None:
         "tinystoragedrivers-document"
     ]
     assert forbidden(["tinybox-core", "rusqlite"]) == ["rusqlite"]
+    for engine in OTHER_ENGINES:
+        assert forbidden(["tinybox-core", engine]) == [engine], engine
+    assert forbidden(["tinybox-core", "rusqlite-helper", "not-mongodb"]) == []
     assert tree_names("\r\n") == []
     if not tree_names("tinybox-core v0.1.40\r\n"):
         raise AssertionError("tree parser accepted no root package")
 
+    synthetic = {
+        "packages": [
+            {
+                "id": f"path+tinybox#{kind}",
+                "name": f"tinybox-{kind}",
+                "targets": [{"kind": [kind]}],
+            }
+            for kind in sorted(LIBRARY_KINDS)
+        ]
+        + [
+            {"id": "path+tinybox#bin", "name": "tinybox-cli", "targets": [{"kind": ["bin"]}]},
+            {"id": "registry+outside#lib", "name": "unrelated", "targets": [{"kind": ["lib"]}]},
+        ],
+        "workspace_members": [f"path+tinybox#{kind}" for kind in sorted(LIBRARY_KINDS)]
+        + ["path+tinybox#bin"],
+    }
+    assert set(library_packages(synthetic)) == {
+        *(f"tinybox-{kind}" for kind in LIBRARY_KINDS),
+    }
+    for broken_metadata in (
+        {"packages": [], "workspace_members": []},
+        {"packages": [], "workspace_members": ["missing"]},
+        {
+            "packages": [{"id": "bin", "name": "tinybox-cli", "targets": [{"kind": ["bin"]}]}],
+            "workspace_members": ["bin"],
+        },
+    ):
+        try:
+            library_packages(broken_metadata)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("library target discovery accepted empty/bad metadata")
 
-def cargo_json(args: list[str]) -> dict:
-    result = subprocess.run(
+    for malformed in ("", "not json", "[]"):
+        try:
+            parsed_metadata = json.loads(malformed)
+            library_packages(parsed_metadata)
+        except (json.JSONDecodeError, RuntimeError, AttributeError, TypeError):
+            pass
+        else:
+            raise AssertionError("malformed cargo metadata was accepted")
+    class FakeResult:
+        def __init__(self, returncode: int, stdout: str = "", stderr: str = ""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    try:
+        cargo_json(
+            ["metadata"],
+            lambda *args, **kwargs: FakeResult(2, stderr="metadata failed"),
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("failed cargo metadata command was accepted")
+    try:
+        cargo_tree_names(
+            "tinybox-core",
+            ["tree"],
+            lambda *args, **kwargs: FakeResult(1, stderr="tree failed"),
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("failed cargo tree command was accepted")
+    try:
+        cargo_tree_names(
+            "tinybox-core",
+            ["tree"],
+            lambda *args, **kwargs: FakeResult(0, "other-package v0.1.0\n"),
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("dependency tree without requested root was accepted")
+
+
+def cargo_json(args: list[str], runner: Callable = subprocess.run) -> dict:
+    result = runner(
         ["cargo", *args], cwd=ROOT, text=True, capture_output=True, check=False
     )
     if result.returncode:
@@ -94,6 +205,27 @@ def cargo_json(args: list[str]) -> dict:
             f"cargo {' '.join(args)} failed ({result.returncode}):\n{result.stderr}"
         )
     return json.loads(result.stdout)
+
+
+def validate_tree(package_name: str, output: str) -> list[str]:
+    """Require the queried package to be present before accepting its graph."""
+    names = tree_names(output)
+    if package_name not in names:
+        raise RuntimeError(f"{package_name}: tree omitted its root package")
+    return names
+
+
+def cargo_tree_names(
+    package_name: str, args: list[str], runner: Callable = subprocess.run
+) -> list[str]:
+    result = runner(
+        ["cargo", *args], cwd=ROOT, text=True, capture_output=True, check=False
+    )
+    if result.returncode:
+        raise RuntimeError(
+            f"cargo {' '.join(args)} failed ({result.returncode}):\n{result.stderr}"
+        )
+    return validate_tree(package_name, result.stdout)
 
 
 def main() -> int:
@@ -106,27 +238,11 @@ def main() -> int:
         return 2
 
     metadata = cargo_json(["metadata", "--locked", "--format-version", "1", "--no-deps"])
-    packages_by_id = {package["id"]: package for package in metadata["packages"]}
-    members = metadata.get("workspace_members", [])
-    if not members:
-        raise RuntimeError("cargo metadata reported no workspace members")
-
-    packages: dict[str, dict] = {}
-    for member_id in members:
-        package = packages_by_id.get(member_id)
-        if package is None:
-            raise RuntimeError(f"workspace member ID was not returned: {member_id}")
-        if any(set(target["kind"]) & LIBRARY_KINDS for target in package["targets"]):
-            packages[package["name"]] = package
-    if not packages:
-        raise RuntimeError("no workspace library targets found; refusing empty pass")
+    packages = library_packages(metadata)
 
     failures: list[str] = []
     for package_name in sorted(packages):
-        for feature_mode, feature_args in (
-            ("default", ["--no-default-features"]),
-            ("all", ["--all-features"]),
-        ):
+        for feature_mode, feature_args in FEATURE_MODES:
             command = [
                 "tree",
                 "--locked",
@@ -140,23 +256,11 @@ def main() -> int:
                 package_name,
                 *feature_args,
             ]
-            result = subprocess.run(
-                ["cargo", *command],
-                cwd=ROOT,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            if result.returncode:
+            try:
+                names = cargo_tree_names(package_name, command)
+            except RuntimeError:
                 failures.append(
-                    f"{package_name} ({feature_mode}): cargo {' '.join(command)} "
-                    f"failed ({result.returncode})\n{result.stderr}"
-                )
-                continue
-            names = tree_names(result.stdout)
-            if package_name not in names:
-                failures.append(
-                    f"{package_name} ({feature_mode}): tree omitted its root package"
+                    f"{package_name} ({feature_mode}): cargo tree failed or omitted its root"
                 )
                 continue
             blocked = forbidden(names)
@@ -170,7 +274,7 @@ def main() -> int:
     if failures:
         print("\n".join(failures), file=sys.stderr)
         return 1
-    print(f"checked {len(packages)} workspace libraries in default and all features")
+    print(f"checked {len(packages)} workspace libraries in default, no-default, and all features")
     return 0
 
 
