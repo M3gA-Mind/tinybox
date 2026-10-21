@@ -407,6 +407,81 @@ async fn a_destination_readback_failure_preserves_legacy_source() -> TestResult 
 }
 
 #[tokio::test]
+async fn changed_destination_content_fails_readback_without_deleting_source() -> TestResult {
+    let storage = storage("tinybox-migrate-destination-race")?;
+    seed_legacy(&storage, "b1", old_box("b1"), None).await?;
+    let mut replacement = box_v1::to_body(old_box("b1")).map_err(std::io::Error::other)?;
+    replacement["created_ms"] = json!(9000);
+    let faulty = Faulty::changing_target_after_write(
+        Arc::clone(storage.documents()),
+        "b1".to_owned(),
+        replacement,
+    );
+    let raced = Storage::new(
+        faulty,
+        Arc::clone(storage.streams()),
+        Arc::clone(storage.kv()),
+        Arc::clone(storage.blobs()),
+        Arc::clone(storage.queues()),
+        Arc::clone(storage.secrets()),
+    );
+
+    let error = prepare(&raced)
+        .await
+        .err()
+        .ok_or_else(|| std::io::Error::other("changed destination must fail verification"))?;
+
+    assert_eq!(error.kind(), ErrorKind::Conflict);
+    assert!(
+        storage
+            .documents()
+            .get(V1_BOX_COLLECTION, "b1")
+            .await?
+            .is_some()
+    );
+    assert!(
+        storage
+            .documents()
+            .get(MIGRATIONS_COLLECTION, BOXES_STEP)
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_concurrent_matching_receipt_is_accepted_idempotently() -> TestResult {
+    let storage = storage("tinybox-migrate-receipt-race")?;
+    seed_legacy(&storage, "b1", old_box("b1"), None).await?;
+    let faulty = Faulty::racing_receipt(Arc::clone(storage.documents()));
+    let raced = Storage::new(
+        faulty,
+        Arc::clone(storage.streams()),
+        Arc::clone(storage.kv()),
+        Arc::clone(storage.blobs()),
+        Arc::clone(storage.queues()),
+        Arc::clone(storage.secrets()),
+    );
+
+    prepare(&raced).await?;
+
+    let receipt = storage
+        .documents()
+        .get(MIGRATIONS_COLLECTION, BOXES_STEP)
+        .await?
+        .ok_or_else(|| std::io::Error::other("concurrent receipt persisted"))?;
+    assert_eq!(receipt.doc["complete"], true);
+    assert!(
+        storage
+            .documents()
+            .get(V1_BOX_COLLECTION, "b1")
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_legacy_key_and_embedded_identifier_must_match() -> TestResult {
     let storage = storage("tinybox-migrate-id-mismatch")?;
     seed_legacy(&storage, "key-id", old_box("body-id"), None).await?;
@@ -423,6 +498,60 @@ async fn a_legacy_key_and_embedded_identifier_must_match() -> TestResult {
             .get(V1_BOX_COLLECTION, "key-id")
             .await?
             .is_some()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_invalid_legacy_jail_index_is_preserved_for_host_repair() -> TestResult {
+    let storage = storage("tinybox-migrate-invalid-index")?;
+    let invalid = json!({
+        "records": {
+            "jail-1": {
+                "id": "jail-1",
+                "label": "broken",
+                "created_at_unix": -1,
+                "updated_at_unix": 1
+            }
+        },
+        "schema_version": 1
+    });
+    storage
+        .documents()
+        .ensure_collection(&CollectionSpec::new(V1_JAIL_INDEX_COLLECTION))
+        .await?;
+    storage
+        .documents()
+        .put_with(
+            V1_JAIL_INDEX_COLLECTION,
+            "registry",
+            invalid.clone(),
+            Precondition::Absent,
+            WriteOptions::new(),
+        )
+        .await?;
+
+    let error = prepare(&storage)
+        .await
+        .err()
+        .ok_or_else(|| std::io::Error::other("invalid index timestamp must fail closed"))?;
+
+    assert_eq!(error.kind(), ErrorKind::Serialization);
+    assert_eq!(
+        storage
+            .documents()
+            .get(V1_JAIL_INDEX_COLLECTION, "registry")
+            .await?
+            .ok_or_else(|| std::io::Error::other("legacy index preserved"))?
+            .doc,
+        invalid
+    );
+    assert!(
+        storage
+            .documents()
+            .get(MIGRATIONS_COLLECTION, JAIL_INDEX_STEP)
+            .await?
+            .is_none()
     );
     Ok(())
 }

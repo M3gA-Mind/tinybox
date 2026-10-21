@@ -77,12 +77,23 @@ async fn run(args: Vec<std::ffi::OsString>, out: &mut dyn Write, err: &mut dyn W
 }
 
 fn state_path(cli: &Cli) -> Result<PathBuf, Error> {
+    state_path_from_environment(
+        cli,
+        std::env::var_os("TINYBOX_STATE_DIR"),
+        std::env::var_os("XDG_STATE_HOME"),
+        std::env::var_os("HOME"),
+    )
+}
+
+fn state_path_from_environment(
+    cli: &Cli,
+    state_dir: Option<std::ffi::OsString>,
+    xdg_state_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Result<PathBuf, Error> {
     if let Some(path) = cli.requested_store_path() {
         return Ok(path.to_owned());
     }
-    let state_dir = std::env::var_os("TINYBOX_STATE_DIR");
-    let xdg_state_home = std::env::var_os("XDG_STATE_HOME");
-    let home = std::env::var_os("HOME");
     if let Some(dir) = state_dir {
         return Ok(PathBuf::from(dir).join("boxes.json"));
     }

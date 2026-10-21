@@ -66,10 +66,13 @@ fn a_stopped_bridge_and_a_bridge_callback_fail_without_waiting() -> TestResult {
     assert!(stopped.run(async { () }).is_err());
 
     let bridge = Blocking::new()?;
-    ON_BRIDGE.with(|flag| flag.set(true));
-    let recursive = bridge.run(async { () });
-    ON_BRIDGE.with(|flag| flag.set(false));
-    assert!(recursive.is_err());
+    let callback = bridge.clone();
+    let outer = bridge.run(async move { callback.run(async { () }) })?;
+    let recursive = outer.expect_err("a bridge callback must not block on itself");
+    assert_eq!(
+        recursive.kind(),
+        tinystoragedrivers_types::ErrorKind::Backend
+    );
     Ok(())
 }
 
@@ -88,18 +91,36 @@ fn startup_errors_keep_their_context_and_debug_is_redacted() -> TestResult {
     let bridge = Blocking::new()?;
     assert!(format!("{bridge:?}").contains("Blocking"));
 
-    let runtime_error: Result<()> = startup_result(
+    let runtime_error = startup_error(
         "runtime unavailable",
-        Err(std::io::Error::other("runtime fixture")),
+        std::io::Error::other("runtime fixture"),
     );
-    let runtime_error = runtime_error.expect_err("startup failures are returned");
+    assert_eq!(
+        runtime_error.kind(),
+        tinystoragedrivers_types::ErrorKind::Backend
+    );
+    assert_eq!(
+        std::error::Error::source(&runtime_error)
+            .ok_or("runtime startup source missing")?
+            .to_string(),
+        "runtime fixture"
+    );
     assert!(runtime_error.to_string().contains("runtime unavailable"));
 
-    let thread_error: Result<()> = startup_result(
+    let thread_error = startup_error(
         "bridge thread unavailable",
-        Err(std::io::Error::other("thread fixture")),
+        std::io::Error::other("thread fixture"),
     );
-    let thread_error = thread_error.expect_err("thread startup failures are returned");
+    assert_eq!(
+        thread_error.kind(),
+        tinystoragedrivers_types::ErrorKind::Backend
+    );
+    assert_eq!(
+        std::error::Error::source(&thread_error)
+            .ok_or("thread startup source missing")?
+            .to_string(),
+        "thread fixture"
+    );
     assert!(
         thread_error
             .to_string()

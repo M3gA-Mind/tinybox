@@ -35,29 +35,25 @@ impl fmt::Debug for Blocking {
 impl Blocking {
     /// Start the runtime thread.
     pub(crate) fn new() -> Result<Self> {
-        let runtime = startup_result(
-            "cannot build the storage bridge runtime",
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build(),
-        )?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| startup_error("cannot build the storage bridge runtime", error))?;
         let (jobs, mut receiver) = mpsc::unbounded_channel::<Job>();
-        startup_result(
-            "cannot start the storage bridge thread",
-            thread::Builder::new()
-                .name("tinybox-storage-bridge".into())
-                .spawn(move || {
-                    ON_BRIDGE.with(|flag| flag.set(true));
-                    runtime.block_on(async move {
-                        let mut running = tokio::task::JoinSet::new();
-                        while let Some(job) = receiver.recv().await {
-                            running.spawn(job);
-                            while running.try_join_next().is_some() {}
-                        }
-                        while running.join_next().await.is_some() {}
-                    });
-                }),
-        )?;
+        thread::Builder::new()
+            .name("tinybox-storage-bridge".into())
+            .spawn(move || {
+                ON_BRIDGE.with(|flag| flag.set(true));
+                runtime.block_on(async move {
+                    let mut running = tokio::task::JoinSet::new();
+                    while let Some(job) = receiver.recv().await {
+                        running.spawn(job);
+                        while running.try_join_next().is_some() {}
+                    }
+                    while running.join_next().await.is_some() {}
+                });
+            })
+            .map_err(|error| startup_error("cannot start the storage bridge thread", error))?;
         Ok(Self { jobs })
     }
 
@@ -105,8 +101,8 @@ fn on_current_thread_runtime() -> bool {
         .is_ok_and(|handle| handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread)
 }
 
-fn startup_result<T>(message: &'static str, result: std::io::Result<T>) -> Result<T> {
-    result.map_err(|source| StorageError::backend(message).with_source(source))
+fn startup_error(message: &'static str, source: std::io::Error) -> StorageError {
+    StorageError::backend(message).with_source(source)
 }
 
 #[cfg(test)]

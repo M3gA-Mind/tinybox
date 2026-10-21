@@ -40,6 +40,8 @@ pub(crate) struct Faulty {
     fail_target_readback: bool,
     target_written: std::sync::atomic::AtomicBool,
     source_replacement: Mutex<Option<(String, Value)>>,
+    target_replacement: Mutex<Option<(String, Value)>>,
+    receipt_race: std::sync::atomic::AtomicBool,
 }
 
 impl Faulty {
@@ -65,6 +67,8 @@ impl Faulty {
             fail_target_readback: false,
             target_written: std::sync::atomic::AtomicBool::new(false),
             source_replacement: Mutex::new(None),
+            target_replacement: Mutex::new(None),
+            receipt_race: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -76,6 +80,8 @@ impl Faulty {
             fail_target_readback: false,
             target_written: std::sync::atomic::AtomicBool::new(false),
             source_replacement: Mutex::new(None),
+            target_replacement: Mutex::new(None),
+            receipt_race: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -87,6 +93,8 @@ impl Faulty {
             fail_target_readback: true,
             target_written: std::sync::atomic::AtomicBool::new(false),
             source_replacement: Mutex::new(None),
+            target_replacement: Mutex::new(None),
+            receipt_race: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -102,6 +110,38 @@ impl Faulty {
             fail_target_readback: false,
             target_written: std::sync::atomic::AtomicBool::new(false),
             source_replacement: Mutex::new(Some((source_id, replacement))),
+            target_replacement: Mutex::new(None),
+            receipt_race: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
+    pub(crate) fn changing_target_after_write(
+        inner: Arc<dyn DocumentStore>,
+        target_id: String,
+        replacement: Value,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            failing: Failing::new(Arc::clone(&inner)),
+            inner,
+            conflicts: AtomicUsize::new(0),
+            fail_target_readback: false,
+            target_written: std::sync::atomic::AtomicBool::new(false),
+            source_replacement: Mutex::new(None),
+            target_replacement: Mutex::new(Some((target_id, replacement))),
+            receipt_race: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
+    pub(crate) fn racing_receipt(inner: Arc<dyn DocumentStore>) -> Arc<Self> {
+        Arc::new(Self {
+            failing: Failing::new(Arc::clone(&inner)),
+            inner,
+            conflicts: AtomicUsize::new(0),
+            fail_target_readback: false,
+            target_written: std::sync::atomic::AtomicBool::new(false),
+            source_replacement: Mutex::new(None),
+            target_replacement: Mutex::new(None),
+            receipt_race: std::sync::atomic::AtomicBool::new(true),
         })
     }
 }
@@ -149,6 +189,15 @@ impl DocumentStore for Faulty {
         precondition: Precondition,
         options: WriteOptions,
     ) -> Result<Version> {
+        if collection == tinybox_bus::storage::MIGRATIONS_COLLECTION
+            && self.receipt_race.swap(false, Ordering::SeqCst)
+            && matches!(precondition, Precondition::Absent)
+        {
+            self.inner
+                .put_with(collection, id, doc, precondition, options)
+                .await?;
+            return Err(StorageError::conflict("injected concurrent receipt write"));
+        }
         if matches!(precondition, Precondition::Version(_)) {
             let left = self.conflicts.load(Ordering::SeqCst);
             if left > 0 {
@@ -168,6 +217,24 @@ impl DocumentStore for Faulty {
             .await?;
         if collection == tinybox_bus::storage::BOX_COLLECTION {
             self.target_written.store(true, Ordering::SeqCst);
+            let replacement = self
+                .target_replacement
+                .lock()
+                .expect("target replacement mutex")
+                .take();
+            if let Some((target_id, body)) = replacement
+                && let Some(target) = self.inner.get(collection, &target_id).await?
+            {
+                self.inner
+                    .put_with(
+                        collection,
+                        &target_id,
+                        body,
+                        Precondition::Version(target.version),
+                        options,
+                    )
+                    .await?;
+            }
             let replacement = self
                 .source_replacement
                 .lock()

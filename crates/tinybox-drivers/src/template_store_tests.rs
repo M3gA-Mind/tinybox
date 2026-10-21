@@ -35,6 +35,40 @@ async fn templates_persist_as_documents_and_round_trip() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn importing_templates_is_idempotent_but_preserves_conflicting_values() -> TestResult {
+    let store = DocumentTemplateStore::open(storage("template-import")?).await?;
+    let name = TemplateName::new("released")?;
+    let imported = SnapshotId::new("old-snapshot")?;
+    store.import_if_missing(&name, &imported)?;
+    store.import_if_missing(&name, &imported)?;
+    assert_eq!(store.get(&name)?, imported);
+
+    let conflict = store.import_if_missing(&name, &SnapshotId::new("newer-snapshot")?);
+    assert!(matches!(
+        conflict,
+        Err(Error::Store {
+            operation: "import",
+            ..
+        })
+    ));
+    assert_eq!(store.get(&name)?, imported);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn template_store_debug_does_not_expose_storage_contents() -> TestResult {
+    let store = DocumentTemplateStore::open(storage("template-debug")?).await?;
+    let name = TemplateName::new("private-name")?;
+    store.save(&name, &SnapshotId::new("private-snapshot")?)?;
+
+    let debug = format!("{store:?}");
+    assert!(debug.contains("DocumentTemplateStore"));
+    assert!(!debug.contains("private-name"));
+    assert!(!debug.contains("private-snapshot"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn resaving_replaces_a_template_and_remove_is_idempotently_reported() -> TestResult {
     let store = DocumentTemplateStore::open(storage("template-replace")?).await?;
     let name = TemplateName::new("rust-ci")?;
