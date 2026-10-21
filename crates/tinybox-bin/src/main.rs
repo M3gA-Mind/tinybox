@@ -22,14 +22,14 @@ const EXIT_TINYBOX_ERROR: u8 = 70;
 async fn main() -> ExitCode {
     let mut out = std::io::stdout().lock();
     let mut err = std::io::stderr().lock();
-    let cli = match Cli::try_parse_from(std::env::args_os()) {
+    run(std::env::args_os().collect(), &mut out, &mut err).await
+}
+
+async fn run(args: Vec<std::ffi::OsString>, out: &mut dyn Write, err: &mut dyn Write) -> ExitCode {
+    let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(parse) => {
-            let stream: &mut dyn Write = if parse.use_stderr() {
-                &mut err
-            } else {
-                &mut out
-            };
+            let stream: &mut dyn Write = if parse.use_stderr() { err } else { out };
             let _ = write!(stream, "{parse}");
             let code = u8::try_from(parse.exit_code()).unwrap_or(EXIT_TINYBOX_ERROR);
             return ExitCode::from(code);
@@ -62,13 +62,7 @@ async fn main() -> ExitCode {
         };
 
     let code = match cli
-        .dispatch(
-            Arc::new(LocalHost::new()),
-            store,
-            templates,
-            &mut out,
-            &mut err,
-        )
+        .dispatch(Arc::new(LocalHost::new()), store, templates, out, err)
         .await
     {
         Ok(code) => code,
@@ -421,3 +415,7 @@ fn storage_error(operation: &'static str, error: &impl std::fmt::Display) -> Err
         message: error.to_string(),
     }
 }
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod tests;

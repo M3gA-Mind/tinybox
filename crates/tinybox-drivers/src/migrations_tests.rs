@@ -426,3 +426,160 @@ async fn a_legacy_key_and_embedded_identifier_must_match() -> TestResult {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn deleting_rows_while_scanning_does_not_skip_a_later_page() -> TestResult {
+    let storage = storage("tinybox-migrate-pages")?;
+    for index in 0..180 {
+        let id = format!("box-{index:03}");
+        seed_legacy(&storage, &id, old_box(&id), None).await?;
+    }
+
+    prepare(&storage).await?;
+
+    let source = storage
+        .documents()
+        .query_all(V1_BOX_COLLECTION, &Query::all())
+        .await?;
+    let target = storage
+        .documents()
+        .query_all(BOX_COLLECTION, &Query::all())
+        .await?;
+    assert!(source.is_empty());
+    assert_eq!(target.len(), 180);
+    assert_eq!(target.first().map(|row| row.id.as_str()), Some("box-000"));
+    assert_eq!(target.last().map(|row| row.id.as_str()), Some("box-179"));
+    let receipt = storage
+        .documents()
+        .get(MIGRATIONS_COLLECTION, BOXES_STEP)
+        .await?
+        .ok_or_else(|| std::io::Error::other("completed scan receipt"))?;
+    assert_eq!(receipt.doc["complete"], true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_backend_query_failure_does_not_write_a_completion_receipt() -> TestResult {
+    let storage = storage("tinybox-migrate-query-failure")?;
+    seed_legacy(&storage, "b1", old_box("b1"), None).await?;
+    let faulty = with_document_fault(
+        &storage,
+        Faults {
+            query: true,
+            ..Faults::default()
+        },
+    );
+
+    assert!(prepare(&faulty).await.is_err());
+    assert!(
+        storage
+            .documents()
+            .get(MIGRATIONS_COLLECTION, BOXES_STEP)
+            .await?
+            .is_none()
+    );
+    assert!(
+        storage
+            .documents()
+            .get(V1_BOX_COLLECTION, "b1")
+            .await?
+            .is_some()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_existing_matching_destination_is_verified_before_source_removal() -> TestResult {
+    let storage = storage("tinybox-migrate-matching-destination")?;
+    let source = old_box("b1");
+    seed_legacy(&storage, "b1", source.clone(), Some(789)).await?;
+    storage
+        .documents()
+        .ensure_collection(&CollectionSpec::new(BOX_COLLECTION))
+        .await?;
+    storage
+        .documents()
+        .put_with(
+            BOX_COLLECTION,
+            "b1",
+            box_v1::to_body(source).map_err(std::io::Error::other)?,
+            Precondition::Absent,
+            WriteOptions::new().schema(BODY_VERSION).expires_ms(789),
+        )
+        .await?;
+
+    prepare(&storage).await?;
+
+    assert!(
+        storage
+            .documents()
+            .get(V1_BOX_COLLECTION, "b1")
+            .await?
+            .is_none()
+    );
+    assert_eq!(
+        storage
+            .documents()
+            .get(BOX_COLLECTION, "b1")
+            .await?
+            .ok_or_else(|| std::io::Error::other("verified existing target"))?
+            .meta
+            .expires_ms,
+        Some(789)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_receipts_and_failed_target_writes_preserve_migration_sources() -> TestResult {
+    let malformed = storage("tinybox-migrate-malformed-receipt")?;
+    seed_legacy(&malformed, "b1", old_box("b1"), None).await?;
+    malformed
+        .documents()
+        .ensure_collection(&CollectionSpec::new(MIGRATIONS_COLLECTION))
+        .await?;
+    malformed
+        .documents()
+        .put_with(
+            MIGRATIONS_COLLECTION,
+            BOXES_STEP,
+            json!({"step": BOXES_STEP, "version": "future", "complete": true}),
+            Precondition::Absent,
+            WriteOptions::new().schema(BODY_VERSION),
+        )
+        .await?;
+    assert!(prepare(&malformed).await.is_err());
+    assert!(
+        malformed
+            .documents()
+            .get(V1_BOX_COLLECTION, "b1")
+            .await?
+            .is_some()
+    );
+
+    let storage = storage("tinybox-migrate-put-failure")?;
+    seed_legacy(&storage, "b1", old_box("b1"), None).await?;
+    let faulty = with_document_fault(
+        &storage,
+        Faults {
+            put: true,
+            ..Faults::default()
+        },
+    );
+    assert!(prepare(&faulty).await.is_err());
+    assert!(
+        storage
+            .documents()
+            .get(V1_BOX_COLLECTION, "b1")
+            .await?
+            .is_some()
+    );
+    assert!(
+        storage
+            .documents()
+            .get(BOX_COLLECTION, "b1")
+            .await?
+            .is_none()
+    );
+    Ok(())
+}

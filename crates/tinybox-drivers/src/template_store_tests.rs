@@ -1,9 +1,11 @@
 //! Behavior tests for document-backed `TinyBox` templates.
 
 use super::*;
+use crate::faulty::{Faults, Faulty};
+use std::sync::Arc;
 use tinystoragedrivers_api::{DocumentStoreExt, Storage, StorageBackend};
 use tinystoragedrivers_testkit::memory_storage;
-use tinystoragedrivers_types::Scope;
+use tinystoragedrivers_types::{ErrorKind, Scope};
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
@@ -59,6 +61,124 @@ async fn template_names_are_isolated_by_the_supplied_scope() -> TestResult {
     assert!(matches!(
         right.get(&name),
         Err(Error::UnknownTemplate { .. })
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn listing_walks_all_pages_and_missing_removal_is_reported() -> TestResult {
+    let storage = storage("template-pages")?;
+    let store = DocumentTemplateStore::open(storage.clone()).await?;
+    for index in 0..300 {
+        let name = TemplateName::new(format!("template-{index:03}"))?;
+        store.save(&name, &SnapshotId::new(format!("snapshot-{index}"))?)?;
+    }
+
+    let listed = store.list()?;
+    assert_eq!(listed.len(), 300);
+    assert_eq!(listed[0].0.as_str(), "template-000");
+    assert_eq!(listed[299].0.as_str(), "template-299");
+    assert!(matches!(
+        store.remove(&TemplateName::new("missing")?),
+        Err(Error::UnknownTemplate { name }) if name == "missing"
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn malformed_template_rows_fail_reads_and_lists_without_hiding_the_error() -> TestResult {
+    let storage = storage("template-malformed")?;
+    let store = DocumentTemplateStore::open(storage.clone()).await?;
+    storage
+        .documents()
+        .put_with(
+            TEMPLATE_COLLECTION,
+            "broken",
+            serde_json::json!({"snapshot": 7}),
+            tinystoragedrivers_types::Precondition::Absent,
+            tinystoragedrivers_types::WriteOptions::new().schema(BODY_VERSION),
+        )
+        .await?;
+
+    assert!(matches!(
+        store.get(&TemplateName::new("broken")?),
+        Err(Error::Store {
+            operation: "read",
+            ..
+        })
+    ));
+    assert!(matches!(
+        store.list(),
+        Err(Error::Store {
+            operation: "list",
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn template_port_failures_keep_the_operation_context() -> TestResult {
+    let base = storage("template-operation-failures")?;
+    let faulty = Faulty::new(Arc::clone(base.documents()), Faults::default());
+    let wrapped = Storage::new(
+        faulty.clone(),
+        Arc::clone(base.streams()),
+        Arc::clone(base.kv()),
+        Arc::clone(base.blobs()),
+        Arc::clone(base.queues()),
+        Arc::clone(base.secrets()),
+    );
+    let store = DocumentTemplateStore::open(wrapped).await?;
+    let name = TemplateName::new("faulted")?;
+    let snapshot = SnapshotId::new("snapshot")?;
+
+    faulty
+        .failing
+        .faults
+        .fail_operation_nth("get", 1, ErrorKind::Backend);
+    assert!(matches!(
+        store.get(&name),
+        Err(Error::Store {
+            operation: "read",
+            ..
+        })
+    ));
+
+    faulty
+        .failing
+        .faults
+        .fail_operation_nth("put", 1, ErrorKind::Backend);
+    assert!(matches!(
+        store.save(&name, &snapshot),
+        Err(Error::Store {
+            operation: "save",
+            ..
+        })
+    ));
+
+    faulty
+        .failing
+        .faults
+        .fail_operation_nth("query", 1, ErrorKind::Backend);
+    assert!(matches!(
+        store.list(),
+        Err(Error::Store {
+            operation: "list",
+            ..
+        })
+    ));
+
+    faulty
+        .failing
+        .faults
+        .fail_operation_nth("delete", 1, ErrorKind::Backend);
+    assert!(matches!(
+        store.remove(&name),
+        Err(Error::Store {
+            operation: "remove",
+            ..
+        })
     ));
     Ok(())
 }
