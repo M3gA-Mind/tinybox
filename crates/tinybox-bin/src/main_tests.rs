@@ -506,6 +506,18 @@ fn normalized_paths_reject_root_and_non_unicode_names() -> TestResult {
             .join(std::ffi::OsStr::from_bytes(b"box-\xff.json"));
         assert!(normalized_path(&non_unicode).is_err());
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let invalid = Path::new(std::ffi::OsStr::from_bytes(b"bad\0path"));
+        assert!(matches!(
+            legacy_source(invalid, "fixture"),
+            Err(Error::Io {
+                operation: "inspect",
+                ..
+            })
+        ));
+    }
     Ok(())
 }
 
@@ -858,5 +870,34 @@ async fn an_invalid_template_name_is_not_recorded_as_imported() -> TestResult {
         }
     ));
     assert_eq!(std::fs::read(&templates_path)?, bytes);
+    Ok(())
+}
+
+#[test]
+fn legacy_box_parser_rejects_unknown_fields_at_object_and_array_depths() -> TestResult {
+    let mut value = serde_json::to_value(sample_box("unknown-field", "/legacy")?)?;
+    value["unexpected"] = serde_json::json!(true);
+    let unknown = [("unknown-field".to_owned(), value)]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+    assert!(matches!(
+        parse_legacy_boxes(&serde_json::to_vec(&unknown)?),
+        Err(Error::Store {
+            operation: "migrate",
+            ..
+        })
+    ));
+
+    let mut record = sample_box("array-field", "/legacy")?;
+    record.spec.network = tinybox_core::NetworkPolicy::Allowlist(
+        tinybox_core::EgressAllowlist::new(["example.test"], [443]),
+    );
+    let mut value = serde_json::to_value(record)?;
+    value["spec"]["network"]["Allowlist"]["hosts"] =
+        serde_json::json!(["example.test", "second.example.test"]);
+    let array = [("array-field".to_owned(), value)]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+    assert!(parse_legacy_boxes(&serde_json::to_vec(&array)?).is_ok());
     Ok(())
 }
