@@ -755,6 +755,16 @@ async fn legacy_box_import_checks_keys_and_store_race_outcomes() -> TestResult {
     ));
     assert_eq!(changed_store.get(&record.id)?.state, BoxState::Stopped);
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_box_import_propagates_storage_read_and_write_failures() -> TestResult {
+    let root = TempDir::new()?;
+    let source = root.path().join("boxes.json");
+    let record = sample_box("expected", "/legacy")?;
+    write_legacy_box(&source, "expected", &record)?;
+
     let (_, failing_read_documents, failing_read_store) = import_test_store("read-error").await?;
     failing_read_documents
         .inner
