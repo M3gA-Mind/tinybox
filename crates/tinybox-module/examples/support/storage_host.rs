@@ -9,13 +9,15 @@ use tinystoragedrivers_testkit::MemoryBackend;
 use tinystoragedrivers_types::Scope;
 
 /// Keeps the real testkit storage host and its bus registration alive.
-pub struct ServedTestStorage {
+pub(crate) struct ServedTestStorage {
     _host: Connection,
     _served: ServedStorage,
 }
 
 /// Serve a real TSD storage endpoint before a module is admitted and started.
-pub async fn serve(bus: &MemoryBus) -> Result<ServedTestStorage, Box<dyn std::error::Error>> {
+pub(crate) async fn serve(
+    bus: &MemoryBus,
+) -> Result<ServedTestStorage, Box<dyn std::error::Error>> {
     let backend = Arc::new(MemoryBackend::new());
     let host = Connection::connect(bus.connect().await?).await?;
     let bound = Arc::clone(&backend);
