@@ -141,6 +141,31 @@ fn non_unicode_store_paths_are_rejected_instead_of_collapsed() -> io::Result<()>
 }
 
 #[test]
+fn released_v0140_public_writer_files_import_and_read_back() -> io::Result<()> {
+    let state = TempDir::new()?;
+    let boxes = state.path().join("boxes.json");
+    let templates = state.path().join("templates.json");
+    let box_bytes = include_bytes!("fixtures/legacy-v0.1.40/boxes.json");
+    let template_bytes = include_bytes!("fixtures/legacy-v0.1.40/templates.json");
+    std::fs::write(&boxes, box_bytes)?;
+    std::fs::write(&templates, template_bytes)?;
+
+    let listed_boxes = tinybox(state.path(), &["ls"])?;
+    assert!(listed_boxes.status.success(), "{}", stderr(&listed_boxes));
+    assert!(stdout(&listed_boxes).contains("box-released"));
+    let listed_templates = tinybox(state.path(), &["template", "ls"])?;
+    assert!(
+        listed_templates.status.success(),
+        "{}",
+        stderr(&listed_templates)
+    );
+    assert!(stdout(&listed_templates).contains("released-template\tsnapshot-released"));
+    assert_eq!(std::fs::read(boxes)?, box_bytes);
+    assert_eq!(std::fs::read(templates)?, template_bytes);
+    Ok(())
+}
+
+#[test]
 fn distinct_store_paths_in_one_directory_have_isolated_state() -> io::Result<()> {
     let state = TempDir::new()?;
     let workspace = TempDir::new()?;

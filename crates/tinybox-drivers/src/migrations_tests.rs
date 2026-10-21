@@ -2,10 +2,16 @@ use super::*;
 use crate::faulty::{Faults, Faulty};
 use serde_json::json;
 use std::sync::Arc;
+use tinybox_core::{
+    BoxId, BoxInfo, BoxSpec, BoxState, HostRef, Placement, SandboxRef, Store, WorkspaceSource,
+};
+use tinybox_jail::IndexStore;
 
 use tinystoragedrivers_document::memory::MemoryConnection;
 use tinystoragedrivers_testkit::memory_storage;
-use tinystoragedrivers_types::Scope;
+use tinystoragedrivers_types::{Precondition, Scope};
+
+use crate::{DocumentBoxStore, DocumentIndexStore};
 
 use tinybox_bus::storage::BOX_COLLECTION;
 
@@ -199,6 +205,79 @@ async fn malformed_or_unrepresentable_legacy_rows_are_not_deleted() -> TestResul
             .get(BOX_COLLECTION, "b1")
             .await?
             .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn released_v1_driver_collection_rows_open_and_read_through_current_stores() -> TestResult {
+    let storage = storage("tinybox-released-driver-rows")?;
+    let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+        "../../tinybox-bin/tests/fixtures/legacy-v0.1.40/collections/documents.json"
+    ))?;
+    let documents = storage.documents();
+    for row in &fixtures {
+        let collection = row["collection"]
+            .as_str()
+            .ok_or_else(|| std::io::Error::other("fixture collection"))?;
+        let id = row["id"]
+            .as_str()
+            .ok_or_else(|| std::io::Error::other("fixture id"))?;
+        let schema = row["schema"]
+            .as_u64()
+            .and_then(|schema| u32::try_from(schema).ok())
+            .ok_or_else(|| std::io::Error::other("fixture schema"))?;
+        let expires_ms = row["expires_ms"].as_i64();
+        let mut options = WriteOptions::new().schema(schema);
+        if let Some(expires_ms) = expires_ms {
+            options = options.expires_ms(expires_ms);
+        }
+        documents
+            .ensure_collection(&CollectionSpec::new(collection))
+            .await?;
+        documents
+            .put_with(
+                collection,
+                id,
+                row["body"].clone(),
+                Precondition::Absent,
+                options,
+            )
+            .await?;
+    }
+
+    let boxes = DocumentBoxStore::open(storage.clone()).await?;
+    let box_info = boxes.get(&BoxId::new("fixture-box")?)?;
+    let expected = BoxInfo::new(
+        BoxId::new("fixture-box")?,
+        BoxState::Ready,
+        BoxSpec::new(
+            Placement::new(HostRef::new("local")?, SandboxRef::new("passthrough")?),
+            WorkspaceSource::LocalDir("/srv/fixture-workspace".into()),
+        )
+        .with_env("FIXTURE", "public-document-writer"),
+    );
+    assert_eq!(box_info, expected);
+
+    let index = DocumentIndexStore::open(storage, "fixture-registry").await?;
+    let index: Value = serde_json::from_slice(
+        &index
+            .load()?
+            .ok_or_else(|| std::io::Error::other("released index row missing"))?,
+    )?;
+    assert_eq!(
+        index,
+        json!({
+            "records": {
+                "jail-fixture": {
+                    "id": "jail-fixture",
+                    "label": "fixture",
+                    "created_at_unix": 1_700_000_000_u64,
+                    "updated_at_unix": 1_700_000_001_u64,
+                }
+            },
+            "schema_version": 1
+        })
     );
     Ok(())
 }
