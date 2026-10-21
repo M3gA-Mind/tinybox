@@ -1,8 +1,8 @@
 //! Unconditional compiled-artifact admission and local grant discovery proof.
 
-use std::time::Duration;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::time::Duration;
 use tinybus::{Connection, broker::Broker, module::ModuleHost, transport::memory::MemoryBus};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
