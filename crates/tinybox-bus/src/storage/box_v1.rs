@@ -158,11 +158,16 @@ fn network_body(network: V1Network) -> Value {
 /// A message when the row is not a v1 box this version understands.
 pub fn to_body(source: Value) -> Result<Value, String> {
     let old: V1Box = serde_json::from_value(source).map_err(|error| error.to_string())?;
-    let spec = old.spec;
-    let _legacy_id = old.id;
+    drop(old.id);
+    let V1Box {
+        state,
+        created_at,
+        spec,
+        ..
+    } = old;
     Ok(json!({
-        "state": state_name(&old.state),
-        "created_ms": old.created_at.as_ref().map(time_ms),
+        "state": state_name(&state),
+        "created_ms": created_at.as_ref().map(time_ms),
         "spec": {
             "runner": spec.runner,
             "workspace": spec.workspace,

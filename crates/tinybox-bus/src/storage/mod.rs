@@ -1,4 +1,4 @@
-//! TinyBox's host-independent storage collection and legacy-body vocabulary.
+//! `TinyBox`'s host-independent storage collection and legacy-body vocabulary.
 //!
 //! Owners declare these collections with [`collections`] and migrate their
 //! legacy rows when their storage adapters open. The bus contract describes
@@ -29,10 +29,10 @@ pub const V1_BOX_COLLECTION: &str = "tinybox_boxes";
 /// The v1 name of [`JAIL_INDEX_COLLECTION`].
 pub const V1_JAIL_INDEX_COLLECTION: &str = "tinybox_jail_index";
 
-/// The body schema version used by TinyBox's current documents.
+/// The body schema version used by `TinyBox`'s current documents.
 pub const BODY_VERSION: u32 = 2;
 
-/// Collections owned by TinyBox, as pure declarations for the host to ensure.
+/// Collections owned by `TinyBox`, as pure declarations for the host to ensure.
 #[must_use]
 pub fn collections() -> Vec<CollectionSpec> {
     [
