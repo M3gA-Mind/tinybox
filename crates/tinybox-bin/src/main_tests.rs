@@ -51,11 +51,14 @@ async fn file_test_storage(
     Ok(backend.for_scope(&scope)?)
 }
 
+type RaceInsert = (Arc<dyn Store>, BoxInfo);
+type PostWriteChange = (Arc<dyn Store>, BoxId, BoxState);
+
 #[derive(Debug)]
 struct ImportDocumentPort {
     inner: Failing<dyn DocumentStore>,
-    race_store: Mutex<Option<(Arc<dyn Store>, BoxInfo)>>,
-    after_write: Mutex<Option<(Arc<dyn Store>, BoxId, BoxState)>>,
+    race_store: Mutex<Option<RaceInsert>>,
+    after_write: Mutex<Option<PostWriteChange>>,
     race_started: AtomicBool,
 }
 
@@ -70,11 +73,17 @@ impl ImportDocumentPort {
     }
 
     fn race_insert(&self, store: Arc<dyn Store>, info: BoxInfo) {
-        *self.race_store.lock().expect("race store mutex") = Some((store, info));
+        *self
+            .race_store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((store, info));
     }
 
     fn change_state_after_write(&self, store: Arc<dyn Store>, id: BoxId, state: BoxState) {
-        *self.after_write.lock().expect("post-write mutex") = Some((store, id, state));
+        *self
+            .after_write
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((store, id, state));
     }
 }
 
@@ -118,36 +127,44 @@ impl DocumentStore for ImportDocumentPort {
         precondition: Precondition,
         options: WriteOptions,
     ) -> std::result::Result<Version, StorageError> {
-        if collection == tinybox_bus::storage::BOX_COLLECTION
+        let race = if collection == tinybox_bus::storage::BOX_COLLECTION
             && self
                 .race_started
                 .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
                 .is_ok()
         {
-            if let Some((store, info)) = self.race_store.lock().expect("race store mutex").take() {
-                std::thread::spawn(move || store.insert(&info))
-                    .join()
-                    .map_err(|_| StorageError::backend("race writer panicked"))?
-                    .map_err(|error| {
-                        StorageError::backend(format!("race writer failed: {error}"))
-                    })?;
-            }
+            self.race_store
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+        } else {
+            None
+        };
+        if let Some((store, info)) = race {
+            std::thread::spawn(move || store.insert(&info))
+                .join()
+                .map_err(|_| StorageError::backend("race writer panicked"))?
+                .map_err(|error| StorageError::backend(format!("race writer failed: {error}")))?;
         }
         let version = self
             .inner
             .put_with(collection, id, value, precondition, options)
             .await?;
-        if collection == tinybox_bus::storage::BOX_COLLECTION {
-            if let Some((store, box_id, state)) =
-                self.after_write.lock().expect("post-write mutex").take()
-            {
-                std::thread::spawn(move || store.set_state(&box_id, state))
-                    .join()
-                    .map_err(|_| StorageError::backend("post-write mutation panicked"))?
-                    .map_err(|error| {
-                        StorageError::backend(format!("post-write mutation failed: {error}"))
-                    })?;
-            }
+        let post_write = if collection == tinybox_bus::storage::BOX_COLLECTION {
+            self.after_write
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+        } else {
+            None
+        };
+        if let Some((store, box_id, state)) = post_write {
+            std::thread::spawn(move || store.set_state(&box_id, state))
+                .join()
+                .map_err(|_| StorageError::backend("post-write mutation panicked"))?
+                .map_err(|error| {
+                    StorageError::backend(format!("post-write mutation failed: {error}"))
+                })?;
         }
         Ok(version)
     }
