@@ -5,11 +5,13 @@
 //! then confirms the boundary actually holds against a real kernel — this file
 //! pins the intent, that one pins the reality.
 
-use std::{
-    collections::BTreeMap,
-    os::unix::fs::PermissionsExt as _,
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
-};
+#[cfg(target_os = "linux")]
+use std::collections::BTreeMap;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::PermissionsExt as _;
+#[cfg(target_os = "linux")]
+use std::path::Path;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
 use tinybox_core::{
