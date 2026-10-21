@@ -39,7 +39,7 @@ impl std::fmt::Debug for DocumentIndexStore {
 }
 
 impl DocumentIndexStore {
-    /// Open an index store after TinyBox's owner migrations have completed.
+    /// Open an index store after `TinyBox`'s owner migrations have completed.
     ///
     /// # Errors
     ///

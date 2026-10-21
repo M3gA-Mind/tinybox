@@ -32,7 +32,7 @@ impl std::fmt::Debug for DocumentTemplateStore {
 }
 
 impl DocumentTemplateStore {
-    /// Open the template store after TinyBox declarations and migrations.
+    /// Open the template store after `TinyBox` declarations and migrations.
     ///
     /// # Errors
     ///

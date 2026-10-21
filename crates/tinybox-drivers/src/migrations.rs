@@ -25,7 +25,7 @@ struct MigrationReceipt {
     complete: bool,
 }
 
-/// Ensure TinyBox's declarations and migrate every known legacy row.
+/// Ensure `TinyBox`'s declarations and migrate every known legacy row.
 ///
 /// Migration receipts record successful scans. Legacy rows are still scanned
 /// on every open so a delayed old writer cannot leave an unreadable record

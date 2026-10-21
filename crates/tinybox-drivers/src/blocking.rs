@@ -1,4 +1,4 @@
-//! A bridge for the synchronous TinyBox model traits over async storage ports.
+//! A bridge for the synchronous `TinyBox` model traits over async storage ports.
 
 use std::fmt;
 use std::future::Future;
