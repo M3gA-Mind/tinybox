@@ -1,4 +1,4 @@
-//! Tests for TinyBox's pure storage collection contract.
+//! Tests for `TinyBox`'s pure storage collection contract.
 
 use super::*;
 
