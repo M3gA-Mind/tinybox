@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Mutex;
 use tempfile::TempDir;
 use tinybox_core::{
     BoxId, BoxInfo, BoxSpec, BoxState, HostRef, Placement, SandboxRef, WorkspaceSource,
@@ -41,6 +42,102 @@ async fn file_test_storage(
     let scope_name = format!("tinybox.cli.{identity}");
     let scope = Scope::new(&scope_name)?;
     Ok(backend.for_scope(&scope)?)
+}
+
+#[derive(Debug)]
+enum InsertResult {
+    Succeed,
+    Duplicate(BoxInfo),
+    Fail,
+}
+
+#[derive(Debug)]
+struct ImportStoreStub {
+    current: Mutex<Option<BoxInfo>>,
+    after_insert: Mutex<Option<BoxInfo>>,
+    insert_result: InsertResult,
+}
+
+impl ImportStoreStub {
+    fn empty(insert_result: InsertResult) -> Self {
+        Self {
+            current: Mutex::new(None),
+            after_insert: Mutex::new(None),
+            insert_result,
+        }
+    }
+}
+
+impl Store for ImportStoreStub {
+    fn insert(&self, info: &BoxInfo) -> tinybox_core::Result<()> {
+        match &self.insert_result {
+            InsertResult::Succeed => {
+                *self.after_insert.lock().map_err(|_| tinybox_core::Error::Store {
+                    operation: "test",
+                    message: "stub lock poisoned".to_owned(),
+                })? = Some(info.clone());
+                Ok(())
+            }
+            InsertResult::Duplicate(existing) => {
+                *self.after_insert.lock().map_err(|_| tinybox_core::Error::Store {
+                    operation: "test",
+                    message: "stub lock poisoned".to_owned(),
+                })? = Some(existing.clone());
+                Err(tinybox_core::Error::DuplicateBox {
+                    id: info.id.to_string(),
+                })
+            }
+            InsertResult::Fail => Err(tinybox_core::Error::Store {
+                operation: "insert",
+                message: "injected failure".to_owned(),
+            }),
+        }
+    }
+
+    fn get(&self, id: &BoxId) -> tinybox_core::Result<BoxInfo> {
+        if let Some(current) = self.current.lock().map_err(|_| tinybox_core::Error::Store {
+            operation: "test",
+            message: "stub lock poisoned".to_owned(),
+        })?.clone() {
+            if &current.id == id {
+                return Ok(current);
+            }
+        }
+        if let Some(current) = self.after_insert.lock().map_err(|_| tinybox_core::Error::Store {
+            operation: "test",
+            message: "stub lock poisoned".to_owned(),
+        })?.clone() {
+            if &current.id == id {
+                return Ok(current);
+            }
+        }
+        Err(tinybox_core::Error::UnknownBox {
+            id: id.to_string(),
+        })
+    }
+
+    fn list(&self) -> tinybox_core::Result<Vec<BoxInfo>> {
+        Ok(self.current.lock().map_err(|_| tinybox_core::Error::Store {
+            operation: "test",
+            message: "stub lock poisoned".to_owned(),
+        })?.clone().into_iter().collect())
+    }
+
+    fn set_state(&self, _id: &BoxId, _state: BoxState) -> tinybox_core::Result<()> {
+        Ok(())
+    }
+
+    fn remove(&self, _id: &BoxId) -> tinybox_core::Result<()> {
+        Ok(())
+    }
+}
+
+fn write_legacy_box(path: &Path, key: &str, record: &BoxInfo) -> TestResult {
+    let bytes = serde_json::to_vec(&[(key.to_owned(), record.clone())]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>())?;
+    std::fs::write(path, bytes)?;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
