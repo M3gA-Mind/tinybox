@@ -1199,6 +1199,7 @@ dependencies = [
 name = "tinybox-bin"
 version = "0.1.40"
 dependencies = [
+ "async-trait",
  "blake3",
  "clap",
  "serde",
@@ -1211,6 +1212,7 @@ dependencies = [
  "tinybox-host",
  "tinystoragedrivers",
  "tinystoragedrivers-api",
+ "tinystoragedrivers-testkit",
  "tinystoragedrivers-types",
  "tokio",
 ]
