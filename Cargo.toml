@@ -67,14 +67,14 @@ tinybox-microvm = { path = "crates/tinybox-microvm", version = "0.1.25" }
 tinybox-docker = { path = "crates/tinybox-docker", version = "0.1.25" }
 tinybox-ssh = { path = "crates/tinybox-ssh", version = "0.1.25" }
 tinybox-sync = { path = "crates/tinybox-sync", version = "0.1.25" }
-# The storage ports only (no database client), by git tag so a host that vendors
-# tinystoragedrivers once can `[patch]` it. Used by `tinybox-drivers`.
-tinystoragedrivers-core = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
-# The module reaches the host's storage over the storage bus: the proxy yields
-# the same port traits a linked library gets. The client crate serves them in
-# tests.
-tinystoragedrivers-busproxy = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
-tinystoragedrivers-client = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
+# Consumers use the v2 ports and shared value types. The facade is reserved
+# for tinybox-cli, the composition root that selects a durable local engine.
+tinystoragedrivers-types = { version = "2.0.2", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.2" }
+tinystoragedrivers-api = { version = "2.0.2", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.2" }
+tinystoragedrivers-busproxy = { version = "2.0.2", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.2" }
+tinystoragedrivers = { version = "2.0.2", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.2", default-features = false }
+tinystoragedrivers-testkit = { version = "2.0.2", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.2" }
+tinystoragedrivers-client = { version = "2.0.2", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.2" }
 tinybox-drivers = { path = "crates/tinybox-drivers", version = "0.1.32" }
 
 # Lints apply to every crate in the workspace via `[lints] workspace = true`.
