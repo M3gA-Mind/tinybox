@@ -17,7 +17,7 @@ use tinybox_bus::storage::{BODY_VERSION, BOX_COLLECTION};
 /// Inserts use an absent-only precondition, so two processes racing for one
 /// name resolve to a [`Error::DuplicateBox`] for the loser (which
 /// [`insert_new`](tinybox_core::store::insert_new) retries). State changes are
-/// one compare-and-swap loop on the document version ([`Repo::update`]), so
+/// one compare-and-swap loop on the document version, so
 /// they never overwrite a concurrent change.
 ///
 /// The collection is declared and migrated by the owner when this store opens.

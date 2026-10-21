@@ -14,7 +14,7 @@
 //!
 //! All metadata is persisted to `<base>/index.json`. The on-disk index is
 //! the source of truth; the in-memory state is rebuilt from it on every
-//! [`JailRegistry::open`].
+//! [`JailRegistry::open_with_store`].
 //!
 //! Concurrency: a `std::sync::Mutex` guards mutations. The index file
 //! is rewritten atomically via write-temp + rename. This is sufficient

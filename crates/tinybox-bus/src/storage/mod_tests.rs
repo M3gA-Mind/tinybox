@@ -12,6 +12,7 @@ fn the_owner_collections_are_stable_and_include_migration_receipts() {
             JAIL_INDEX_COLLECTION,
             TEMPLATE_COLLECTION,
             MIGRATIONS_COLLECTION,
+            CLI_IMPORTS_COLLECTION,
         ]
     );
 }
