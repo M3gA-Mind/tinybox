@@ -6,19 +6,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt, Storage};
 use tinystoragedrivers_types::{
-    CollectionSpec, ErrorKind, Precondition, Query, Result, StorageError, Versioned,
-    WriteOptions,
+    CollectionSpec, ErrorKind, Precondition, Query, Result, StorageError, Versioned, WriteOptions,
 };
 
 use tinybox_bus::storage::{
-    BODY_VERSION, MIGRATIONS_COLLECTION, V1_BOX_COLLECTION, V1_JAIL_INDEX_COLLECTION,
-    box_v1, collections, jail_index,
+    BODY_VERSION, MIGRATIONS_COLLECTION, V1_BOX_COLLECTION, V1_JAIL_INDEX_COLLECTION, box_v1,
+    collections, jail_index,
 };
 
 const BOXES_STEP: &str = "boxes-v1-to-v2";
 const JAIL_INDEX_STEP: &str = "jail-index-v1-to-v2";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct MigrationReceipt {
     step: String,
     version: u32,
@@ -42,12 +42,22 @@ pub(crate) async fn prepare(storage: &Storage) -> Result<()> {
         .ensure_collection(&CollectionSpec::new(V1_JAIL_INDEX_COLLECTION))
         .await?;
 
+    // Validate every owner receipt before changing any source row. A damaged
+    // or future receipt must never be silently overwritten by this version.
+    validate_receipt(&documents, BOXES_STEP).await?;
+    validate_receipt(&documents, JAIL_INDEX_STEP).await?;
+
     migrate_collection(
         &documents,
         BOXES_STEP,
         V1_BOX_COLLECTION,
         tinybox_bus::storage::BOX_COLLECTION,
-        |body| {
+        |id, body| {
+            if body.get("id").and_then(Value::as_str) != Some(id) {
+                return Err(StorageError::serialization(
+                    "legacy box id does not match its document key",
+                ));
+            }
             box_v1::to_body(body).map_err(|error| {
                 StorageError::serialization(format!("legacy box row is invalid: {error}"))
             })
@@ -59,7 +69,7 @@ pub(crate) async fn prepare(storage: &Storage) -> Result<()> {
         JAIL_INDEX_STEP,
         V1_JAIL_INDEX_COLLECTION,
         tinybox_bus::storage::JAIL_INDEX_COLLECTION,
-        |body| {
+        |_, body| {
             jail_index::to_body(body).map_err(|error| {
                 StorageError::serialization(format!("legacy jail index is invalid: {error}"))
             })
@@ -73,7 +83,7 @@ async fn migrate_collection(
     step: &'static str,
     source: &'static str,
     target: &'static str,
-    convert: impl Fn(Value) -> Result<Value>,
+    convert: impl Fn(&str, Value) -> Result<Value>,
 ) -> Result<()> {
     let rows = documents.query_all(source, &Query::all()).await?;
     for row in rows {
@@ -87,23 +97,29 @@ async fn migrate_row(
     source: &str,
     target: &str,
     row: Versioned<Value>,
-    convert: &impl Fn(Value) -> Result<Value>,
+    convert: &impl Fn(&str, Value) -> Result<Value>,
 ) -> Result<()> {
-    let body = convert(row.doc)?;
-    let options = WriteOptions::new().schema(BODY_VERSION);
+    let body = convert(&row.id, row.doc.clone())?;
+    let options = match row.meta.expires_ms {
+        Some(expires_ms) => WriteOptions::new()
+            .schema(BODY_VERSION)
+            .expires_ms(expires_ms),
+        None => WriteOptions::new().schema(BODY_VERSION),
+    };
     match documents
         .put_with(target, &row.id, body.clone(), Precondition::Absent, options)
         .await
     {
         Ok(_) => {}
-        Err(error)
-            if matches!(error.kind(), ErrorKind::AlreadyExists | ErrorKind::Conflict) =>
-        {
+        Err(error) if matches!(error.kind(), ErrorKind::AlreadyExists | ErrorKind::Conflict) => {
             let existing = documents
                 .get(target, &row.id)
                 .await?
                 .ok_or_else(|| StorageError::conflict("migration destination disappeared"))?;
-            if existing.doc != body || existing.meta.schema != BODY_VERSION {
+            if existing.doc != body
+                || existing.meta.schema != BODY_VERSION
+                || existing.meta.expires_ms != row.meta.expires_ms
+            {
                 return Err(StorageError::conflict(format!(
                     "migration destination `{target}/{}` differs from the legacy row",
                     row.id
@@ -117,7 +133,10 @@ async fn migrate_row(
         .get(target, &row.id)
         .await?
         .ok_or_else(|| StorageError::backend("migration destination was not readable"))?;
-    if verified.doc != body || verified.meta.schema != BODY_VERSION {
+    if verified.doc != body
+        || verified.meta.schema != BODY_VERSION
+        || verified.meta.expires_ms != row.meta.expires_ms
+    {
         return Err(StorageError::conflict(format!(
             "migration destination `{target}/{}` failed readback verification",
             row.id
@@ -146,10 +165,9 @@ async fn record_complete(documents: &Arc<dyn DocumentStore>, step: &str) -> Resu
         complete: true,
     };
     let id = step;
-    let existing = documents.get(MIGRATIONS_COLLECTION, id).await?;
-    let precondition = existing
-        .as_ref()
-        .map_or(Precondition::Absent, Versioned::unchanged);
+    if validate_receipt(documents, step).await?.is_some() {
+        return Ok(());
+    }
     let body = serde_json::to_value(receipt)
         .map_err(|error| StorageError::serialization(error.to_string()))?;
     match documents
@@ -157,7 +175,7 @@ async fn record_complete(documents: &Arc<dyn DocumentStore>, step: &str) -> Resu
             MIGRATIONS_COLLECTION,
             id,
             body.clone(),
-            precondition,
+            Precondition::Absent,
             WriteOptions::new().schema(BODY_VERSION),
         )
         .await
@@ -165,10 +183,10 @@ async fn record_complete(documents: &Arc<dyn DocumentStore>, step: &str) -> Resu
         Ok(_) => Ok(()),
         Err(error) if error.kind() == ErrorKind::Conflict => {
             let found = documents
-                .get(MIGRATIONS_COLLECTION, id)
+                .get_as::<MigrationReceipt>(MIGRATIONS_COLLECTION, id)
                 .await?
                 .ok_or_else(|| StorageError::conflict("migration receipt disappeared"))?;
-            if found.doc == body && found.meta.schema == BODY_VERSION {
+            if receipt_is_valid(&found, step) {
                 Ok(())
             } else {
                 Err(error)
@@ -177,3 +195,33 @@ async fn record_complete(documents: &Arc<dyn DocumentStore>, step: &str) -> Resu
         Err(error) => Err(error),
     }
 }
+
+async fn validate_receipt(
+    documents: &Arc<dyn DocumentStore>,
+    step: &str,
+) -> Result<Option<Versioned<MigrationReceipt>>> {
+    let Some(receipt) = documents
+        .get_as::<MigrationReceipt>(MIGRATIONS_COLLECTION, step)
+        .await?
+    else {
+        return Ok(None);
+    };
+    if receipt_is_valid(&receipt, step) {
+        Ok(Some(receipt))
+    } else {
+        Err(StorageError::conflict(format!(
+            "unsupported or invalid TinyBox migration receipt `{step}`"
+        )))
+    }
+}
+
+fn receipt_is_valid(receipt: &Versioned<MigrationReceipt>, step: &str) -> bool {
+    receipt.doc.step == step
+        && receipt.doc.version == 1
+        && receipt.doc.complete
+        && receipt.meta.schema == BODY_VERSION
+}
+
+#[cfg(test)]
+#[path = "migrations_tests.rs"]
+mod tests;

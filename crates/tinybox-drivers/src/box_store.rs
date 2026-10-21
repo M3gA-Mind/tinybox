@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use tinybox_core::{BoxId, BoxInfo, BoxState, Error, Result, Store};
 use tinystoragedrivers_api::{DocumentStore, Storage};
-use tinystoragedrivers_types::{
-    ErrorKind, Key, Query, StorageError, WriteOptions,
-};
+use tinystoragedrivers_types::{ErrorKind, Key, Query, StorageError, WriteOptions};
 
 use crate::blocking::Blocking;
 use crate::migrations;
@@ -22,7 +20,7 @@ use tinybox_bus::storage::{BODY_VERSION, BOX_COLLECTION};
 /// one compare-and-swap loop on the document version ([`Repo::update`]), so
 /// they never overwrite a concurrent change.
 ///
-/// The collection is declared by the host, from [`storage_schema`](crate::storage_schema).
+/// The collection is declared and migrated by the owner when this store opens.
 #[derive(Clone)]
 pub struct DocumentBoxStore {
     boxes: Repo<BoxRecord>,
@@ -75,7 +73,7 @@ fn store_error(operation: &'static str, error: &StorageError) -> Error {
 }
 
 fn key(id: &BoxId) -> Result<String> {
-    Key::of([id.as_str()])
+    Key::new(id.as_str())
         .map(|key| key.as_str().to_owned())
         .map_err(|error| store_error("key", &error))
 }

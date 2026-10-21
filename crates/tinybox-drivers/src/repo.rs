@@ -132,14 +132,18 @@ impl<T: Serialize + DeserializeOwned + Send + Sync> Repo<T> {
                     if nanos > 0 {
                         let half = nanos / 2;
                         let jitter = RandomState::new().build_hasher().finish();
-                        tokio::time::sleep(Duration::from_nanos(half + jitter % (nanos - half + 1)))
-                            .await;
+                        tokio::time::sleep(Duration::from_nanos(
+                            half + jitter % (nanos - half + 1),
+                        ))
+                        .await;
                     }
                 }
                 Err(error) => return Err(error),
             }
         }
-        Err(StorageError::conflict("repository update retry budget exhausted"))
+        Err(StorageError::conflict(
+            "repository update retry budget exhausted",
+        ))
     }
 
     async fn write(&self, id: &str, value: &T, precondition: Precondition) -> Result<Version> {

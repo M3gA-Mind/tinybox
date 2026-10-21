@@ -20,6 +20,8 @@ pub const TEMPLATE_COLLECTION: &str = "box.templates";
 
 /// The per-owner migration receipts collection.
 pub const MIGRATIONS_COLLECTION: &str = "box.migrations";
+/// Completed one-time imports of legacy CLI JSON files.
+pub const CLI_IMPORTS_COLLECTION: &str = "box.cli_imports";
 
 /// The v1 name of [`BOX_COLLECTION`].
 pub const V1_BOX_COLLECTION: &str = "tinybox_boxes";
@@ -38,6 +40,7 @@ pub fn collections() -> Vec<CollectionSpec> {
         JAIL_INDEX_COLLECTION,
         TEMPLATE_COLLECTION,
         MIGRATIONS_COLLECTION,
+        CLI_IMPORTS_COLLECTION,
     ]
     .into_iter()
     .map(CollectionSpec::new)

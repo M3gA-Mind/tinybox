@@ -6,9 +6,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tinybox_jail::IndexStore;
 use tinystoragedrivers_api::{DocumentStore, Storage};
-use tinystoragedrivers_types::{
-    ErrorKind, Key, StorageError, WriteOptions,
-};
+use tinystoragedrivers_types::{ErrorKind, Key, StorageError, WriteOptions};
 
 use crate::blocking::Blocking;
 use crate::migrations;
@@ -23,7 +21,7 @@ use tinybox_bus::storage::{BODY_VERSION, JAIL_INDEX_COLLECTION};
 /// millisecond times and no version field (see the `index_body` module). A
 /// document that is not valid JSON reads as [`io::ErrorKind::InvalidData`].
 ///
-/// The collection is declared by the host, from [`storage_schema`](crate::storage_schema).
+/// The collection is declared and migrated by the owner when this store opens.
 #[derive(Clone)]
 pub struct DocumentIndexStore {
     index: Repo<Value>,
@@ -48,11 +46,13 @@ impl DocumentIndexStore {
     /// Returns an error when the declaration or migration fails, the bridge
     /// cannot start, or `registry` cannot be a document id.
     pub async fn open(storage: Storage, registry: impl Into<String>) -> io::Result<Self> {
-        migrations::prepare(&storage).await.map_err(|error| to_io(&error))?;
+        migrations::prepare(&storage)
+            .await
+            .map_err(|error| to_io(&error))?;
         let documents: Arc<dyn DocumentStore> = Arc::clone(storage.documents());
         let registry = registry.into();
         let bridge = Blocking::new().map_err(|e| to_io(&e))?;
-        let key = Key::of([registry.as_str()])
+        let key = Key::new(registry.as_str())
             .map_err(|e| to_io(&e))?
             .as_str()
             .to_owned();

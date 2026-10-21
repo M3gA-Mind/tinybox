@@ -10,13 +10,15 @@
 //! - [`collections`]: the pure declarations a host ensures before granting
 //!   access. This crate runs its own legacy-row migrations when a store opens.
 //!
-//! Both traits are synchronous, so each store owns a [`Blocking`] bridge that
-//! runs the port's futures on a dedicated runtime thread. That works from inside
-//! or outside a tokio runtime.
+//! Both traits are synchronous, so each store owns a blocking bridge that
+//! runs port futures on a dedicated runtime thread. Calls work outside Tokio
+//! and on multithread Tokio runtimes; a current-thread runtime is rejected
+//! because its storage and bus tasks cannot progress while a synchronous call
+//! blocks it.
 //!
 //! [`DocumentStore`]: tinystoragedrivers_api::DocumentStore
-mod box_store;
 mod blocking;
+mod box_store;
 mod index_store;
 mod migrations;
 mod record;
@@ -30,9 +32,6 @@ pub use tinybox_bus::storage::{
     BODY_VERSION, BOX_COLLECTION, JAIL_INDEX_COLLECTION, MIGRATIONS_COLLECTION,
     TEMPLATE_COLLECTION, collections,
 };
-/// Ensure TinyBox's owned collections and apply all known row migrations.
-pub use migrations::prepare as prepare_storage;
-
 #[cfg(test)]
 #[path = "faulty_tests.rs"]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

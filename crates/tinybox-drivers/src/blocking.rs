@@ -16,6 +16,11 @@ thread_local! {
 }
 
 /// Run port futures on a dedicated runtime thread for synchronous callers.
+///
+/// Calls made from a current-thread Tokio runtime fail rather than block that
+/// runtime: host-backed ports may need its tasks to make progress. Callers on a
+/// multithread runtime use Tokio's blocking handoff; calls outside Tokio wait
+/// directly for the dedicated bridge thread.
 #[derive(Clone)]
 pub(crate) struct Blocking {
     jobs: mpsc::UnboundedSender<Job>,
@@ -63,6 +68,11 @@ impl Blocking {
                 "a storage bridge task called back into the same bridge",
             ));
         }
+        if on_current_thread_runtime() {
+            return Err(StorageError::backend(
+                "synchronous storage calls are unavailable on a current-thread Tokio runtime",
+            ));
+        }
         let (reply, wait) = std_mpsc::sync_channel(1);
         self.jobs
             .send(Box::pin(async move {
@@ -82,11 +92,19 @@ impl Blocking {
 }
 
 fn on_multi_thread_runtime() -> bool {
-    tokio::runtime::Handle::try_current().is_ok_and(|handle| {
-        handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
-    })
+    tokio::runtime::Handle::try_current()
+        .is_ok_and(|handle| handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+}
+
+fn on_current_thread_runtime() -> bool {
+    tokio::runtime::Handle::try_current()
+        .is_ok_and(|handle| handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread)
 }
 
 fn startup_error(message: &'static str, source: std::io::Error) -> StorageError {
     StorageError::backend(message).with_source(source)
 }
+
+#[cfg(test)]
+#[path = "blocking_tests.rs"]
+mod tests;

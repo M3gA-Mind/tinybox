@@ -55,6 +55,7 @@ impl ModuleStorage {
     }
 
     /// The host's document port, when it serves one.
+    #[cfg(test)]
     pub(super) async fn documents(&self) -> Option<Arc<dyn DocumentStore>> {
         self.scoped()
             .await

@@ -12,14 +12,6 @@ keywords.workspace = true
 categories.workspace = true
 publish = false
 
-[[bin]]
-name = "tinybox"
-path = "src/main.rs"
-# The module crate's cdylib is also called `tinybox`, and rustdoc would write
-# both to `target/doc/tinybox`. The binary is an entry point with no API worth
-# publishing, so it yields the name; `tinybox-cli`'s library is still documented.
-doc = false
-
 [dependencies]
 tinybox-core.workspace = true
 tinybox-host.workspace = true
@@ -31,20 +23,17 @@ tinybox-sync.workspace = true
 # Argument parsing, help text, and shell-facing errors. The derive API keeps the
 # command surface declared next to the types it produces.
 clap = { version = "4", features = ["derive"] }
-# The CLI is the composition root: it chooses local durable storage for box
-# records and templates. The pure libraries use only the port contracts.
-tinystoragedrivers = { workspace = true, features = ["file", "sqlite"] }
 serde_json.workspace = true
 serde.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [dev-dependencies]
-# End-to-end tests drive the real binary against a throwaway state directory.
+# Unit tests compose the production port adapters over the testkit's memory
+# backend; the binary's process-level tests live in `tinybox-bin`.
 tempfile = "3"
 # Tests implement a scripted `Host` so the Docker paths are reachable without a
 # daemon.
 async-trait.workspace = true
-tinystoragedrivers-testkit.workspace = true
 
 [lints]
 workspace = true
