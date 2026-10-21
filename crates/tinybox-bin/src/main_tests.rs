@@ -133,9 +133,22 @@ impl DocumentStore for ImportDocumentPort {
                     })?;
             }
         }
-        self.inner
+        let version = self.inner
             .put_with(collection, id, value, precondition, options)
-            .await
+            .await?;
+        if collection == tinybox_bus::storage::BOX_COLLECTION {
+            if let Some((store, box_id, state)) =
+                self.after_write.lock().expect("post-write mutex").take()
+            {
+                std::thread::spawn(move || store.set_state(&box_id, state))
+                    .join()
+                    .map_err(|_| StorageError::backend("post-write mutation panicked"))?
+                    .map_err(|error| {
+                        StorageError::backend(format!("post-write mutation failed: {error}"))
+                    })?;
+            }
+        }
+        Ok(version)
     }
 
     async fn delete(
