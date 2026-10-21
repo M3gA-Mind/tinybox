@@ -47,6 +47,7 @@ async fn file_test_storage(
 #[derive(Debug)]
 enum InsertResult {
     Succeed,
+    SucceedAs(BoxInfo),
     Duplicate(BoxInfo),
     Fail,
 }
@@ -56,6 +57,7 @@ struct ImportStoreStub {
     current: Mutex<Option<BoxInfo>>,
     after_insert: Mutex<Option<BoxInfo>>,
     insert_result: InsertResult,
+    fail_initial_read: bool,
 }
 
 impl ImportStoreStub {
@@ -64,6 +66,7 @@ impl ImportStoreStub {
             current: Mutex::new(None),
             after_insert: Mutex::new(None),
             insert_result,
+            fail_initial_read: false,
         }
     }
 }
@@ -72,17 +75,33 @@ impl Store for ImportStoreStub {
     fn insert(&self, info: &BoxInfo) -> tinybox_core::Result<()> {
         match &self.insert_result {
             InsertResult::Succeed => {
-                *self.after_insert.lock().map_err(|_| tinybox_core::Error::Store {
-                    operation: "test",
-                    message: "stub lock poisoned".to_owned(),
-                })? = Some(info.clone());
+                *self
+                    .after_insert
+                    .lock()
+                    .map_err(|_| tinybox_core::Error::Store {
+                        operation: "test",
+                        message: "stub lock poisoned".to_owned(),
+                    })? = Some(info.clone());
+                Ok(())
+            }
+            InsertResult::SucceedAs(stored) => {
+                *self
+                    .after_insert
+                    .lock()
+                    .map_err(|_| tinybox_core::Error::Store {
+                        operation: "test",
+                        message: "stub lock poisoned".to_owned(),
+                    })? = Some(stored.clone());
                 Ok(())
             }
             InsertResult::Duplicate(existing) => {
-                *self.after_insert.lock().map_err(|_| tinybox_core::Error::Store {
-                    operation: "test",
-                    message: "stub lock poisoned".to_owned(),
-                })? = Some(existing.clone());
+                *self
+                    .after_insert
+                    .lock()
+                    .map_err(|_| tinybox_core::Error::Store {
+                        operation: "test",
+                        message: "stub lock poisoned".to_owned(),
+                    })? = Some(existing.clone());
                 Err(tinybox_core::Error::DuplicateBox {
                     id: info.id.to_string(),
                 })
@@ -95,32 +114,61 @@ impl Store for ImportStoreStub {
     }
 
     fn get(&self, id: &BoxId) -> tinybox_core::Result<BoxInfo> {
-        if let Some(current) = self.current.lock().map_err(|_| tinybox_core::Error::Store {
-            operation: "test",
-            message: "stub lock poisoned".to_owned(),
-        })?.clone() {
+        if self.fail_initial_read
+            && self
+                .after_insert
+                .lock()
+                .map_err(|_| tinybox_core::Error::Store {
+                    operation: "test",
+                    message: "stub lock poisoned".to_owned(),
+                })?
+                .is_none()
+        {
+            return Err(tinybox_core::Error::Store {
+                operation: "read",
+                message: "injected failure".to_owned(),
+            });
+        }
+        if let Some(current) = self
+            .current
+            .lock()
+            .map_err(|_| tinybox_core::Error::Store {
+                operation: "test",
+                message: "stub lock poisoned".to_owned(),
+            })?
+            .clone()
+        {
             if &current.id == id {
                 return Ok(current);
             }
         }
-        if let Some(current) = self.after_insert.lock().map_err(|_| tinybox_core::Error::Store {
-            operation: "test",
-            message: "stub lock poisoned".to_owned(),
-        })?.clone() {
+        if let Some(current) = self
+            .after_insert
+            .lock()
+            .map_err(|_| tinybox_core::Error::Store {
+                operation: "test",
+                message: "stub lock poisoned".to_owned(),
+            })?
+            .clone()
+        {
             if &current.id == id {
                 return Ok(current);
             }
         }
-        Err(tinybox_core::Error::UnknownBox {
-            id: id.to_string(),
-        })
+        Err(tinybox_core::Error::UnknownBox { id: id.to_string() })
     }
 
     fn list(&self) -> tinybox_core::Result<Vec<BoxInfo>> {
-        Ok(self.current.lock().map_err(|_| tinybox_core::Error::Store {
-            operation: "test",
-            message: "stub lock poisoned".to_owned(),
-        })?.clone().into_iter().collect())
+        Ok(self
+            .current
+            .lock()
+            .map_err(|_| tinybox_core::Error::Store {
+                operation: "test",
+                message: "stub lock poisoned".to_owned(),
+            })?
+            .clone()
+            .into_iter()
+            .collect())
     }
 
     fn set_state(&self, _id: &BoxId, _state: BoxState) -> tinybox_core::Result<()> {
@@ -133,9 +181,11 @@ impl Store for ImportStoreStub {
 }
 
 fn write_legacy_box(path: &Path, key: &str, record: &BoxInfo) -> TestResult {
-    let bytes = serde_json::to_vec(&[(key.to_owned(), record.clone())]
-        .into_iter()
-        .collect::<BTreeMap<_, _>>())?;
+    let bytes = serde_json::to_vec(
+        &[(key.to_owned(), record.clone())]
+            .into_iter()
+            .collect::<BTreeMap<_, _>>(),
+    )?;
     std::fs::write(path, bytes)?;
     Ok(())
 }
@@ -548,6 +598,192 @@ fn a_file_cannot_be_used_as_the_state_directory() -> TestResult {
     std::fs::write(&file, b"sentinel")?;
     assert!(store_location(&file.join("boxes.json")).is_err());
     assert_eq!(std::fs::read(&file)?, b"sentinel");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_box_import_checks_keys_and_store_race_outcomes() -> TestResult {
+    let root = TempDir::new()?;
+    let source = root.path().join("boxes.json");
+    let record = sample_box("expected", "/legacy")?;
+    let bad_key_storage = file_test_storage(&root.path().join("bad-key"), "bad-key").await?;
+    let bad_key_documents = Arc::clone(bad_key_storage.documents());
+
+    write_legacy_box(&source, "different-key", &record)?;
+    let error = import_legacy_boxes(
+        &source,
+        &ImportStoreStub::empty(InsertResult::Succeed),
+        &bad_key_documents,
+    )
+    .await
+    .err()
+    .ok_or_else(|| std::io::Error::other("mismatched key must fail"))?;
+    assert!(matches!(
+        error,
+        Error::Store {
+            operation: "migrate",
+            ..
+        }
+    ));
+
+    write_legacy_box(&source, "expected", &record)?;
+    let storage = file_test_storage(&root.path().join("valid"), "valid").await?;
+    let documents = Arc::clone(storage.documents());
+    let success = ImportStoreStub::empty(InsertResult::Succeed);
+    import_legacy_boxes(&source, &success, &documents).await?;
+
+    let matching_race = ImportStoreStub::empty(InsertResult::Duplicate(record.clone()));
+    import_legacy_boxes(&source, &matching_race, &documents).await?;
+
+    let differing = sample_box("expected", "/concurrent-writer")?;
+    for store in [
+        ImportStoreStub::empty(InsertResult::Duplicate(differing.clone())),
+        ImportStoreStub::empty(InsertResult::SucceedAs(differing)),
+        ImportStoreStub::empty(InsertResult::Fail),
+    ] {
+        let error = import_legacy_boxes(&source, &store, &documents)
+            .await
+            .err()
+            .ok_or_else(|| std::io::Error::other("conflicting store outcome must fail"))?;
+        assert!(matches!(error, Error::Store { .. }));
+    }
+
+    let mut failing_read = ImportStoreStub::empty(InsertResult::Succeed);
+    failing_read.fail_initial_read = true;
+    let error = import_legacy_boxes(&source, &failing_read, &documents)
+        .await
+        .err()
+        .ok_or_else(|| std::io::Error::other("store read error must propagate"))?;
+    assert!(matches!(
+        error,
+        Error::Store {
+            operation: "read",
+            ..
+        }
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn import_receipts_validate_schema_and_reconcile_conditional_write_races() -> TestResult {
+    let root = TempDir::new()?;
+    let storage = file_test_storage(&root.path().join("storage"), "receipt").await?;
+    let documents = Arc::clone(storage.documents());
+    let _stores = open_stores(
+        &root.path().join("storage"),
+        "receipt",
+        &root.path().join("missing-boxes.json"),
+        &root.path().join("missing-templates.json"),
+    )
+    .await?;
+
+    complete_import(&documents, "boxes", "source", "digest").await?;
+    complete_import(&documents, "boxes", "source", "digest").await?;
+    let conflict = complete_import(&documents, "boxes", "other-source", "digest")
+        .await
+        .err()
+        .ok_or_else(|| std::io::Error::other("different receipt must conflict"))?;
+    assert!(matches!(
+        conflict,
+        Error::Store {
+            operation: "migrate",
+            ..
+        }
+    ));
+
+    let malformed_storage = file_test_storage(&root.path().join("malformed"), "malformed").await?;
+    let malformed_documents = Arc::clone(malformed_storage.documents());
+    let _malformed_stores = open_stores(
+        &root.path().join("malformed"),
+        "malformed",
+        &root.path().join("missing-boxes.json"),
+        &root.path().join("missing-templates.json"),
+    )
+    .await?;
+    malformed_documents
+        .put_with(
+            CLI_IMPORTS_COLLECTION,
+            "boxes",
+            serde_json::json!({"unexpected": true}),
+            Precondition::Absent,
+            WriteOptions::new().schema(BODY_VERSION),
+        )
+        .await?;
+    let error = import_already_complete(&malformed_documents, "boxes", "source", "digest")
+        .await
+        .err()
+        .ok_or_else(|| std::io::Error::other("malformed receipt must fail closed"))?;
+    assert!(matches!(error, Error::Store { .. }));
+
+    let schema_storage = file_test_storage(&root.path().join("schema"), "schema").await?;
+    let schema_documents = Arc::clone(schema_storage.documents());
+    let _schema_stores = open_stores(
+        &root.path().join("schema"),
+        "schema",
+        &root.path().join("missing-boxes.json"),
+        &root.path().join("missing-templates.json"),
+    )
+    .await?;
+    schema_documents
+        .put_with(
+            CLI_IMPORTS_COLLECTION,
+            "boxes",
+            serde_json::json!({"source": "source", "digest": "digest", "version": 1}),
+            Precondition::Absent,
+            WriteOptions::new().schema(BODY_VERSION + 1),
+        )
+        .await?;
+    assert!(
+        import_already_complete(&schema_documents, "boxes", "source", "digest")
+            .await
+            .is_err()
+    );
+
+    let invalid_version_storage =
+        file_test_storage(&root.path().join("version"), "version").await?;
+    let invalid_version_documents = Arc::clone(invalid_version_storage.documents());
+    let _version_stores = open_stores(
+        &root.path().join("version"),
+        "version",
+        &root.path().join("missing-boxes.json"),
+        &root.path().join("missing-templates.json"),
+    )
+    .await?;
+    invalid_version_documents
+        .put_with(
+            CLI_IMPORTS_COLLECTION,
+            "boxes",
+            serde_json::json!({"source": "source", "digest": "digest", "version": 2}),
+            Precondition::Absent,
+            WriteOptions::new().schema(BODY_VERSION),
+        )
+        .await?;
+    assert!(
+        import_already_complete(&invalid_version_documents, "boxes", "source", "digest")
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn import_path_and_error_helpers_preserve_operation_context() -> TestResult {
+    let root = TempDir::new()?;
+    let missing_parent = root.path().join("missing").join("boxes.json");
+    assert!(normalized_path(&missing_parent).is_err());
+    assert!(store_location(Path::new("/")).is_err());
+
+    let mapped = storage_error(
+        "read import receipt",
+        &StorageError::backend("injected backend failure"),
+    );
+    assert!(matches!(
+        mapped,
+        Error::Store {
+            operation: "read import receipt",
+            ..
+        }
+    ));
     Ok(())
 }
 
