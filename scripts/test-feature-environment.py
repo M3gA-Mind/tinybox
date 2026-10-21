@@ -72,6 +72,7 @@ class WindowsFeatureEnvironmentTests(unittest.TestCase):
                 "test --locked --workspace --all-features",
                 "metadata --locked --format-version 1 --no-deps",
                 "tree --locked --format {p} --prefix none -e normal,build -p tinybox-fixture --no-default-features",
+                "tree --locked --format {p} --prefix none -e normal,build -p tinybox-fixture",
                 "tree --locked --format {p} --prefix none -e normal,build -p tinybox-fixture --all-features",
             ])
 
