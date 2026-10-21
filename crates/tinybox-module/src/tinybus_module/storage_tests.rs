@@ -105,17 +105,11 @@ async fn store_calls_on_the_only_worker_do_not_deadlock() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn without_a_storage_host_box_records_stay_in_memory() -> TestResult {
+async fn without_a_storage_host_box_records_fail_closed() -> TestResult {
     let rig = rig(false).await?;
     let storage = ModuleStorage::connected(rig.module.clone());
     assert!(storage.documents().await.is_none());
-    let store = storage.box_store().await?;
-    let record = info("memory-box")?;
-    let writer = Arc::clone(&store);
-    let written = record.clone();
-    tokio::task::spawn_blocking(move || writer.insert(&written)).await??;
-    let docs = host_docs(&rig, tinybox_drivers::BOX_COLLECTION).await?;
-    assert_eq!(docs.len(), 0);
+    assert!(storage.box_store().await.is_err());
     Ok(())
 }
 
