@@ -55,6 +55,7 @@ async fn file_test_storage(
 struct ImportDocumentPort {
     inner: Failing<dyn DocumentStore>,
     race_store: Mutex<Option<(Arc<dyn Store>, BoxInfo)>>,
+    after_write: Mutex<Option<(Arc<dyn Store>, BoxId, BoxState)>>,
     race_started: AtomicBool,
 }
 
@@ -63,12 +64,17 @@ impl ImportDocumentPort {
         Arc::new(Self {
             inner: Failing::new(inner),
             race_store: Mutex::new(None),
+            after_write: Mutex::new(None),
             race_started: AtomicBool::new(false),
         })
     }
 
     fn race_insert(&self, store: Arc<dyn Store>, info: BoxInfo) {
         *self.race_store.lock().expect("race store mutex") = Some((store, info));
+    }
+
+    fn change_state_after_write(&self, store: Arc<dyn Store>, id: BoxId, state: BoxState) {
+        *self.after_write.lock().expect("post-write mutex") = Some((store, id, state));
     }
 }
 
