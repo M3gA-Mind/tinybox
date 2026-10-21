@@ -88,7 +88,7 @@ struct TmpMappedHost {
 
 #[async_trait]
 impl Host for TmpMappedHost {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "local"
     }
 

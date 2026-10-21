@@ -1219,23 +1219,22 @@ where
 }
 
 #[cfg(test)]
+type TestStorePair = (
+    Arc<tinybox_core::MemoryStore>,
+    Arc<tinybox_core::MemoryTemplates>,
+);
+
+#[cfg(test)]
+type TestStores = std::sync::Mutex<std::collections::HashMap<PathBuf, TestStorePair>>;
+
+#[cfg(test)]
 fn test_stores(
     path: &Path,
 ) -> (
     Arc<tinybox_core::MemoryStore>,
     Arc<tinybox_core::MemoryTemplates>,
 ) {
-    static TEST_STORES: std::sync::OnceLock<
-        std::sync::Mutex<
-            std::collections::HashMap<
-                PathBuf,
-                (
-                    Arc<tinybox_core::MemoryStore>,
-                    Arc<tinybox_core::MemoryTemplates>,
-                ),
-            >,
-        >,
-    > = std::sync::OnceLock::new();
+    static TEST_STORES: std::sync::OnceLock<TestStores> = std::sync::OnceLock::new();
     let stores = TEST_STORES.get_or_init(Default::default);
     let mut stores = stores
         .lock()
@@ -1285,10 +1284,10 @@ where
         }
     };
 
-    let store_key = cli
-        .requested_store_path()
-        .map(Path::to_owned)
-        .unwrap_or_else(|| PathBuf::from("tinybox-default-test-store"));
+    let store_key = cli.requested_store_path().map_or_else(
+        || PathBuf::from("tinybox-default-test-store"),
+        Path::to_owned,
+    );
     let (store, templates) = test_stores(&store_key);
     let store = store as Arc<dyn Store>;
     let templates = templates as Arc<dyn Templates>;
