@@ -889,6 +889,50 @@ async fn an_invalid_template_name_is_not_recorded_as_imported() -> TestResult {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_conflicting_template_blocks_legacy_import() -> TestResult {
+    let root = TempDir::new()?;
+    let boxes_path = root.path().join("boxes.json");
+    let templates_path = root.path().join("templates.json");
+    let (store, templates) = open_stores(
+        &root.path().join("storage"),
+        "conflicting-template",
+        &boxes_path,
+        &templates_path,
+    )
+    .await?;
+    drop(store);
+
+    let name = TemplateName::new("released-template")?;
+    templates.save(&name, &SnapshotId::new("current-snapshot")?)?;
+    let records = [(
+        "released-template".to_owned(),
+        SnapshotId::new("legacy-snapshot")?,
+    )]
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
+    std::fs::write(&templates_path, serde_json::to_vec(&records)?)?;
+
+    let storage = file_test_storage(&root.path().join("storage"), "conflicting-template").await?;
+    let error = import_legacy_templates(
+        &templates_path,
+        &DocumentTemplateStore::open(storage.clone()).await?,
+        &Arc::clone(storage.documents()),
+    )
+    .await
+    .err()
+    .ok_or_else(|| std::io::Error::other("different destination template must fail closed"))?;
+    assert!(matches!(
+        error,
+        Error::Store {
+            operation: "migrate",
+            ..
+        }
+    ));
+    assert_eq!(templates.get(&name)?, SnapshotId::new("current-snapshot")?);
+    Ok(())
+}
+
 #[test]
 fn legacy_box_parser_rejects_unknown_fields_at_object_and_array_depths() -> TestResult {
     let mut value = serde_json::to_value(sample_box("unknown-field", "/legacy")?)?;
