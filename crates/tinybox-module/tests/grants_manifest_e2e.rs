@@ -25,7 +25,11 @@ async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
         .tempdir_in(built_artifact.parent().ok_or("artifact has no directory")?)?;
     #[cfg(windows)]
     secure_staging_directory(staged.path())?;
-    let artifact = staged.path().join(
+    // macOS exposes the temporary root through symlinked system paths such as
+    // /var. Native module admission walks every path component without
+    // following symlinks, so pass it the canonical private staging path.
+    let staging_root = staged.path().canonicalize()?;
+    let artifact = staging_root.join(
         built_artifact
             .file_name()
             .ok_or("artifact has no filename")?,
