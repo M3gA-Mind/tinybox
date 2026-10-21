@@ -17,9 +17,14 @@ async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
     let staged = tempfile::Builder::new()
         .prefix("admitted-module-")
         .tempdir()?;
+    // macOS commonly exposes the temp root through `/var` while its physical
+    // path is `/private/var`. The module loader intentionally inspects every
+    // path component with `symlink_metadata`, so stage under the canonical
+    // directory while retaining the strict admission checks.
+    let staged_root = staged.path().canonicalize()?;
     #[cfg(windows)]
-    secure_staging_directory(staged.path())?;
-    let artifact = staged.path().join(
+    secure_staging_directory(&staged_root)?;
+    let artifact = staged_root.join(
         built_artifact
             .file_name()
             .ok_or("artifact has no filename")?,
@@ -30,6 +35,7 @@ async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
         "compiled TinyBox artifact missing: {}",
         artifact.display()
     );
+    assert_eq!(artifact.parent(), Some(staged_root.as_path()));
     let bus = MemoryBus::new();
     let broker = Broker::new();
     let broker_task = broker.spawn(bus.clone());
