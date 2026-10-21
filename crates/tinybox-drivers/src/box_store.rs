@@ -3,11 +3,15 @@
 use std::sync::Arc;
 
 use tinybox_core::{BoxId, BoxInfo, BoxState, Error, Result, Store};
-use tinystoragedrivers_core::{
-    Blocking, DocumentStore, ErrorKind, Key, Query, Repo, StorageError, WriteOptions,
+use tinystoragedrivers_api::{DocumentStore, Storage};
+use tinystoragedrivers_types::{
+    ErrorKind, Key, Query, StorageError, WriteOptions,
 };
 
+use crate::blocking::Blocking;
+use crate::migrations;
 use crate::record::{BoxRecord, StateRecord};
+use crate::repo::Repo;
 use tinybox_bus::storage::{BODY_VERSION, BOX_COLLECTION};
 
 /// Box records as documents, `box.boxes/<box id>`.
@@ -32,16 +36,17 @@ impl std::fmt::Debug for DocumentBoxStore {
 }
 
 impl DocumentBoxStore {
-    /// A store on `documents`.
+    /// Open a store and migrate legacy box documents before returning it.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Store`] when the bridge cannot start.
-    #[allow(
-        clippy::needless_pass_by_value,
-        reason = "the handle is taken by value, as it always was"
-    )]
-    pub fn new(documents: Arc<dyn DocumentStore>) -> Result<Self> {
+    /// Returns [`Error::Store`] when declarations, migrations, or the bridge
+    /// cannot be opened.
+    pub async fn open(storage: Storage) -> Result<Self> {
+        migrations::prepare(&storage)
+            .await
+            .map_err(|error| store_error("open", &error))?;
+        let documents: Arc<dyn DocumentStore> = Arc::clone(storage.documents());
         let bridge = Blocking::new().map_err(|error| store_error("open", &error))?;
         let boxes = Repo::new(&documents, BOX_COLLECTION)
             .map_err(|error| store_error("open", &error))?

@@ -1,5 +1,4 @@
-//! Tests for [`ModuleStorage`]: host-backed box records, jail index documents,
-//! the in-memory fallback, and connect retry.
+//! Tests for [`ModuleStorage`]: host-backed records and fail-closed absence.
 
 use super::*;
 use tinybox_core::WorkspaceSource;
@@ -8,33 +7,29 @@ use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tinystoragedrivers_busproxy::{PerCallerEndpoint, ServedStorage, serve};
 use tinystoragedrivers_client::StorageServer;
-use tinystoragedrivers_core::{
-    DocumentStoreExt, MemoryStorage, Query, Scope, ScopedStorage, StorageBackend,
-};
+use tinystoragedrivers_api::{DocumentStoreExt, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
+use tinystoragedrivers_types::{Query, Scope};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 /// A broker with a module-side connection and, optionally, a storage host.
 struct Rig {
     module: Connection,
-    backend: MemoryStorage,
+    backend: MemoryBackend,
     _served: Option<ServedStorage>,
 }
 
 async fn rig(serve_storage: bool) -> Result<Rig, Box<dyn std::error::Error>> {
     let bus = MemoryBus::new();
     Broker::new().spawn(bus.clone());
-    let backend = MemoryStorage::new();
-    // The host declares what the module may store from the module's own schema.
-    tinystoragedrivers_core::schema::Registry::compose([tinybox_drivers::storage_schema()])?
-        .prepare(&backend)
-        .await?;
+    let backend = MemoryBackend::new();
     let host = Connection::connect(bus.connect().await?).await?;
     let served = if serve_storage {
         let bound = backend.clone();
         let endpoint = PerCallerEndpoint::new(move |_sender| {
-            let scoped: ScopedStorage = bound.for_scope(&Scope::local()).ok()?;
-            Some(StorageServer::new(scoped))
+            let storage = bound.for_scope(&Scope::new("module/test").ok()?).ok()?;
+            Some(StorageServer::new(storage))
         });
         Some(serve(&host, Arc::new(endpoint)).await?)
     } else {
@@ -62,7 +57,11 @@ async fn host_docs(
     rig: &Rig,
     collection: &'static str,
 ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
-    let docs = Arc::clone(rig.backend.for_scope(&Scope::local())?.documents());
+    let docs = Arc::clone(
+        rig.backend
+            .for_scope(&Scope::new("module/test")?)?
+            .documents(),
+    );
     let all = docs.query_all(collection, &Query::all()).await?;
     Ok(all.into_iter().map(|entry| entry.doc).collect())
 }
@@ -156,9 +155,11 @@ async fn a_failed_connect_is_retried_when_the_host_starts_serving() -> TestResul
     let storage = ModuleStorage::connected(module);
     assert!(storage.documents().await.is_none());
 
-    let backend = MemoryStorage::new();
+    let backend = MemoryBackend::new();
     let endpoint = PerCallerEndpoint::new(move |_sender| {
-        Some(StorageServer::new(backend.for_scope(&Scope::local()).ok()?))
+        Some(StorageServer::new(
+            backend.for_scope(&Scope::new("module/test").ok()?).ok()?,
+        ))
     });
     let _served = serve(&host, Arc::new(endpoint)).await?;
     assert!(storage.documents().await.is_some());
