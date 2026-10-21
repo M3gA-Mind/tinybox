@@ -639,20 +639,34 @@ async fn legacy_box_import_checks_keys_and_store_race_outcomes() -> TestResult {
     ));
 
     write_legacy_box(&source, "expected", &record)?;
-    let storage = file_test_storage(&root.path().join("valid"), "valid").await?;
-    let documents = Arc::clone(storage.documents());
-    let success = ImportStoreStub::empty(InsertResult::Succeed);
-    import_legacy_boxes(&source, &success, &documents).await?;
-
+    let race_storage =
+        file_test_storage(&root.path().join("matching-race"), "matching-race").await?;
+    let race_documents = Arc::clone(race_storage.documents());
+    let _race_stores = open_stores(
+        &root.path().join("matching-race"),
+        "matching-race",
+        &root.path().join("missing-boxes.json"),
+        &root.path().join("missing-templates.json"),
+    )
+    .await?;
     let matching_race = ImportStoreStub::empty(InsertResult::Duplicate(record.clone()));
-    import_legacy_boxes(&source, &matching_race, &documents).await?;
+    import_legacy_boxes(&source, &matching_race, &race_documents).await?;
 
     let differing = sample_box("expected", "/concurrent-writer")?;
-    for store in [
+    for (index, store) in [
         ImportStoreStub::empty(InsertResult::Duplicate(differing.clone())),
         ImportStoreStub::empty(InsertResult::SucceedAs(differing)),
         ImportStoreStub::empty(InsertResult::Fail),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let storage = file_test_storage(
+            &root.path().join(format!("failure-{index}")),
+            &format!("failure-{index}"),
+        )
+        .await?;
+        let documents = Arc::clone(storage.documents());
         let error = import_legacy_boxes(&source, &store, &documents)
             .await
             .err()
@@ -660,9 +674,11 @@ async fn legacy_box_import_checks_keys_and_store_race_outcomes() -> TestResult {
         assert!(matches!(error, Error::Store { .. }));
     }
 
+    let read_storage = file_test_storage(&root.path().join("read-error"), "read-error").await?;
+    let read_documents = Arc::clone(read_storage.documents());
     let mut failing_read = ImportStoreStub::empty(InsertResult::Succeed);
     failing_read.fail_initial_read = true;
-    let error = import_legacy_boxes(&source, &failing_read, &documents)
+    let error = import_legacy_boxes(&source, &failing_read, &read_documents)
         .await
         .err()
         .ok_or_else(|| std::io::Error::other("store read error must propagate"))?;
