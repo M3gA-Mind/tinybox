@@ -195,6 +195,6 @@ impl Sandbox for NamespaceSandbox {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 #[path = "mod_tests.rs"]
 mod test;

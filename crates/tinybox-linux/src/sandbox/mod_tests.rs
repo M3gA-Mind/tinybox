@@ -450,22 +450,26 @@ fn native_jail_command_keeps_limits_and_target_environment_after_namespace_setup
     std::fs::create_dir(&cwd)?;
     let grant = root.path().join("read-only");
     std::fs::create_dir(&grant)?;
-    let argv = crate::native_jail_argv(&crate::NativeJailCommand {
-        root: root.path().to_path_buf(),
-        cwd,
-        read_only: vec![grant.clone()],
-        read_write: Vec::new(),
-        deny_read: Vec::new(),
-        allow_net: false,
-        allow_subprocess: true,
-        cpu_millis: Some(1),
-        memory_bytes: Some(64 * 1024 * 1024),
-        pids_max: Some(16),
-        argv: vec!["/usr/bin/env".into()],
-        env: BTreeMap::from([("BASH_ENV".into(), "/tmp/target-init".into())]),
-    })?;
-    assert_eq!(argv.first().map(String::as_str), Some("/bin/bash"));
     let systemd_run = crate::trusted_systemd_run_program()?;
+    let argv = crate::native_jail_argv_with_programs(
+        &crate::NativeJailCommand {
+            root: root.path().to_path_buf(),
+            cwd,
+            read_only: vec![grant.clone()],
+            read_write: Vec::new(),
+            deny_read: Vec::new(),
+            allow_net: false,
+            allow_subprocess: true,
+            cpu_millis: Some(1),
+            memory_bytes: Some(64 * 1024 * 1024),
+            pids_max: Some(16),
+            argv: vec!["/usr/bin/env".into()],
+            env: BTreeMap::from([("BASH_ENV".into(), "/tmp/target-init".into())]),
+        },
+        &systemd_run,
+        Path::new("/bin/true"),
+    )?;
+    assert_eq!(argv.first().map(String::as_str), Some("/bin/bash"));
     assert!(argv.contains(&systemd_run.display().to_string()));
     assert!(systemd_run.is_absolute());
     let bubblewrap = argv
@@ -508,20 +512,25 @@ fn native_jail_does_not_resolve_trusted_launchers_from_target_path()
         let root = tempfile::tempdir()?;
         let cwd = root.path().join("work");
         std::fs::create_dir(&cwd)?;
-        let _ = crate::native_jail_argv(&crate::NativeJailCommand {
-            root: root.path().to_path_buf(),
-            cwd,
-            read_only: Vec::new(),
-            read_write: Vec::new(),
-            deny_read: Vec::new(),
-            allow_net: false,
-            allow_subprocess: true,
-            cpu_millis: Some(1),
-            memory_bytes: None,
-            pids_max: None,
-            argv: vec!["/bin/true".into()],
-            env: BTreeMap::new(),
-        })?;
+        let systemd_run = crate::trusted_systemd_run_program()?;
+        let _ = crate::native_jail_argv_with_programs(
+            &crate::NativeJailCommand {
+                root: root.path().to_path_buf(),
+                cwd,
+                read_only: Vec::new(),
+                read_write: Vec::new(),
+                deny_read: Vec::new(),
+                allow_net: false,
+                allow_subprocess: true,
+                cpu_millis: Some(1),
+                memory_bytes: None,
+                pids_max: None,
+                argv: vec!["/bin/true".into()],
+                env: BTreeMap::new(),
+            },
+            &systemd_run,
+            Path::new("/bin/true"),
+        )?;
         assert!(!std::path::Path::new(&marker).exists());
         return Ok(());
     }
