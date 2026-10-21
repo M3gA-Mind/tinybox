@@ -137,10 +137,9 @@ impl Store for ImportStoreStub {
                 message: "stub lock poisoned".to_owned(),
             })?
             .clone()
+            && &current.id == id
         {
-            if &current.id == id {
-                return Ok(current);
-            }
+            return Ok(current);
         }
         if let Some(current) = self
             .after_insert
@@ -150,10 +149,9 @@ impl Store for ImportStoreStub {
                 message: "stub lock poisoned".to_owned(),
             })?
             .clone()
+            && &current.id == id
         {
-            if &current.id == id {
-                return Ok(current);
-            }
+            return Ok(current);
         }
         Err(tinybox_core::Error::UnknownBox { id: id.to_string() })
     }
@@ -209,7 +207,7 @@ async fn executable_run_dispatches_with_explicit_store_and_reports_parse_errors(
     )
     .await;
     assert!(is_exit_code(success, ExitCode::SUCCESS));
-    assert!(stderr.is_empty());
+    assert_eq!(stderr.as_slice(), b"");
     assert!(root.path().join(".tinybox-storage").is_dir());
 
     let mut stdout = Vec::new();
@@ -217,7 +215,7 @@ async fn executable_run_dispatches_with_explicit_store_and_reports_parse_errors(
     let help = run(args(&["tinybox", "--help"]), &mut stdout, &mut stderr).await;
     assert!(is_exit_code(help, ExitCode::SUCCESS));
     assert!(stdout.windows(6).any(|window| window == b"Usage:"));
-    assert!(stderr.is_empty());
+    assert_eq!(stderr.as_slice(), b"");
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
@@ -238,7 +236,7 @@ async fn executable_run_dispatches_with_explicit_store_and_reports_parse_errors(
         dispatch_error,
         ExitCode::from(EXIT_TINYBOX_ERROR)
     ));
-    assert!(!stderr.is_empty());
+    assert_ne!(stderr.as_slice(), b"");
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
