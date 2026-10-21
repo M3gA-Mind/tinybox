@@ -11,11 +11,17 @@ async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
     let built_artifact = compiled_artifact()?;
     // Cargo output inherits the checkout ACL on Windows, which need not meet
     // production module admission. Stage the real artifact with private ACLs.
-    let mut staged_builder = tempfile::Builder::new();
-    staged_builder.prefix("admitted-module-");
     #[cfg(unix)]
-    staged_builder.permissions(std::fs::Permissions::from_mode(0o700));
-    let staged = staged_builder
+    let staged = {
+        let mut builder = tempfile::Builder::new();
+        builder
+            .prefix("admitted-module-")
+            .permissions(std::fs::Permissions::from_mode(0o700));
+        builder.tempdir()?
+    };
+    #[cfg(windows)]
+    let staged = tempfile::Builder::new()
+        .prefix("admitted-module-")
         .tempdir_in(built_artifact.parent().ok_or("artifact has no directory")?)?;
     #[cfg(windows)]
     secure_staging_directory(staged.path())?;
