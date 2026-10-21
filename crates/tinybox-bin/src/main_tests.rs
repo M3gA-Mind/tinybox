@@ -78,11 +78,18 @@ impl DocumentStore for ImportDocumentPort {
         self.inner.capabilities()
     }
 
-    async fn ensure_collection(&self, spec: &CollectionSpec) -> Result<(), StorageError> {
+    async fn ensure_collection(
+        &self,
+        spec: &CollectionSpec,
+    ) -> std::result::Result<(), StorageError> {
         self.inner.ensure_collection(spec).await
     }
 
-    async fn get(&self, collection: &str, id: &str) -> Result<Option<Versioned<Value>>, StorageError> {
+    async fn get(
+        &self,
+        collection: &str,
+        id: &str,
+    ) -> std::result::Result<Option<Versioned<Value>>, StorageError> {
         self.inner.get(collection, id).await
     }
 
@@ -92,7 +99,7 @@ impl DocumentStore for ImportDocumentPort {
         id: &str,
         value: Value,
         precondition: Precondition,
-    ) -> Result<Version, StorageError> {
+    ) -> std::result::Result<Version, StorageError> {
         self.put_with(collection, id, value, precondition, WriteOptions::default())
             .await
     }
@@ -104,7 +111,7 @@ impl DocumentStore for ImportDocumentPort {
         value: Value,
         precondition: Precondition,
         options: WriteOptions,
-    ) -> Result<Version, StorageError> {
+    ) -> std::result::Result<Version, StorageError> {
         if collection == tinybox_bus::storage::BOX_COLLECTION
             && self.race_started.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
         {
@@ -118,19 +125,36 @@ impl DocumentStore for ImportDocumentPort {
         self.inner.put_with(collection, id, value, precondition, options).await
     }
 
-    async fn delete(&self, collection: &str, id: &str, precondition: Precondition) -> Result<bool, StorageError> {
+    async fn delete(
+        &self,
+        collection: &str,
+        id: &str,
+        precondition: Precondition,
+    ) -> std::result::Result<bool, StorageError> {
         self.inner.delete(collection, id, precondition).await
     }
 
-    async fn query(&self, collection: &str, query: &Query) -> Result<Page<Versioned<Value>>, StorageError> {
+    async fn query(
+        &self,
+        collection: &str,
+        query: &Query,
+    ) -> std::result::Result<Page<Versioned<Value>>, StorageError> {
         self.inner.query(collection, query).await
     }
 
-    async fn count(&self, collection: &str, filter: &Filter) -> Result<u64, StorageError> {
+    async fn count(
+        &self,
+        collection: &str,
+        filter: &Filter,
+    ) -> std::result::Result<u64, StorageError> {
         self.inner.count(collection, filter).await
     }
 
-    async fn delete_where(&self, collection: &str, filter: &Filter) -> Result<u64, StorageError> {
+    async fn delete_where(
+        &self,
+        collection: &str,
+        filter: &Filter,
+    ) -> std::result::Result<u64, StorageError> {
         self.inner.delete_where(collection, filter).await
     }
 
@@ -140,11 +164,11 @@ impl DocumentStore for ImportDocumentPort {
         filter: &Filter,
         sort: &[Sort],
         patch: &Value,
-    ) -> Result<Option<Versioned<Value>>, StorageError> {
+    ) -> std::result::Result<Option<Versioned<Value>>, StorageError> {
         self.inner.claim(collection, filter, sort, patch).await
     }
 
-    async fn drop_collection(&self, collection: &str) -> Result<(), StorageError> {
+    async fn drop_collection(&self, collection: &str) -> std::result::Result<(), StorageError> {
         self.inner.drop_collection(collection).await
     }
 }
@@ -609,14 +633,13 @@ async fn legacy_box_import_checks_keys_and_store_race_outcomes() -> TestResult {
     let root = TempDir::new()?;
     let source = root.path().join("boxes.json");
     let record = sample_box("expected", "/legacy")?;
-    let bad_key_storage = file_test_storage(&root.path().join("bad-key"), "bad-key").await?;
-    let bad_key_documents = Arc::clone(bad_key_storage.documents());
-
     write_legacy_box(&source, "different-key", &record)?;
+    let (bad_key_storage, bad_key_documents, bad_key_store) = import_test_store("bad-key").await?;
+    let bad_key_docs: Arc<dyn DocumentStore> = bad_key_documents;
     let error = import_legacy_boxes(
         &source,
-        &ImportStoreStub::empty(InsertResult::Succeed),
-        &bad_key_documents,
+        &bad_key_store,
+        &bad_key_docs,
     )
     .await
     .err()
@@ -630,46 +653,41 @@ async fn legacy_box_import_checks_keys_and_store_race_outcomes() -> TestResult {
     ));
 
     write_legacy_box(&source, "expected", &record)?;
-    let race_storage =
-        file_test_storage(&root.path().join("matching-race"), "matching-race").await?;
-    let race_documents = Arc::clone(race_storage.documents());
-    let _race_stores = open_stores(
-        &root.path().join("matching-race"),
-        "matching-race",
-        &root.path().join("missing-boxes.json"),
-        &root.path().join("missing-templates.json"),
-    )
-    .await?;
-    let matching_race = ImportStoreStub::empty(InsertResult::Duplicate(record.clone()));
-    import_legacy_boxes(&source, &matching_race, &race_documents).await?;
+    let (matching_storage, matching_documents, matching_store) =
+        import_test_store("matching-race").await?;
+    let matching_base = import_test_storage(
+        &matching_storage,
+        Arc::clone(&matching_documents.inner.inner),
+    );
+    let matching_writer = Arc::new(DocumentBoxStore::open(matching_base).await?);
+    matching_documents.race_insert(matching_writer, record.clone());
+    let matching_docs: Arc<dyn DocumentStore> = matching_documents.clone();
+    import_legacy_boxes(&source, &matching_store, &matching_docs).await?;
+    assert_eq!(matching_store.get(&record.id)?, record);
 
+    let (differing_storage, differing_documents, differing_store) =
+        import_test_store("differing-race").await?;
+    let differing_base = import_test_storage(
+        &differing_storage,
+        Arc::clone(&differing_documents.inner.inner),
+    );
+    let differing_writer = Arc::new(DocumentBoxStore::open(differing_base).await?);
     let differing = sample_box("expected", "/concurrent-writer")?;
-    for (index, store) in [
-        ImportStoreStub::empty(InsertResult::Duplicate(differing.clone())),
-        ImportStoreStub::empty(InsertResult::SucceedAs(differing)),
-        ImportStoreStub::empty(InsertResult::Fail),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let storage = file_test_storage(
-            &root.path().join(format!("failure-{index}")),
-            &format!("failure-{index}"),
-        )
-        .await?;
-        let documents = Arc::clone(storage.documents());
-        let error = import_legacy_boxes(&source, &store, &documents)
-            .await
-            .err()
-            .ok_or_else(|| std::io::Error::other("conflicting store outcome must fail"))?;
-        assert!(matches!(error, Error::Store { .. }));
-    }
+    differing_documents.race_insert(differing_writer, differing);
+    let differing_docs: Arc<dyn DocumentStore> = differing_documents.clone();
+    let error = import_legacy_boxes(&source, &differing_store, &differing_docs)
+        .await
+        .err()
+        .ok_or_else(|| std::io::Error::other("different concurrent record must fail"))?;
+    assert!(matches!(error, Error::Store { operation: "migrate", .. }));
 
-    let read_storage = file_test_storage(&root.path().join("read-error"), "read-error").await?;
-    let read_documents = Arc::clone(read_storage.documents());
-    let mut failing_read = ImportStoreStub::empty(InsertResult::Succeed);
-    failing_read.fail_initial_read = true;
-    let error = import_legacy_boxes(&source, &failing_read, &read_documents)
+    let (_, failing_read_documents, failing_read_store) = import_test_store("read-error").await?;
+    failing_read_documents
+        .inner
+        .faults
+        .fail_operation_nth("documents.get", 2, ErrorKind::Backend);
+    let failing_read_docs: Arc<dyn DocumentStore> = failing_read_documents;
+    let error = import_legacy_boxes(&source, &failing_read_store, &failing_read_docs)
         .await
         .err()
         .ok_or_else(|| std::io::Error::other("store read error must propagate"))?;
@@ -680,6 +698,18 @@ async fn legacy_box_import_checks_keys_and_store_race_outcomes() -> TestResult {
             ..
         }
     ));
+
+    let (_, failing_write_documents, failing_write_store) = import_test_store("write-error").await?;
+    failing_write_documents
+        .inner
+        .faults
+        .fail_operation_nth("documents.put_with", 1, ErrorKind::Backend);
+    let failing_write_docs: Arc<dyn DocumentStore> = failing_write_documents;
+    let error = import_legacy_boxes(&source, &failing_write_store, &failing_write_docs)
+        .await
+        .err()
+        .ok_or_else(|| std::io::Error::other("storage write error must propagate"))?;
+    assert!(matches!(error, Error::Store { .. }));
     Ok(())
 }
 
