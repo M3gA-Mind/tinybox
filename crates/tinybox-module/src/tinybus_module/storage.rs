@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 use tinybox_core::{Error, Store};
 use tinybus::Connection;
+#[cfg(test)]
+use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_api::Storage;
 
 /// Lazily connected storage for one module instance.
