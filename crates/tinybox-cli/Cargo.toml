@@ -31,12 +31,11 @@ tinybox-sync.workspace = true
 # Argument parsing, help text, and shell-facing errors. The derive API keeps the
 # command surface declared next to the types it produces.
 clap = { version = "4", features = ["derive"] }
-# Boxes outlive the process that created them, so the store is a JSON file.
+# The CLI is the composition root: it chooses local durable storage for box
+# records and templates. The pure libraries use only the port contracts.
+tinystoragedrivers = { workspace = true, features = ["file", "sqlite"] }
 serde_json.workspace = true
 serde.workspace = true
-# Advisory file locking, so two invocations cannot lose each other's writes.
-# Released by the kernel on process exit and supported on Unix and Windows.
-fs2 = "0.4"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [dev-dependencies]
@@ -45,6 +44,7 @@ tempfile = "3"
 # Tests implement a scripted `Host` so the Docker paths are reachable without a
 # daemon.
 async-trait.workspace = true
+tinystoragedrivers-testkit.workspace = true
 
 [lints]
 workspace = true
