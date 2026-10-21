@@ -30,7 +30,9 @@ clap = { version = "4", features = ["derive"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [dev-dependencies]
+async-trait.workspace = true
 tempfile = "3"
+tinystoragedrivers-testkit.workspace = true
 
 [lints]
 workspace = true
