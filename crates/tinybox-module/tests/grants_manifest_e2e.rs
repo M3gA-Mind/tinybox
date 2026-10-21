@@ -11,7 +11,7 @@ async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
     // production module admission. Stage the real artifact with private ACLs.
     let staged = tempfile::Builder::new()
         .prefix("admitted-module-")
-        .tempdir_in(built_artifact.parent().ok_or("artifact has no directory")?)?;
+        .tempdir()?;
     #[cfg(windows)]
     secure_staging_directory(staged.path())?;
     let artifact = staged.path().join(

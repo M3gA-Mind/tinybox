@@ -18,6 +18,8 @@ use tinystoragedrivers_api::Storage;
 #[derive(Default)]
 pub(super) struct ModuleStorage {
     connection: Option<Connection>,
+    #[cfg(test)]
+    test_storage: Option<Storage>,
     scoped: tokio::sync::Mutex<Option<Storage>>,
     /// The opened host-backed box store, shared by every resource: it owns a
     /// blocking bridge with its own runtime thread, so one per module.
@@ -31,6 +33,17 @@ impl ModuleStorage {
             connection: Some(connection),
             scoped: tokio::sync::Mutex::default(),
             boxes: tokio::sync::Mutex::default(),
+            #[cfg(test)]
+            test_storage: None,
+        }
+    }
+
+    /// Directly bound testkit storage for resource unit tests.
+    #[cfg(test)]
+    pub(super) fn with_test_storage(storage: Storage) -> Self {
+        Self {
+            test_storage: Some(storage),
+            ..Self::default()
         }
     }
 
@@ -39,6 +52,10 @@ impl ModuleStorage {
     /// A failed connect is not cached, so a host that starts serving storage
     /// later is picked up by the next call.
     async fn scoped(&self) -> Option<Storage> {
+        #[cfg(test)]
+        if let Some(storage) = &self.test_storage {
+            return Some(storage.clone());
+        }
         let connection = self.connection.clone()?;
         let mut slot = self.scoped.lock().await;
         if let Some(scoped) = slot.as_ref() {

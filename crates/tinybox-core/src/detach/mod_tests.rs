@@ -172,11 +172,10 @@ fn run(request: &ExecRequest) -> Option<String> {
 /// the shell fixture maps that path for this process-level test.
 fn run_with_tmp(request: &ExecRequest, process: &ProcessId, tmp: &Path) -> Option<String> {
     let guest_path = crate::shell::quote(&pid_file(process));
-    let host_path = crate::shell::quote(
-        tmp.join(format!("tinybox-{process}.pid"))
-            .to_str()
-            .expect("the test temp path is valid UTF-8"),
-    );
+    let host_path = tmp
+        .join(format!("tinybox-{process}.pid"))
+        .to_str()
+        .map(crate::shell::quote)?;
     let mut mapped = request.clone();
     for argument in &mut mapped.argv {
         *argument = argument.replace(&guest_path, &host_path);
@@ -191,17 +190,18 @@ fn a_started_process_is_reported_running_and_then_stops() -> Result<()> {
     let id = mint();
     let started = start(&id, &ExecRequest::new(["sleep", "30"]))?;
     let tmp = std::env::temp_dir().join(format!("tinybox-detach-{id}"));
-    std::fs::create_dir(&tmp).expect("create the owned pid-file fixture");
+    std::fs::create_dir(&tmp).map_err(|error| Error::io("create pid-file fixture", &error))?;
 
     if run_with_tmp(&started, &id, &tmp).is_none() {
-        std::fs::remove_dir_all(&tmp).expect("remove the owned pid-file fixture");
+        std::fs::remove_dir_all(&tmp)
+            .map_err(|error| Error::io("remove pid-file fixture", &error))?;
         return Ok(()); // No shell on this host.
     }
 
     let running = run_with_tmp(&probe(&id), &id, &tmp);
     run_with_tmp(&stop(&id, Duration::from_secs(1)), &id, &tmp);
     let stopped = run_with_tmp(&probe(&id), &id, &tmp);
-    std::fs::remove_dir_all(&tmp).expect("remove the owned pid-file fixture");
+    std::fs::remove_dir_all(&tmp).map_err(|error| Error::io("remove pid-file fixture", &error))?;
     assert_eq!(running.as_deref(), Some(RUNNING));
     assert_eq!(stopped.as_deref(), Some("gone"));
     Ok(())
