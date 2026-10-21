@@ -514,25 +514,29 @@ fn native_jail_does_not_resolve_trusted_launchers_from_target_path()
         let root = tempfile::tempdir()?;
         let cwd = root.path().join("work");
         std::fs::create_dir(&cwd)?;
-        let systemd_run = crate::trusted_systemd_run_program()?;
-        let _ = crate::native_jail_argv_with_programs(
-            &crate::NativeJailCommand {
-                root: root.path().to_path_buf(),
-                cwd,
-                read_only: Vec::new(),
-                read_write: Vec::new(),
-                deny_read: Vec::new(),
-                allow_net: false,
-                allow_subprocess: true,
-                cpu_millis: Some(1),
-                memory_bytes: None,
-                pids_max: None,
-                argv: vec!["/bin/true".into()],
-                env: BTreeMap::new(),
-            },
-            &systemd_run,
-            Path::new("/bin/true"),
-        )?;
+        let result = crate::native_jail_argv(&crate::NativeJailCommand {
+            root: root.path().to_path_buf(),
+            cwd,
+            read_only: Vec::new(),
+            read_write: Vec::new(),
+            deny_read: Vec::new(),
+            allow_net: false,
+            allow_subprocess: true,
+            cpu_millis: Some(1),
+            memory_bytes: None,
+            pids_max: None,
+            argv: vec!["/bin/true".into()],
+            env: BTreeMap::new(),
+        });
+        if let Err(error) = result {
+            if error.kind() == std::io::ErrorKind::NotFound
+                && error.to_string() == "no trusted bwrap executable in fixed system locations"
+            {
+                assert!(!std::path::Path::new(&marker).exists());
+                return Ok(());
+            }
+            return Err(error.into());
+        }
         assert!(!std::path::Path::new(&marker).exists());
         return Ok(());
     }
