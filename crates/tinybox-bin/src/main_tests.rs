@@ -713,6 +713,26 @@ async fn legacy_box_import_checks_keys_and_store_race_outcomes() -> TestResult {
         }
     ));
 
+    let (changed_storage, changed_documents, changed_store) =
+        import_test_store("readback-change").await?;
+    let changed_base = import_test_storage(
+        &changed_storage,
+        Arc::clone(&changed_documents.inner.inner),
+    );
+    let changed_writer = Arc::new(DocumentBoxStore::open(changed_base).await?);
+    changed_documents.change_state_after_write(
+        changed_writer,
+        record.id.clone(),
+        BoxState::Stopped,
+    );
+    let changed_docs: Arc<dyn DocumentStore> = changed_documents;
+    let error = import_legacy_boxes(&source, &changed_store, &changed_docs)
+        .await
+        .err()
+        .ok_or_else(|| std::io::Error::other("changed post-insert readback must fail"))?;
+    assert!(matches!(error, Error::Store { operation: "migrate", .. }));
+    assert_eq!(changed_store.get(&record.id)?.state, BoxState::Stopped);
+
     let (_, failing_read_documents, failing_read_store) = import_test_store("read-error").await?;
     failing_read_documents
         .inner
