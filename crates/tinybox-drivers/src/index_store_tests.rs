@@ -31,6 +31,7 @@ fn test_store(docs: Arc<dyn DocumentStore>, registry: &str) -> io::Result<Docume
     let index = Repo::new(&docs, JAIL_INDEX_COLLECTION)
         .map_err(|error| to_io(&error))?
         .with_options(WriteOptions::new().schema(BODY_VERSION));
+    drop(docs);
     Ok(DocumentIndexStore {
         index,
         bridge,

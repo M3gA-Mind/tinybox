@@ -173,22 +173,21 @@ impl DocumentStore for Faulty {
                 .lock()
                 .expect("source replacement mutex")
                 .take();
-            if let Some((source_id, body)) = replacement {
-                if let Some(source) = self
+            if let Some((source_id, body)) = replacement
+                && let Some(source) = self
                     .inner
                     .get(tinybox_bus::storage::V1_BOX_COLLECTION, &source_id)
                     .await?
-                {
-                    self.inner
-                        .put_with(
-                            tinybox_bus::storage::V1_BOX_COLLECTION,
-                            &source_id,
-                            body,
-                            Precondition::Version(source.version),
-                            WriteOptions::default(),
-                        )
-                        .await?;
-                }
+            {
+                self.inner
+                    .put_with(
+                        tinybox_bus::storage::V1_BOX_COLLECTION,
+                        &source_id,
+                        body,
+                        Precondition::Version(source.version),
+                        WriteOptions::default(),
+                    )
+                    .await?;
             }
         }
         Ok(version)

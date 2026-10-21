@@ -25,12 +25,11 @@ fn test_store(docs: Arc<dyn DocumentStore>) -> Result<DocumentBoxStore> {
         })
         .expect("bridge")
         .expect("collections");
-    Ok(DocumentBoxStore {
-        boxes: Repo::new(&docs, BOX_COLLECTION)
-            .map_err(|error| store_error("test", &error))?
-            .with_options(WriteOptions::new().schema(BODY_VERSION)),
-        bridge,
-    })
+    let boxes = Repo::new(&docs, BOX_COLLECTION)
+        .map_err(|error| store_error("test", &error))?
+        .with_options(WriteOptions::new().schema(BODY_VERSION));
+    drop(docs);
+    Ok(DocumentBoxStore { boxes, bridge })
 }
 
 fn spec() -> Result<BoxSpec> {
@@ -205,7 +204,7 @@ fn synchronous_store_calls_fail_from_a_current_thread_runtime() -> Result<()> {
             ..
         })
     ));
-    assert!(store.list()?.is_empty());
+    assert_eq!(store.list()?, Vec::<BoxInfo>::new());
     Ok(())
 }
 

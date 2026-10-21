@@ -1,4 +1,4 @@
-//! Behavior tests for document-backed TinyBox templates.
+//! Behavior tests for document-backed `TinyBox` templates.
 
 use super::*;
 use tinystoragedrivers_api::{DocumentStoreExt, Storage, StorageBackend};
