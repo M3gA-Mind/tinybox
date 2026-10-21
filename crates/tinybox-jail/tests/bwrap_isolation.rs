@@ -225,15 +225,22 @@ fn deny_read_of_a_missing_path_refuses_without_creating_a_host_mountpoint() -> i
     let mut j = jail(root.path());
     j.deny_read = vec![denied.clone()];
     let cmd = Command::new("/bin/true");
-    let error = spawn_captured_with(&backend, &j, cmd)
-        .err()
-        .ok_or_else(|| io::Error::other("a missing denial must fail before bwrap starts"))?;
+    let error = match spawn_captured_with(&backend, &j, cmd) {
+        Ok(mut child) => {
+            let _ = child.wait()?;
+            return Err(io::Error::other(format!(
+                "missing deny_read path unexpectedly started a sandbox (host path exists: {})",
+                denied.exists()
+            )));
+        }
+        Err(error) => error,
+    };
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
-    assert!(!denied.exists(), "refusal mutated the host filesystem");
-    std::fs::write(&denied, "host-file-remains-creatable")?;
+    assert!(!denied.exists(), "preflight created the host deny path");
+    std::fs::write(&denied, "host-file-can-still-be-created")?;
     assert_eq!(
         std::fs::read_to_string(&denied)?,
-        "host-file-remains-creatable"
+        "host-file-can-still-be-created"
     );
     done("deny-missing-refused-without-host-mutation", start);
     Ok(())

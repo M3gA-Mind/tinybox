@@ -154,8 +154,8 @@ fn baseline_mounts() -> Vec<Mount> {
 /// - `deny_read` subtracted last.
 ///
 /// # Errors
-/// - `NotFound` when the root or a grant does not exist, or when a
-///   `deny_read` target does not exist before launch;
+/// - `NotFound` when the root, a `read_write` grant, or a `deny_read` path does
+///   not exist;
 /// - `InvalidInput` for a relative path or one containing `..`, for a symlink
 ///   below a writable grant that a nested grant goes through, for a grant that is `/`, `/tmp`, or at or under `/proc` or
 ///   `/dev` (it would replace a private mount and expose the host's), and for
