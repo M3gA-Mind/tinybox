@@ -1,8 +1,8 @@
 use super::*;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
 use async_trait::async_trait;
 use serde_json::Value;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use tinybox_core::{
     BoxId, BoxInfo, BoxSpec, BoxState, HostRef, Placement, SandboxRef, WorkspaceSource,
@@ -113,16 +113,23 @@ impl DocumentStore for ImportDocumentPort {
         options: WriteOptions,
     ) -> std::result::Result<Version, StorageError> {
         if collection == tinybox_bus::storage::BOX_COLLECTION
-            && self.race_started.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+            && self
+                .race_started
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
         {
             if let Some((store, info)) = self.race_store.lock().expect("race store mutex").take() {
                 std::thread::spawn(move || store.insert(&info))
                     .join()
                     .map_err(|_| StorageError::backend("race writer panicked"))?
-                    .map_err(|error| StorageError::backend(format!("race writer failed: {error}")))?;
+                    .map_err(|error| {
+                        StorageError::backend(format!("race writer failed: {error}"))
+                    })?;
             }
         }
-        self.inner.put_with(collection, id, value, precondition, options).await
+        self.inner
+            .put_with(collection, id, value, precondition, options)
+            .await
     }
 
     async fn delete(
@@ -186,8 +193,12 @@ fn import_test_storage(storage: &Storage, documents: Arc<dyn DocumentStore>) -> 
 
 async fn import_test_store(
     identity: &str,
-) -> Result<(Storage, Arc<ImportDocumentPort>, DocumentBoxStore), Box<dyn std::error::Error>> {
-    let scope = Scope::new(format!("tinybox.cli.import.{identity}"))?;
+) -> std::result::Result<
+    (Storage, Arc<ImportDocumentPort>, DocumentBoxStore),
+    Box<dyn std::error::Error>,
+> {
+    let scope_name = format!("tinybox.cli.import.{identity}");
+    let scope = Scope::new(&scope_name)?;
     let base = memory_storage(&scope);
     let documents = ImportDocumentPort::new(Arc::clone(base.documents()));
     let storage = import_test_storage(&base, documents.clone());
@@ -634,16 +645,12 @@ async fn legacy_box_import_checks_keys_and_store_race_outcomes() -> TestResult {
     let source = root.path().join("boxes.json");
     let record = sample_box("expected", "/legacy")?;
     write_legacy_box(&source, "different-key", &record)?;
-    let (bad_key_storage, bad_key_documents, bad_key_store) = import_test_store("bad-key").await?;
+    let (_bad_key_storage, bad_key_documents, bad_key_store) = import_test_store("bad-key").await?;
     let bad_key_docs: Arc<dyn DocumentStore> = bad_key_documents;
-    let error = import_legacy_boxes(
-        &source,
-        &bad_key_store,
-        &bad_key_docs,
-    )
-    .await
-    .err()
-    .ok_or_else(|| std::io::Error::other("mismatched key must fail"))?;
+    let error = import_legacy_boxes(&source, &bad_key_store, &bad_key_docs)
+        .await
+        .err()
+        .ok_or_else(|| std::io::Error::other("mismatched key must fail"))?;
     assert!(matches!(
         error,
         Error::Store {
@@ -679,7 +686,13 @@ async fn legacy_box_import_checks_keys_and_store_race_outcomes() -> TestResult {
         .await
         .err()
         .ok_or_else(|| std::io::Error::other("different concurrent record must fail"))?;
-    assert!(matches!(error, Error::Store { operation: "migrate", .. }));
+    assert!(matches!(
+        error,
+        Error::Store {
+            operation: "migrate",
+            ..
+        }
+    ));
 
     let (_, failing_read_documents, failing_read_store) = import_test_store("read-error").await?;
     failing_read_documents
@@ -699,11 +712,13 @@ async fn legacy_box_import_checks_keys_and_store_race_outcomes() -> TestResult {
         }
     ));
 
-    let (_, failing_write_documents, failing_write_store) = import_test_store("write-error").await?;
-    failing_write_documents
-        .inner
-        .faults
-        .fail_operation_nth("documents.put_with", 1, ErrorKind::Backend);
+    let (_, failing_write_documents, failing_write_store) =
+        import_test_store("write-error").await?;
+    failing_write_documents.inner.faults.fail_operation_nth(
+        "documents.put_with",
+        1,
+        ErrorKind::Backend,
+    );
     let failing_write_docs: Arc<dyn DocumentStore> = failing_write_documents;
     let error = import_legacy_boxes(&source, &failing_write_store, &failing_write_docs)
         .await
