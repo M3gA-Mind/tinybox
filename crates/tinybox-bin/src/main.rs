@@ -119,8 +119,8 @@ async fn open_stores(
     })
     .await
     .map_err(|error| storage_error("open", &error))?;
-    let scope = Scope::new(format!("tinybox.cli.{store_identity}"))
-        .map_err(|error| storage_error("scope", &error))?;
+    let scope_name = format!("tinybox.cli.{store_identity}");
+    let scope = Scope::new(&scope_name).map_err(|error| storage_error("scope", &error))?;
     let storage = backend
         .for_scope(&scope)
         .map_err(|error| storage_error("scope", &error))?;
@@ -145,7 +145,7 @@ async fn import_legacy_boxes(
     if import_already_complete(documents, "boxes", &identity, &digest).await? {
         return Ok(());
     }
-    let records: BTreeMap<String, BoxInfo> = parse_legacy(&bytes, "box store")?;
+    let records: BTreeMap<String, BoxInfo> = parse_legacy_boxes(&bytes)?;
     for (key, record) in records {
         if record.id.as_str() != key {
             return Err(Error::Store {
@@ -184,6 +184,7 @@ async fn import_legacy_boxes(
             Err(error) => return Err(error),
         }
     }
+    verify_legacy_unchanged(path, &identity, &digest, "box store")?;
     complete_import(documents, "boxes", &identity, &digest).await
 }
 
@@ -209,6 +210,7 @@ async fn import_legacy_templates(
                 message: format!("legacy template `{key}`: {error}"),
             })?;
     }
+    verify_legacy_unchanged(path, &identity, &digest, "template index")?;
     complete_import(documents, "templates", &identity, &digest).await
 }
 
@@ -235,6 +237,67 @@ fn parse_legacy<T: serde::de::DeserializeOwned>(bytes: &[u8], label: &str) -> Re
     })
 }
 
+fn parse_legacy_boxes(bytes: &[u8]) -> Result<BTreeMap<String, BoxInfo>, Error> {
+    let input: serde_json::Value = parse_legacy(bytes, "box store")?;
+    let records: BTreeMap<String, BoxInfo> =
+        serde_json::from_value(input.clone()).map_err(|error| Error::Store {
+            operation: "migrate",
+            message: format!("legacy box store is invalid JSON: {error}"),
+        })?;
+    let canonical = serde_json::to_value(&records).map_err(|error| Error::Store {
+        operation: "migrate",
+        message: format!("legacy box store could not be validated: {error}"),
+    })?;
+    reject_unknown_legacy_fields(&input, &canonical, "box store")?;
+    Ok(records)
+}
+
+fn reject_unknown_legacy_fields(
+    input: &serde_json::Value,
+    canonical: &serde_json::Value,
+    label: &str,
+) -> Result<(), Error> {
+    match (input, canonical) {
+        (serde_json::Value::Object(input), serde_json::Value::Object(canonical)) => {
+            for (key, value) in input {
+                let Some(canonical_value) = canonical.get(key) else {
+                    return Err(Error::Store {
+                        operation: "migrate",
+                        message: format!("legacy {label} contains unsupported field `{key}`"),
+                    });
+                };
+                reject_unknown_legacy_fields(value, canonical_value, label)?;
+            }
+        }
+        (serde_json::Value::Array(input), serde_json::Value::Array(canonical)) => {
+            for (value, canonical_value) in input.iter().zip(canonical) {
+                reject_unknown_legacy_fields(value, canonical_value, label)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn verify_legacy_unchanged(
+    path: &Path,
+    expected_identity: &str,
+    expected_digest: &str,
+    label: &str,
+) -> Result<(), Error> {
+    let (bytes, identity) = legacy_source(path, label)?.ok_or_else(|| Error::Store {
+        operation: "migrate",
+        message: format!("legacy {label} disappeared during import"),
+    })?;
+    if identity != expected_identity || blake3::hash(&bytes).to_hex().as_str() != expected_digest {
+        return Err(Error::Store {
+            operation: "migrate",
+            message: format!("legacy {label} changed during import"),
+        });
+    }
+    Ok(())
+}
+
 fn normalized_path(path: &Path) -> Result<String, Error> {
     let parent = path
         .parent()
@@ -246,7 +309,14 @@ fn normalized_path(path: &Path) -> Result<String, Error> {
     })?;
     let parent =
         std::fs::canonicalize(parent).map_err(|error| Error::io("canonicalize", &error))?;
-    Ok(parent.join(name).to_string_lossy().into_owned())
+    parent
+        .join(name)
+        .into_os_string()
+        .into_string()
+        .map_err(|_| Error::Store {
+            operation: "identify",
+            message: "store path is not valid Unicode".to_owned(),
+        })
 }
 
 fn store_location(path: &Path) -> Result<(PathBuf, String), Error> {

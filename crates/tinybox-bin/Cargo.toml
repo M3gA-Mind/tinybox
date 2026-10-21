@@ -16,6 +16,7 @@ doc = false
 
 [dependencies]
 tinybox-cli = { path = "../tinybox-cli", version = "0.1.25" }
+tinybox-bus.workspace = true
 tinybox-core.workspace = true
 tinybox-drivers.workspace = true
 tinybox-host.workspace = true

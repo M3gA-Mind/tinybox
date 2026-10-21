@@ -86,6 +86,57 @@ fn legacy_box_file_is_imported_idempotently_and_kept_as_the_source()
 }
 
 #[test]
+fn unsupported_legacy_box_fields_fail_closed_without_recording_completion()
+-> Result<(), Box<dyn std::error::Error>> {
+    let state = TempDir::new()?;
+    let path = state.path().join("boxes.json");
+    let mut record = serde_json::to_value(old_box("box-future")?)?;
+    record["spec"]["future_policy"] = serde_json::json!({"mode": "new"});
+    let bytes = serde_json::to_vec(
+        &[("box-future".to_owned(), record)]
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>(),
+    )?;
+    std::fs::write(&path, &bytes)?;
+
+    let rejected = tinybox(state.path(), &["ls"])?;
+    assert_eq!(rejected.status.code(), Some(70));
+    assert!(stderr(&rejected).contains("unsupported field `future_policy`"));
+    assert_eq!(std::fs::read(&path)?, bytes);
+
+    let mut record = serde_json::to_value(old_box("box-future")?)?;
+    // Historical files may omit the supported ports field; that remains valid.
+    record["spec"].as_object_mut().unwrap().remove("ports");
+    let valid = [("box-future".to_owned(), record)]
+        .into_iter()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    std::fs::write(&path, serde_json::to_vec(&valid)?)?;
+    let imported = tinybox(state.path(), &["ls"])?;
+    assert!(imported.status.success(), "{}", stderr(&imported));
+    assert!(stdout(&imported).contains("box-future"));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn non_unicode_store_paths_are_rejected_instead_of_collapsed() -> io::Result<()> {
+    use std::os::unix::ffi::OsStringExt;
+
+    let state = TempDir::new()?;
+    let path = state
+        .path()
+        .join(std::ffi::OsString::from_vec(b"box-\xff.json".to_vec()));
+    let output = Command::new(env!("CARGO_BIN_EXE_tinybox"))
+        .arg("--store")
+        .arg(path)
+        .arg("ls")
+        .output()?;
+    assert_eq!(output.status.code(), Some(70));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("store path is not valid Unicode"));
+    Ok(())
+}
+
+#[test]
 fn distinct_store_paths_in_one_directory_have_isolated_state() -> io::Result<()> {
     let state = TempDir::new()?;
     let workspace = TempDir::new()?;
@@ -214,11 +265,17 @@ async fn a_legacy_template_conflict_does_not_overwrite_current_state()
     let legacy_bytes = serde_json::to_vec(&legacy)?;
     std::fs::write(&legacy_path, &legacy_bytes)?;
 
+    let identity = std::fs::canonicalize(state.path())?
+        .join("boxes.json")
+        .to_string_lossy()
+        .into_owned();
+    let digest = blake3::hash(identity.as_bytes()).to_hex().to_string();
     let backend = tinystoragedrivers::open(&StorageConfig::File {
-        dir: state.path().to_owned(),
+        dir: state.path().join(".tinybox-storage").join(&digest),
     })
     .await?;
-    let scope = Scope::new("tinybox.cli")?;
+    let scope_name = format!("tinybox.cli.{digest}");
+    let scope = Scope::new(&scope_name)?;
     let storage = backend.for_scope(&scope)?;
     let templates = DocumentTemplateStore::open(storage).await?;
     let name = TemplateName::new("release")?;

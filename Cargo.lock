@@ -1199,10 +1199,12 @@ dependencies = [
 name = "tinybox-bin"
 version = "0.1.40"
 dependencies = [
+ "blake3",
  "clap",
  "serde",
  "serde_json",
  "tempfile",
+ "tinybox-bus",
  "tinybox-cli",
  "tinybox-core",
  "tinybox-drivers",
