@@ -1,11 +1,18 @@
 use super::*;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use async_trait::async_trait;
+use serde_json::Value;
 use tempfile::TempDir;
 use tinybox_core::{
     BoxId, BoxInfo, BoxSpec, BoxState, HostRef, Placement, SandboxRef, WorkspaceSource,
 };
-use tinystoragedrivers_api::Storage;
-use tinystoragedrivers_types::{Precondition, Scope, WriteOptions};
+use tinystoragedrivers_api::{DocumentStore, Storage};
+use tinystoragedrivers_testkit::{Failing, memory_storage};
+use tinystoragedrivers_types::{
+    Capabilities, CollectionSpec, ErrorKind, Filter, Page, Precondition, Query, Scope, Sort,
+    StorageError, Version, Versioned, WriteOptions,
+};
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
@@ -45,137 +52,123 @@ async fn file_test_storage(
 }
 
 #[derive(Debug)]
-enum InsertResult {
-    Succeed,
-    SucceedAs(BoxInfo),
-    Duplicate(BoxInfo),
-    Fail,
+struct ImportDocumentPort {
+    inner: Failing<dyn DocumentStore>,
+    race_store: Mutex<Option<(Arc<dyn Store>, BoxInfo)>>,
+    race_started: AtomicBool,
 }
 
-#[derive(Debug)]
-struct ImportStoreStub {
-    current: Mutex<Option<BoxInfo>>,
-    after_insert: Mutex<Option<BoxInfo>>,
-    insert_result: InsertResult,
-    fail_initial_read: bool,
-}
+impl ImportDocumentPort {
+    fn new(inner: Arc<dyn DocumentStore>) -> Arc<Self> {
+        Arc::new(Self {
+            inner: Failing::new(inner),
+            race_store: Mutex::new(None),
+            race_started: AtomicBool::new(false),
+        })
+    }
 
-impl ImportStoreStub {
-    fn empty(insert_result: InsertResult) -> Self {
-        Self {
-            current: Mutex::new(None),
-            after_insert: Mutex::new(None),
-            insert_result,
-            fail_initial_read: false,
-        }
+    fn race_insert(&self, store: Arc<dyn Store>, info: BoxInfo) {
+        *self.race_store.lock().expect("race store mutex") = Some((store, info));
     }
 }
 
-impl Store for ImportStoreStub {
-    fn insert(&self, info: &BoxInfo) -> tinybox_core::Result<()> {
-        match &self.insert_result {
-            InsertResult::Succeed => {
-                *self
-                    .after_insert
-                    .lock()
-                    .map_err(|_| tinybox_core::Error::Store {
-                        operation: "test",
-                        message: "stub lock poisoned".to_owned(),
-                    })? = Some(info.clone());
-                Ok(())
-            }
-            InsertResult::SucceedAs(stored) => {
-                *self
-                    .after_insert
-                    .lock()
-                    .map_err(|_| tinybox_core::Error::Store {
-                        operation: "test",
-                        message: "stub lock poisoned".to_owned(),
-                    })? = Some(stored.clone());
-                Ok(())
-            }
-            InsertResult::Duplicate(existing) => {
-                *self
-                    .after_insert
-                    .lock()
-                    .map_err(|_| tinybox_core::Error::Store {
-                        operation: "test",
-                        message: "stub lock poisoned".to_owned(),
-                    })? = Some(existing.clone());
-                Err(tinybox_core::Error::DuplicateBox {
-                    id: info.id.to_string(),
-                })
-            }
-            InsertResult::Fail => Err(tinybox_core::Error::Store {
-                operation: "insert",
-                message: "injected failure".to_owned(),
-            }),
-        }
+#[async_trait]
+impl DocumentStore for ImportDocumentPort {
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
     }
 
-    fn get(&self, id: &BoxId) -> tinybox_core::Result<BoxInfo> {
-        if self.fail_initial_read
-            && self
-                .after_insert
-                .lock()
-                .map_err(|_| tinybox_core::Error::Store {
-                    operation: "test",
-                    message: "stub lock poisoned".to_owned(),
-                })?
-                .is_none()
+    async fn ensure_collection(&self, spec: &CollectionSpec) -> Result<(), StorageError> {
+        self.inner.ensure_collection(spec).await
+    }
+
+    async fn get(&self, collection: &str, id: &str) -> Result<Option<Versioned<Value>>, StorageError> {
+        self.inner.get(collection, id).await
+    }
+
+    async fn put(
+        &self,
+        collection: &str,
+        id: &str,
+        value: Value,
+        precondition: Precondition,
+    ) -> Result<Version, StorageError> {
+        self.put_with(collection, id, value, precondition, WriteOptions::default())
+            .await
+    }
+
+    async fn put_with(
+        &self,
+        collection: &str,
+        id: &str,
+        value: Value,
+        precondition: Precondition,
+        options: WriteOptions,
+    ) -> Result<Version, StorageError> {
+        if collection == tinybox_bus::storage::BOX_COLLECTION
+            && self.race_started.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
         {
-            return Err(tinybox_core::Error::Store {
-                operation: "read",
-                message: "injected failure".to_owned(),
-            });
+            if let Some((store, info)) = self.race_store.lock().expect("race store mutex").take() {
+                std::thread::spawn(move || store.insert(&info))
+                    .join()
+                    .map_err(|_| StorageError::backend("race writer panicked"))?
+                    .map_err(|error| StorageError::backend(format!("race writer failed: {error}")))?;
+            }
         }
-        if let Some(current) = self
-            .current
-            .lock()
-            .map_err(|_| tinybox_core::Error::Store {
-                operation: "test",
-                message: "stub lock poisoned".to_owned(),
-            })?
-            .clone()
-            && &current.id == id
-        {
-            return Ok(current);
-        }
-        if let Some(current) = self
-            .after_insert
-            .lock()
-            .map_err(|_| tinybox_core::Error::Store {
-                operation: "test",
-                message: "stub lock poisoned".to_owned(),
-            })?
-            .clone()
-            && &current.id == id
-        {
-            return Ok(current);
-        }
-        Err(tinybox_core::Error::UnknownBox { id: id.to_string() })
+        self.inner.put_with(collection, id, value, precondition, options).await
     }
 
-    fn list(&self) -> tinybox_core::Result<Vec<BoxInfo>> {
-        Ok(self
-            .current
-            .lock()
-            .map_err(|_| tinybox_core::Error::Store {
-                operation: "test",
-                message: "stub lock poisoned".to_owned(),
-            })?
-            .clone()
-            .into_iter()
-            .collect())
+    async fn delete(&self, collection: &str, id: &str, precondition: Precondition) -> Result<bool, StorageError> {
+        self.inner.delete(collection, id, precondition).await
     }
 
-    fn set_state(&self, _id: &BoxId, _state: BoxState) -> tinybox_core::Result<()> {
-        Ok(())
+    async fn query(&self, collection: &str, query: &Query) -> Result<Page<Versioned<Value>>, StorageError> {
+        self.inner.query(collection, query).await
     }
 
-    fn remove(&self, _id: &BoxId) -> tinybox_core::Result<()> {
-        Ok(())
+    async fn count(&self, collection: &str, filter: &Filter) -> Result<u64, StorageError> {
+        self.inner.count(collection, filter).await
     }
+
+    async fn delete_where(&self, collection: &str, filter: &Filter) -> Result<u64, StorageError> {
+        self.inner.delete_where(collection, filter).await
+    }
+
+    async fn claim(
+        &self,
+        collection: &str,
+        filter: &Filter,
+        sort: &[Sort],
+        patch: &Value,
+    ) -> Result<Option<Versioned<Value>>, StorageError> {
+        self.inner.claim(collection, filter, sort, patch).await
+    }
+
+    async fn drop_collection(&self, collection: &str) -> Result<(), StorageError> {
+        self.inner.drop_collection(collection).await
+    }
+}
+
+fn import_test_storage(storage: &Storage, documents: Arc<dyn DocumentStore>) -> Storage {
+    Storage::new(
+        documents,
+        Arc::clone(storage.streams()),
+        Arc::clone(storage.kv()),
+        Arc::clone(storage.blobs()),
+        Arc::clone(storage.queues()),
+        Arc::clone(storage.secrets()),
+    )
+}
+
+async fn import_test_store(
+    identity: &str,
+) -> Result<(Storage, Arc<ImportDocumentPort>, DocumentBoxStore), Box<dyn std::error::Error>> {
+    let scope = Scope::new(format!("tinybox.cli.import.{identity}"))?;
+    let base = memory_storage(&scope);
+    let documents = ImportDocumentPort::new(Arc::clone(base.documents()));
+    let storage = import_test_storage(&base, documents.clone());
+    let store = DocumentBoxStore::open(storage.clone()).await?;
+    Ok((storage, documents, store))
 }
 
 fn write_legacy_box(path: &Path, key: &str, record: &BoxInfo) -> TestResult {
