@@ -552,7 +552,8 @@ fn path_identity_requires_an_existing_parent_and_unicode_names() -> TestResult {
     let plain = root.path().join("boxes.json");
     let (directory, identity) = store_location(&plain)?;
     assert!(directory.ends_with(&identity));
-    assert!(directory.starts_with(root.path()));
+    let canonical_root = std::fs::canonicalize(root.path())?;
+    assert!(directory.starts_with(canonical_root));
     Ok(())
 }
 
