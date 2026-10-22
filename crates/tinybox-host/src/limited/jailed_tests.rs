@@ -659,7 +659,7 @@ async fn async_pipe_write_resumes_after_backpressure_clears()
         0
     );
     assert_eq!(
-        tokio::time::timeout(std::time::Duration::from_secs(5), write).await??,
+        tokio::time::timeout(std::time::Duration::from_secs(5), write).await???,
         1
     );
     Ok(())
