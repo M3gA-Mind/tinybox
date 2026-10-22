@@ -317,6 +317,7 @@ struct UnidentifiedProcess {
     terminated: Arc<std::sync::atomic::AtomicBool>,
     report_termination_error_after_stop: bool,
     fail_termination: Arc<std::sync::atomic::AtomicBool>,
+    skip_next_termination: Arc<std::sync::atomic::AtomicBool>,
 }
 #[cfg(unix)]
 impl tinybox_jail::OwnedProcess for UnidentifiedProcess {
@@ -337,6 +338,12 @@ impl tinybox_jail::OwnedProcess for UnidentifiedProcess {
         {
             return Err(std::io::Error::other("termination temporarily unavailable"));
         }
+        if self
+            .skip_next_termination
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(());
+        }
         self.child.kill()?;
         if self.report_termination_error_after_stop {
             let _ = self.child.wait()?;
@@ -353,6 +360,7 @@ struct UnidentifiedBackend {
     terminated: Arc<std::sync::atomic::AtomicBool>,
     report_termination_error_after_stop: bool,
     fail_termination: Arc<std::sync::atomic::AtomicBool>,
+    skip_next_termination: Arc<std::sync::atomic::AtomicBool>,
 }
 #[cfg(unix)]
 impl tinybox_jail::JailBackend for UnidentifiedBackend {
@@ -382,6 +390,7 @@ impl tinybox_jail::JailBackend for UnidentifiedBackend {
                 terminated: self.terminated.clone(),
                 report_termination_error_after_stop: self.report_termination_error_after_stop,
                 fail_termination: self.fail_termination.clone(),
+                skip_next_termination: self.skip_next_termination.clone(),
             },
             None,
             None,
