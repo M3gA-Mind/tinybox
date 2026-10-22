@@ -8,9 +8,9 @@ use std::sync::{
 };
 use tinybox_core::{Error, ExecOutput, ExecRequest, ExecutionObserver, Host, OutputStream, Result};
 use tinybox_jail::{Jail, JailBackend, OwnedChild};
+use tokio::io::AsyncWriteExt;
 #[cfg(unix)]
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::io::AsyncWriteExt;
 use tokio::sync::{oneshot, watch};
 
 #[cfg(unix)]
