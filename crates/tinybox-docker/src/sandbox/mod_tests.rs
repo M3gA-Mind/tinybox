@@ -481,6 +481,42 @@ async fn a_local_directory_is_bind_mounted_and_becomes_the_working_directory() -
 }
 
 #[tokio::test]
+async fn audit_high2_a_dangerous_local_directory_is_refused_before_any_record() -> Result<()> {
+    let (sandbox, host, store) = sandbox();
+
+    for path in ["/", "/etc", "/var/run"] {
+        let outcome = sandbox
+            .create(&spec_from(WorkspaceSource::LocalDir(path.into()))?)
+            .await;
+        assert_eq!(
+            outcome.err(),
+            Some(Error::UnsupportedWorkspaceSource {
+                sandbox: NAME.to_owned(),
+                kind: "dangerous host directory",
+            }),
+            "{path}"
+        );
+    }
+    assert_eq!(store.list()?.len(), 0);
+    assert!(host.command(0).is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_persistent_box_cannot_gain_new_privileges() -> Result<()> {
+    let (sandbox, host, _store) = sandbox();
+
+    sandbox.create(&spec()?).await?;
+
+    let argv = host.command(0).unwrap_or_default();
+    assert_eq!(
+        flag_value(&argv, "--security-opt"),
+        Some("no-new-privileges")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn box_environment_reaches_the_container() -> Result<()> {
     let (sandbox, host, _store) = sandbox();
 

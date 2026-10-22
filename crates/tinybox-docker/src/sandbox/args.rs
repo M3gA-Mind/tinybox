@@ -113,6 +113,9 @@ pub(super) fn run(
         format!("{OWNER_LABEL}={id}"),
         "--label".to_owned(),
         format!("{OWNER_ATTEMPT_LABEL}={attempt}"),
+        // Stop setuid/setgid escalation inside the container.
+        "--security-opt".to_owned(),
+        "no-new-privileges".to_owned(),
     ];
 
     argv.extend(resource_flags(&spec.resources));
