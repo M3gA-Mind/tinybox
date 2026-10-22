@@ -382,23 +382,7 @@ impl JailLocalHost {
                 .child
                 .as_mut()
                 .unwrap_or_else(|| unreachable!("newly retained jail child is present"));
-            let pipes = (|| {
-                let stdin = match child.take_stdin() {
-                    Some(stdin) => Some(async_pipe(stdin)?),
-                    None if payload.is_some() => {
-                        return Err(failure(
-                            "write stdin",
-                            "owned child did not provide a stdin pipe".into(),
-                        ));
-                    }
-                    None => None,
-                };
-                Ok::<_, Error>((
-                    async_pipe(pipe(child.take_stdout(), "stdout")?)?,
-                    async_pipe(pipe(child.take_stderr(), "stderr")?)?,
-                    stdin,
-                ))
-            })();
+            let pipes = take_captured_pipes(child, payload.is_some());
             let result = match pipes {
                 Ok((stdout, stderr, stdin)) => {
                     let budget = Arc::new(AtomicUsize::new(0));
@@ -482,6 +466,27 @@ fn retain_cleanup(state: &State, child: OwnedChild, group: i32, outcome: Result<
             .insert(group, Arc::new(tokio::sync::Mutex::new(Some(child))));
     }
     outcome
+}
+
+fn take_captured_pipes(
+    child: &mut OwnedChild,
+    payload_requested: bool,
+) -> Result<(AsyncPipe, AsyncPipe, Option<AsyncPipe>)> {
+    let stdin = match child.take_stdin() {
+        Some(stdin) => Some(async_pipe(stdin)?),
+        None if payload_requested => {
+            return Err(failure(
+                "write stdin",
+                "owned child did not provide a stdin pipe".into(),
+            ));
+        }
+        None => None,
+    };
+    Ok((
+        async_pipe(pipe(child.take_stdout(), "stdout")?)?,
+        async_pipe(pipe(child.take_stderr(), "stderr")?)?,
+        stdin,
+    ))
 }
 
 async fn wait_child(child: &mut OwnedChild) -> Result<Option<i32>> {
@@ -611,8 +616,7 @@ where
         .map(|error| Error::io("inspect jail child", &error));
     match group_alive(group).await {
         Ok(true) => {
-            if let Err(error) = kill_jail_group(group, kill_group, |group| group_alive(group)).await
-            {
+            if let Err(error) = kill_jail_group(group, kill_group, &mut group_alive).await {
                 group_error.get_or_insert(error);
             }
         }
