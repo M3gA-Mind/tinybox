@@ -68,7 +68,7 @@ impl AsyncRead for AsyncPipe {
                     return std::task::Poll::Ready(Ok(()));
                 }
                 Ok(Err(error)) => return std::task::Poll::Ready(Err(error)),
-                Err(_would_block) => continue,
+                Err(_would_block) => {}
             }
         }
     }
@@ -86,7 +86,7 @@ impl AsyncWrite for AsyncPipe {
             let mut ready = std::task::ready!(self.0.poll_write_ready(cx))?;
             match ready.try_io(|inner| inner.get_ref().write(buffer)) {
                 Ok(result) => return std::task::Poll::Ready(result),
-                Err(_would_block) => continue,
+                Err(_would_block) => {}
             }
         }
     }
