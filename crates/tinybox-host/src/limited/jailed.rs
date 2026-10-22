@@ -23,12 +23,22 @@ fn async_pipe(file: std::fs::File) -> Result<AsyncPipe> {
         use nix::fcntl::{FcntlArg, OFlag, fcntl};
 
         let flags = fcntl(&file, FcntlArg::F_GETFL)
-            .map_err(|error| Error::io("make native pipe nonblocking", &error))?;
+            .map_err(|error| {
+                Error::io(
+                    "make native pipe nonblocking",
+                    &std::io::Error::from_raw_os_error(error as i32),
+                )
+            })?;
         fcntl(
             &file,
             FcntlArg::F_SETFL(OFlag::from_bits_retain(flags) | OFlag::O_NONBLOCK),
         )
-        .map_err(|error| Error::io("make native pipe nonblocking", &error))?;
+        .map_err(|error| {
+            Error::io(
+                "make native pipe nonblocking",
+                &std::io::Error::from_raw_os_error(error as i32),
+            )
+        })?;
         tokio::io::unix::AsyncFd::new(file)
             .map(AsyncPipe)
             .map_err(|error| Error::io("register native pipe", &error))
