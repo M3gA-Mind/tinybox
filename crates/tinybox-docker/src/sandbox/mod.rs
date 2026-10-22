@@ -263,7 +263,16 @@ impl DockerSandbox {
     /// completed a create before its response was lost, so callers reconcile
     /// that case by checking the created container's ownership label.
     async fn docker(&self, operation: &'static str, argv: Vec<String>) -> Result<String> {
-        let output = self.host.run(&ExecRequest::new(argv)).await?;
+        self.docker_request(operation, ExecRequest::new(argv)).await
+    }
+
+    /// [`Self::docker`] for a request that also carries the client's environment.
+    async fn docker_request(
+        &self,
+        operation: &'static str,
+        request: ExecRequest,
+    ) -> Result<String> {
+        let output = self.host.run(&request).await?;
         if !output.succeeded() {
             return Err(Error::Backend {
                 sandbox: NAME.to_owned(),
@@ -423,7 +432,9 @@ impl Sandbox for DockerSandbox {
             }
         };
 
-        if let Err(error) = self.docker("create the container", argv).await {
+        let mut create = ExecRequest::new(argv);
+        create.env.clone_from(&spec.env);
+        if let Err(error) = self.docker_request("create the container", create).await {
             // Docker reports a name collision before creating a container.
             // Never remove that name: it belongs to the pre-existing owner.
             if is_name_conflict(&error) {
@@ -524,7 +535,11 @@ impl Sandbox for DockerSandbox {
         // A command that runs and fails is a result, so the raw output is
         // returned rather than being turned into a backend error.
         self.host
-            .run(&ExecRequest::new(args::exec(&self.namespace, id, request)?))
+            .run(&{
+                let mut exec = ExecRequest::new(args::exec(&self.namespace, id, request)?);
+                exec.env.clone_from(&request.env);
+                exec
+            })
             .await
     }
 

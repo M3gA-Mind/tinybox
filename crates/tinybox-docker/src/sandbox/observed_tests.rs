@@ -39,10 +39,14 @@ fn observed_exec_keeps_docker_flags_and_untrusted_argv_separate() -> Result<()> 
         .with_stdin([0, 255, 1]);
 
     let observed = exec("team", &id, &request, "a1b2")?;
-    let argv = observed.argv;
+    let argv = observed.argv.clone();
     assert_eq!(argv[0..3], ["docker", "exec", "-i"]);
     assert_eq!(argv[3..5], ["--workdir", "/workspace/project"]);
-    assert_eq!(argv[5..7], ["--env", "MODE=two words"]);
+    assert_eq!(argv[5..7], ["--env", "MODE"]);
+    assert_eq!(
+        observed.env.get("MODE").map(String::as_str),
+        Some("two words")
+    );
     assert_eq!(argv[7], "tinybox-team-box-4");
     assert_eq!(argv[8..10], ["sh", "-c"]);
     assert!(argv[10].contains("setsid"));

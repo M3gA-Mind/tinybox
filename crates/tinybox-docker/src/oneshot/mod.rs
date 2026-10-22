@@ -217,12 +217,12 @@ impl OneShot {
             push(&format!("{0}:{0}:ro", ro.display()));
         }
 
-        for (key, value) in &self.env {
-            let mut assignment = key.clone();
-            assignment.push("=");
-            assignment.push(value);
+        // Names only: the values reach the docker client through its own
+        // environment (see `run_one_shot`), so they never sit on an argv that
+        // any local user can read from the process table.
+        for (key, _) in &self.env {
             argv.push(OsString::from("-e"));
-            argv.push(assignment);
+            argv.push(key.clone());
         }
 
         let mut push = |s: &str| argv.push(OsString::from(s));
@@ -322,6 +322,7 @@ impl DockerCli {
         );
         let mut cmd = Command::new(&self.program);
         cmd.args(argv);
+        cmd.envs(spec.env.iter().map(|(key, value)| (key, value)));
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
         cmd.kill_on_drop(true);

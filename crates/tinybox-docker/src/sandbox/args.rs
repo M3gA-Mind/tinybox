@@ -129,9 +129,11 @@ pub(super) fn run(
         argv.push(WORKSPACE_MOUNT.to_owned());
     }
 
-    for (key, value) in &spec.env {
+    // Names only; the caller hands the values to the docker client's
+    // environment so they never appear on its argv.
+    for key in spec.env.keys() {
         argv.push("--env".to_owned());
-        argv.push(format!("{key}={value}"));
+        argv.push(key.clone());
     }
 
     // End docker's options so an image like `--privileged` stays a positional.
@@ -229,9 +231,11 @@ pub(super) fn add_exec_context(argv: &mut Vec<String>, request: &ExecRequest) {
         argv.push("--workdir".to_owned());
         argv.push(cwd.display().to_string());
     }
-    for (key, value) in &request.env {
+    // Names only; the caller hands the values to the docker client's
+    // environment so they never appear on its argv.
+    for key in request.env.keys() {
         argv.push("--env".to_owned());
-        argv.push(format!("{key}={value}"));
+        argv.push(key.clone());
     }
 }
 
