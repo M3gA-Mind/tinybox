@@ -469,7 +469,13 @@ async fn unrepresentable_owned_child_id_is_terminated_before_error()
         .run(&ExecRequest::new(["/bin/sh", "-c", "sleep 30"]))
         .await
         .expect_err("a process id that cannot name a process group must be refused");
-    assert!(error.to_string().contains("out of range"));
+    assert!(matches!(
+        error,
+        tinybox_core::Error::Backend {
+            operation: "identify jail child",
+            ..
+        }
+    ));
     assert!(
         terminated.load(std::sync::atomic::Ordering::SeqCst),
         "the child must be stopped even when its process-group id cannot be represented"
