@@ -412,6 +412,7 @@ async fn unidentified_owned_child_is_terminated_before_returning_error()
             terminated: terminated.clone(),
             report_termination_error_after_stop: false,
             fail_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            skip_next_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }),
         64,
     )?;
@@ -435,7 +436,6 @@ async fn unidentified_owned_child_is_terminated_before_returning_error()
 }
 
 #[cfg(unix)]
-#[cfg(unix)]
 #[tokio::test]
 async fn unrepresentable_owned_child_id_is_terminated_before_error()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -448,6 +448,7 @@ async fn unrepresentable_owned_child_id_is_terminated_before_error()
             terminated: terminated.clone(),
             report_termination_error_after_stop: true,
             fail_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            skip_next_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }),
         64,
     )?;
@@ -486,6 +487,7 @@ async fn unidentified_child_is_retained_when_termination_fails_while_running()
             terminated,
             report_termination_error_after_stop: false,
             fail_termination: fail_termination.clone(),
+            skip_next_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }),
         64,
     )?;
