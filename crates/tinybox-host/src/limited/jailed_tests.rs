@@ -310,7 +310,7 @@ fn jailed_host_debug_excludes_workspace_and_label() -> Result<(), Box<dyn std::e
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 struct UnidentifiedProcess {
     child: std::process::Child,
     reported_id: Option<u32>,
