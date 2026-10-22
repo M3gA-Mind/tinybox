@@ -459,7 +459,7 @@ impl tinybox_jail::JailBackend for UnidentifiedBackend {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn unidentified_owned_child_is_terminated_before_returning_error()
+async fn owned_child_without_native_id_is_cleaned_when_pipe_capture_fails()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
     let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -480,7 +480,7 @@ async fn unidentified_owned_child_is_terminated_before_returning_error()
         .run(&ExecRequest::new(["/bin/sh", "-c", "sleep 30"]))
         .await
     else {
-        return Err("a backend child without an id cannot be supervised".into());
+        return Err("missing captured pipes should fail collection".into());
     };
     assert!(error.to_string().contains("missing stdout pipe"));
     assert!(
@@ -492,7 +492,7 @@ async fn unidentified_owned_child_is_terminated_before_returning_error()
 
 #[cfg(unix)]
 #[tokio::test]
-async fn unrepresentable_owned_child_id_is_terminated_before_error()
+async fn unrepresentable_local_group_id_is_terminated_before_error()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
     let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -513,7 +513,7 @@ async fn unrepresentable_owned_child_id_is_terminated_before_error()
         .run(&ExecRequest::new(["/bin/sh", "-c", "sleep 30"]))
         .await
     else {
-        return Err("a process id that cannot name a process group must be refused".into());
+        return Err("an unrepresentable verified process group must be refused".into());
     };
     assert!(matches!(
         error,

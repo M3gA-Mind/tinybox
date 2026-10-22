@@ -436,6 +436,7 @@ pub trait JailBackend: Send + Sync {
 
     /// Spawn with module-owned stdin, stdout, and stderr pipes.
     /// Wrapping providers must apply these pipes to their actual launcher.
+    /// On Unix, providers must also honor `Command` process-group settings.
     /// Callers must run [`JailBackend::require_resources`] first when
     /// `jail.resources` is present.
     /// # Errors
@@ -456,12 +457,18 @@ pub trait JailBackend: Send + Sync {
     /// Implementations of [`OwnedProcess::terminate`] must return promptly;
     /// callers bound asynchronous waiting, but cannot preempt a blocking
     /// synchronous termination operation. Existing backends use the default
-    /// adapter. The default adapter records the local process-group ID of its
-    /// returned standard child; custom owned adapters must set that metadata
-    /// explicitly only when they own a verified local process group.
+    /// adapter. The default adapter requests a new local process group before
+    /// spawning and records the returned standard child's ID as that group;
+    /// custom owned adapters must set group metadata explicitly only when
+    /// they own a verified local process group.
     /// # Errors
     /// Returns the provider's confinement or native startup error.
-    fn spawn_owned_captured(&self, jail: &Jail, cmd: Command) -> std::io::Result<OwnedChild> {
+    fn spawn_owned_captured(&self, jail: &Jail, mut cmd: Command) -> std::io::Result<OwnedChild> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
         let child = self.spawn_captured(jail, cmd)?;
         let group = child.id();
         OwnedChild::from_std(child).map(|child| child.with_local_process_group_id(group))
