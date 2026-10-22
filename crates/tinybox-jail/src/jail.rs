@@ -456,11 +456,15 @@ pub trait JailBackend: Send + Sync {
     /// Implementations of [`OwnedProcess::terminate`] must return promptly;
     /// callers bound asynchronous waiting, but cannot preempt a blocking
     /// synchronous termination operation. Existing backends use the default
-    /// adapter.
+    /// adapter. The default adapter records the local process-group ID of its
+    /// returned standard child; custom owned adapters must set that metadata
+    /// explicitly only when they own a verified local process group.
     /// # Errors
     /// Returns the provider's confinement or native startup error.
     fn spawn_owned_captured(&self, jail: &Jail, cmd: Command) -> std::io::Result<OwnedChild> {
-        OwnedChild::from_std(self.spawn_captured(jail, cmd)?)
+        let child = self.spawn_captured(jail, cmd)?;
+        let group = child.id();
+        OwnedChild::from_std(child).map(|child| child.with_local_process_group_id(group))
     }
 }
 
@@ -520,6 +524,7 @@ pub trait OwnedProcess: Send {
 /// independently by a jail backend.
 pub struct OwnedChild {
     process: Box<dyn OwnedProcess>,
+    local_process_group_id: Option<u32>,
     stdin: Option<File>,
     stdout: Option<File>,
     stderr: Option<File>,
@@ -547,6 +552,7 @@ impl OwnedChild {
     ) -> Self {
         Self {
             process: Box::new(process),
+            local_process_group_id: None,
             stdin,
             stdout,
             stderr,
@@ -569,6 +575,23 @@ impl OwnedChild {
     #[must_use]
     pub fn id(&self) -> Option<u32> {
         self.process.id()
+    }
+
+    /// Attach the verified ID of a local process group this backend owns.
+    ///
+    /// This is separate from [`OwnedProcess::id`], which may be a brokered or
+    /// otherwise nonlocal native ID. Call this only when the backend can prove
+    /// that the value names a local process group safe for the host to signal.
+    #[must_use]
+    pub fn with_local_process_group_id(mut self, id: u32) -> Self {
+        self.local_process_group_id = Some(id);
+        self
+    }
+
+    /// Verified local process-group ID owned by this backend, if any.
+    #[must_use]
+    pub const fn local_process_group_id(&self) -> Option<u32> {
+        self.local_process_group_id
     }
 
     /// Nonblocking process completion check.

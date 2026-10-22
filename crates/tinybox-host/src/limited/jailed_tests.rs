@@ -597,6 +597,33 @@ async fn zero_process_group_id_is_rejected_before_cleanup_can_signal_group_zero(
 
 #[cfg(unix)]
 #[tokio::test]
+async fn generic_owned_process_id_is_not_treated_as_a_local_process_group()
+-> Result<(), Box<dyn std::error::Error>> {
+    let child = std::process::Command::new("sleep").arg("30").spawn()?;
+    let reported_id = child.id();
+    let mut child = tinybox_jail::OwnedChild::new(
+        UnidentifiedProcess {
+            child,
+            reported_id: Some(reported_id),
+            terminated: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            report_termination_error_after_stop: false,
+            fail_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            skip_next_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        },
+        None,
+        None,
+        None,
+    );
+
+    assert_eq!(child.id(), Some(reported_id));
+    assert_eq!(verified_local_process_group_id(&mut child).await?, None);
+    child.terminate()?;
+    let _ = wait_child(&mut child).await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn owned_termination_runs_even_when_group_kill_is_denied()
 -> Result<(), Box<dyn std::error::Error>> {
     use std::os::unix::process::CommandExt;
