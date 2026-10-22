@@ -310,6 +310,86 @@ fn jailed_host_debug_excludes_workspace_and_label() -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+#[cfg(unix)]
+struct UnidentifiedProcess {
+    child: std::process::Child,
+    terminated: Arc<std::sync::atomic::AtomicBool>,
+}
+#[cfg(unix)]
+impl tinybox_jail::OwnedProcess for UnidentifiedProcess {
+    fn id(&self) -> Option<u32> {
+        None
+    }
+    fn try_wait(&mut self) -> std::io::Result<Option<tinybox_jail::ChildStatus>> {
+        self.child
+            .try_wait()
+            .map(|status| status.map(|status| tinybox_jail::ChildStatus::from_code(status.code())))
+    }
+    fn terminate(&mut self) -> std::io::Result<()> {
+        self.terminated.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.child.kill()
+    }
+}
+
+#[cfg(unix)]
+struct UnidentifiedBackend(Arc<std::sync::atomic::AtomicBool>);
+#[cfg(unix)]
+impl tinybox_jail::JailBackend for UnidentifiedBackend {
+    fn name(&self) -> &'static str {
+        "unidentified-fixture"
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn spawn(
+        &self,
+        _: &tinybox_jail::Jail,
+        _: std::process::Command,
+    ) -> std::io::Result<std::process::Child> {
+        Err(std::io::Error::other("owned spawn expected"))
+    }
+    fn spawn_owned_captured(
+        &self,
+        _: &tinybox_jail::Jail,
+        mut command: std::process::Command,
+    ) -> std::io::Result<tinybox_jail::OwnedChild> {
+        let child = command.spawn()?;
+        Ok(tinybox_jail::OwnedChild::new(
+            UnidentifiedProcess {
+                child,
+                terminated: self.0.clone(),
+            },
+            None,
+            None,
+            None,
+        ))
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unidentified_owned_child_is_terminated_before_returning_error()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let host = JailLocalHost::with_backend(
+        tinybox_jail::Jail::new(root.path(), "unidentified-child"),
+        Arc::new(UnidentifiedBackend(terminated.clone())),
+        64,
+    )?;
+
+    let error = host
+        .run(&ExecRequest::new(["/bin/sh", "-c", "sleep 30"]))
+        .await
+        .expect_err("a backend child without an id cannot be supervised");
+    assert!(error.to_string().contains("missing native process identifier"));
+    assert!(
+        terminated.load(std::sync::atomic::Ordering::SeqCst),
+        "the backend-owned child must be stopped before its handle is dropped"
+    );
+    Ok(())
+}
+
 struct CountedBackend(Arc<std::sync::atomic::AtomicUsize>);
 impl tinybox_jail::JailBackend for CountedBackend {
     fn name(&self) -> &'static str {
