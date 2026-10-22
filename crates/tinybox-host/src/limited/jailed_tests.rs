@@ -557,6 +557,8 @@ async fn cancelling_a_pipe_read_releases_its_descriptor() -> Result<(), Box<dyn 
     let (reader, writer) = nix::unistd::pipe()?;
     let reader = std::fs::File::from(reader);
     let raw_reader = reader.as_raw_fd();
+    let descriptor = PathBuf::from(format!("/proc/self/fd/{raw_reader}"));
+    let pipe_identity = std::fs::read_link(&descriptor)?;
     let mut reader = async_pipe(reader)?;
     let (started, waiting) = oneshot::channel();
     let task = tokio::spawn(async move {
@@ -580,10 +582,12 @@ async fn cancelling_a_pipe_read_releases_its_descriptor() -> Result<(), Box<dyn 
     task.abort();
     let _ = task.await;
     drop(writer);
-    let descriptor = PathBuf::from(format!("/proc/self/fd/{raw_reader}"));
+    let descriptor_reused = std::fs::read_link(&descriptor)
+        .map(|target| target != pipe_identity)
+        .unwrap_or(true);
 
     assert!(
-        std::fs::symlink_metadata(&descriptor).is_err(),
+        descriptor_reused,
         "cancelling a read must release descriptor {raw_reader}"
     );
     Ok(())
