@@ -387,7 +387,7 @@ async fn audit_h6_a_timed_out_run_kills_its_client_and_its_container() {
     );
     assert_eq!(
         std::fs::read_to_string(&calls).unwrap_or_default(),
-        format!("ps -q --filter label={}kill cid1\n", label),
+        format!("ps -q --filter label={label}kill cid1\n"),
         "the container must be killed by this run's own label"
     );
 
@@ -403,12 +403,18 @@ async fn audit_h6_a_timed_out_run_kills_its_client_and_its_container() {
     };
     for _ in 0..20 {
         if !alive() {
-            return;
+            break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let _ = std::process::Command::new("kill")
-        .args(["-9", &pid])
-        .status();
-    panic!("docker client pid {pid} still alive 1s after the timeout reported it killed");
+    let still_alive = alive();
+    if still_alive {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid])
+            .status();
+    }
+    assert!(
+        !still_alive,
+        "docker client pid {pid} still alive 1s after the timeout reported it killed"
+    );
 }
