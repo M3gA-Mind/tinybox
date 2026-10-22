@@ -8,8 +8,90 @@ use std::sync::{
 };
 use tinybox_core::{Error, ExecOutput, ExecRequest, ExecutionObserver, Host, OutputStream, Result};
 use tinybox_jail::{Jail, JailBackend, OwnedChild};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{oneshot, watch};
+
+#[cfg(unix)]
+struct AsyncPipe(tokio::io::unix::AsyncFd<std::fs::File>);
+
+#[cfg(not(unix))]
+type AsyncPipe = tokio::fs::File;
+
+fn async_pipe(file: std::fs::File) -> Result<AsyncPipe> {
+    #[cfg(unix)]
+    {
+        use nix::fcntl::{FcntlArg, OFlag, fcntl};
+
+        let flags = fcntl(&file, FcntlArg::F_GETFL)
+            .map_err(|error| Error::io("make native pipe nonblocking", &error))?;
+        fcntl(
+            &file,
+            FcntlArg::F_SETFL(OFlag::from_bits_retain(flags) | OFlag::O_NONBLOCK),
+        )
+        .map_err(|error| Error::io("make native pipe nonblocking", &error))?;
+        tokio::io::unix::AsyncFd::new(file)
+            .map(AsyncPipe)
+            .map_err(|error| Error::io("register native pipe", &error))
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(tokio::fs::File::from_std(file))
+    }
+}
+
+#[cfg(unix)]
+impl AsyncRead for AsyncPipe {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        use std::io::Read;
+        loop {
+            let mut ready = std::task::ready!(self.0.poll_read_ready(cx))?;
+            match ready.try_io(|inner| inner.get_ref().read(buffer.initialize_unfilled())) {
+                Ok(Ok(count)) => {
+                    buffer.advance(count);
+                    return std::task::Poll::Ready(Ok(()));
+                }
+                Ok(Err(error)) => return std::task::Poll::Ready(Err(error)),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl AsyncWrite for AsyncPipe {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buffer: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        use std::io::Write;
+        loop {
+            let mut ready = std::task::ready!(self.0.poll_write_ready(cx))?;
+            match ready.try_io(|inner| inner.get_ref().write(buffer)) {
+                Ok(result) => return std::task::Poll::Ready(result),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
 
 type Retained = Arc<tokio::sync::Mutex<Option<OwnedChild>>>;
 struct State {
@@ -239,11 +321,12 @@ impl JailLocalHost {
                 .unwrap_or_else(|| unreachable!("newly retained jail child is present"));
             let pipes = (|| {
                 Ok::<_, Error>((
-                    tokio::fs::File::from_std(pipe(child.take_stdout(), "stdout")?),
-                    tokio::fs::File::from_std(pipe(child.take_stderr(), "stderr")?),
+                    async_pipe(pipe(child.take_stdout(), "stdout")?)?,
+                    async_pipe(pipe(child.take_stderr(), "stderr")?)?,
                     child
                         .take_stdin()
-                        .map(tokio::fs::File::from_std),
+                        .map(async_pipe)
+                        .transpose()?,
                 ))
             })();
             let result = match pipes {
