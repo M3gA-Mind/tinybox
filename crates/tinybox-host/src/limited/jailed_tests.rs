@@ -432,25 +432,53 @@ async fn dropping_jail_call_before_supervisor_start_does_not_spawn()
 }
 
 #[test]
-fn owned_file_pipes_work_without_a_tokio_io_driver() -> Result<(), Box<dyn std::error::Error>> {
+fn jail_supervisor_fault_retains_child_for_cleanup_acknowledgement()
+-> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
     let host = JailLocalHost::with_backend(
         tinybox_jail::Jail::new(root.path(), "runtime-fault-fixture"),
         Arc::new(FixtureBackend),
         64,
     )?;
-    // File-backed owned pipes use Tokio's blocking pool and do not require the
-    // process I/O driver that ChildStdout::from_std required.
+    // Simulate a supervisor panic after native startup and prove the owned
+    // child remains available to the normal cleanup acknowledgement path.
     let missing_io = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()?;
-    let output = missing_io.block_on(host.run(&ExecRequest::new([
-        "/bin/sh",
-        "-c",
-        "printf owned-pipes",
-    ])))?;
+    let result = missing_io.block_on(host.run(&ExecRequest::new([
+        "/bin/sh", "-c", "sleep 600 & wait",
+    ])));
+    assert!(result.is_err());
+    assert!(host.has_pending_cleanup(), "native ownership survives the panic");
+    drop(missing_io);
+    let recovery = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    recovery.block_on(host.drain_checked())?;
+    assert!(!host.has_pending_cleanup());
+    Ok(())
+}
+
+#[tokio::test]
+async fn owned_file_pipes_collect_streams_and_exit_status()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let host = JailLocalHost::with_backend(
+        tinybox_jail::Jail::new(root.path(), "owned-pipe-fixture"),
+        Arc::new(FixtureBackend),
+        64,
+    )?;
+    let output = host
+        .run(&ExecRequest::new([
+            "/bin/sh",
+            "-c",
+            "printf owned-pipes; printf owned-error >&2; exit 23",
+        ]))
+        .await?;
     assert_eq!(output.stdout, b"owned-pipes");
-    missing_io.block_on(host.drain_checked())?;
+    assert_eq!(output.stderr, b"owned-error");
+    assert_eq!(output.exit_code, 23);
+    host.drain_checked().await?;
     assert!(!host.has_pending_cleanup());
     Ok(())
 }
