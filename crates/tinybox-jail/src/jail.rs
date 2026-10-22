@@ -463,12 +463,14 @@ pub trait JailBackend: Send + Sync {
     /// they own a verified local process group.
     /// # Errors
     /// Returns the provider's confinement or native startup error.
-    fn spawn_owned_captured(&self, jail: &Jail, mut cmd: Command) -> std::io::Result<OwnedChild> {
+    fn spawn_owned_captured(&self, jail: &Jail, cmd: Command) -> std::io::Result<OwnedChild> {
         #[cfg(unix)]
-        {
+        let cmd = {
             use std::os::unix::process::CommandExt;
+            let mut cmd = cmd;
             cmd.process_group(0);
-        }
+            cmd
+        };
         let child = self.spawn_captured(jail, cmd)?;
         let group = child.id();
         OwnedChild::from_std(child).map(|child| child.with_local_process_group_id(group))
