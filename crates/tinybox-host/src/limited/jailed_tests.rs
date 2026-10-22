@@ -667,22 +667,38 @@ async fn async_pipe_write_resumes_after_backpressure_clears()
 
 #[cfg(unix)]
 #[test]
-fn async_pipe_reports_failure_to_inspect_a_closed_descriptor()
--> Result<(), Box<dyn std::error::Error>> {
-    use std::os::fd::AsRawFd;
-
+fn async_pipe_propagates_a_get_flags_failure() -> Result<(), Box<dyn std::error::Error>> {
     let (reader, writer) = nix::unistd::pipe()?;
     let reader = std::fs::File::from(reader);
-    nix::unistd::close(reader.as_raw_fd())?;
-    assert!(async_pipe(reader).is_err());
+    let result = set_nonblocking_with(&reader, |_, _| Err(nix::errno::Errno::EBADF));
+    assert!(result.is_err());
+    drop(writer);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn async_pipe_propagates_a_set_flags_failure() -> Result<(), Box<dyn std::error::Error>> {
+    let (reader, writer) = nix::unistd::pipe()?;
+    let reader = std::fs::File::from(reader);
+    let mut calls = 0;
+    let result = set_nonblocking_with(&reader, |_, _| {
+        calls += 1;
+        if calls == 1 {
+            Ok(0)
+        } else {
+            Err(nix::errno::Errno::EBADF)
+        }
+    });
+    assert!(result.is_err());
     drop(writer);
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
-#[test]
-fn async_pipe_rejects_a_regular_file_epoll_cannot_watch() -> Result<(), Box<dyn std::error::Error>>
-{
+#[tokio::test]
+async fn async_pipe_rejects_a_regular_file_epoll_cannot_watch()
+-> Result<(), Box<dyn std::error::Error>> {
     let file = tempfile::tempfile()?;
     assert!(async_pipe(file).is_err());
     Ok(())

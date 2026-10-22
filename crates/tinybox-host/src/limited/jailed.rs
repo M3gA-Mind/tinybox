@@ -40,10 +40,7 @@ fn async_pipe(file: std::fs::File) -> Result<AsyncPipe> {
 #[cfg(unix)]
 fn set_nonblocking_with<F>(file: &std::fs::File, mut fcntl: F) -> Result<()>
 where
-    F: FnMut(
-        &std::fs::File,
-        nix::fcntl::FcntlArg<'_>,
-    ) -> nix::Result<std::os::raw::c_int>,
+    F: FnMut(&std::fs::File, nix::fcntl::FcntlArg<'_>) -> nix::Result<std::os::raw::c_int>,
 {
     use nix::fcntl::{FcntlArg, OFlag};
 
