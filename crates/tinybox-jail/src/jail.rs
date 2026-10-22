@@ -472,8 +472,15 @@ pub trait JailBackend: Send + Sync {
             cmd
         };
         let child = self.spawn_captured(jail, cmd)?;
-        let group = child.id();
-        OwnedChild::from_std(child).map(|child| child.with_local_process_group_id(group))
+        #[cfg(unix)]
+        {
+            let group = child.id();
+            OwnedChild::from_std(child).map(|child| child.with_local_process_group_id(group))
+        }
+        #[cfg(not(unix))]
+        {
+            OwnedChild::from_std(child)
+        }
     }
 }
 
