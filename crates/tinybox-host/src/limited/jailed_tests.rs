@@ -556,7 +556,7 @@ async fn cancelling_a_pipe_read_releases_its_descriptor() -> Result<(), Box<dyn 
     let (reader, writer) = nix::unistd::pipe()?;
     let reader = std::fs::File::from(reader);
     let raw_reader = reader.as_raw_fd();
-    let mut reader = tokio::fs::File::from_std(reader);
+    let mut reader = async_pipe(reader)?;
     let task = tokio::spawn(async move {
         let mut buffer = [0; 1];
         tokio::io::AsyncReadExt::read(&mut reader, &mut buffer).await
