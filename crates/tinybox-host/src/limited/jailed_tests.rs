@@ -593,6 +593,114 @@ async fn cancelling_a_pipe_read_releases_its_descriptor() -> Result<(), Box<dyn 
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn async_pipe_round_trips_bytes_through_flush_and_shutdown()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (reader, writer) = nix::unistd::pipe()?;
+    let mut reader = async_pipe(std::fs::File::from(reader))?;
+    let mut writer = async_pipe(std::fs::File::from(writer))?;
+    tokio::io::AsyncWriteExt::write_all(&mut writer, b"pipe").await?;
+    tokio::io::AsyncWriteExt::flush(&mut writer).await?;
+    tokio::io::AsyncWriteExt::shutdown(&mut writer).await?;
+
+    let mut output = [0; 4];
+    tokio::io::AsyncReadExt::read_exact(&mut reader, &mut output).await?;
+    assert_eq!(&output, b"pipe");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn async_pipe_write_resumes_after_backpressure_clears()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+
+    let (reader, writer) = nix::unistd::pipe()?;
+    let mut writer = std::fs::File::from(writer);
+    let flags = nix::fcntl::fcntl(&writer, nix::fcntl::FcntlArg::F_GETFL)?;
+    nix::fcntl::fcntl(
+        &writer,
+        nix::fcntl::FcntlArg::F_SETFL(
+            nix::fcntl::OFlag::from_bits_retain(flags) | nix::fcntl::OFlag::O_NONBLOCK,
+        ),
+    )?;
+    let fill = [0; 4096];
+    loop {
+        match writer.write(&fill) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    let mut writer = async_pipe(writer)?;
+    let mut reader = async_pipe(std::fs::File::from(reader))?;
+    let (started, waiting) = oneshot::channel();
+    let write = tokio::spawn(async move {
+        let mut write = Box::pin(tokio::io::AsyncWriteExt::write(&mut writer, b"x"));
+        let mut started = Some(started);
+        std::future::poll_fn(|cx| {
+            let result = std::future::Future::poll(write.as_mut(), cx);
+            if result.is_pending()
+                && let Some(started) = started.take()
+            {
+                let _ = started.send(());
+            }
+            result
+        })
+        .await
+    });
+    waiting.await?;
+
+    let mut drained = [0; 8192];
+    assert_ne!(
+        tokio::io::AsyncReadExt::read(&mut reader, &mut drained).await?,
+        0
+    );
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), write).await??,
+        1
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn async_pipe_reports_failure_to_inspect_a_closed_descriptor()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::os::fd::AsRawFd;
+
+    let (reader, writer) = nix::unistd::pipe()?;
+    let reader = std::fs::File::from(reader);
+    nix::unistd::close(reader.as_raw_fd())?;
+    assert!(async_pipe(reader).is_err());
+    drop(writer);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn async_pipe_rejects_a_regular_file_epoll_cannot_watch() -> Result<(), Box<dyn std::error::Error>>
+{
+    let file = tempfile::tempfile()?;
+    assert!(async_pipe(file).is_err());
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn async_pipe_reports_nonblocking_setup_failure() -> Result<(), Box<dyn std::error::Error>> {
+    let descriptor = nix::fcntl::open(
+        "/",
+        nix::fcntl::OFlag::O_PATH | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    )?;
+    let file = std::fs::File::from(descriptor);
+    assert!(async_pipe(file).is_err());
+    Ok(())
+}
+
 struct MissingOutputBackend;
 impl tinybox_jail::JailBackend for MissingOutputBackend {
     fn name(&self) -> &'static str {
