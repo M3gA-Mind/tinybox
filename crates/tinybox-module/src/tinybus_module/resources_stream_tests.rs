@@ -1321,7 +1321,7 @@ async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendan
         return Ok(());
     }
     let root = tempfile::tempdir()?;
-    let resources = Resources::default();
+    let resources = Resources::test_resources();
     let resource = resources.reserve(ReserveRequest::Resource).await?;
     resources
         .create(CreateRequest {
