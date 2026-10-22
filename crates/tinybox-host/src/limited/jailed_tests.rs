@@ -387,10 +387,12 @@ async fn unidentified_owned_child_is_terminated_before_returning_error()
         64,
     )?;
 
-    let error = host
+    let Err(error) = host
         .run(&ExecRequest::new(["/bin/sh", "-c", "sleep 30"]))
         .await
-        .expect_err("a backend child without an id cannot be supervised");
+    else {
+        return Err("a backend child without an id cannot be supervised".into());
+    };
     assert!(
         error
             .to_string()
@@ -466,10 +468,12 @@ async fn unrepresentable_owned_child_id_is_terminated_before_error()
         64,
     )?;
 
-    let error = host
+    let Err(error) = host
         .run(&ExecRequest::new(["/bin/sh", "-c", "sleep 30"]))
         .await
-        .expect_err("a process id that cannot name a process group must be refused");
+    else {
+        return Err("a process id that cannot name a process group must be refused".into());
+    };
     assert!(matches!(
         error,
         tinybox_core::Error::Backend {

@@ -227,20 +227,18 @@ impl JailLocalHost {
             .await
             .map_err(|error| failure("start native jail", error.to_string()))?
             .map_err(|error| Error::io("spawn native jail", &error))?;
-            let group = match child.id() {
-                Some(id) => match i32::try_from(id) {
-                    Ok(group) => group,
-                    Err(error) => {
-                        terminate_unidentified_child(&mut child).await?;
-                        return Err(failure("identify jail child", error.to_string()));
-                    }
-                },
-                None => {
+            let Some(id) = child.id() else {
+                terminate_unidentified_child(&mut child).await?;
+                return Err(failure(
+                    "identify jail child",
+                    "missing native process identifier".into(),
+                ));
+            };
+            let group = match i32::try_from(id) {
+                Ok(group) => group,
+                Err(error) => {
                     terminate_unidentified_child(&mut child).await?;
-                    return Err(failure(
-                        "identify jail child",
-                        "missing native process identifier".into(),
-                    ));
+                    return Err(failure("identify jail child", error.to_string()));
                 }
             };
             let mut owned = RetainedOnDrop {
@@ -251,7 +249,7 @@ impl JailLocalHost {
             let child = owned
                 .child
                 .as_mut()
-                .expect("newly retained jail child is present");
+                .unwrap_or_else(|| unreachable!("newly retained jail child is present"));
             let pipes = (|| {
                 Ok::<_, Error>((
                     tokio::fs::File::from_std(pipe(child.take_stdout(), "stdout")?),
@@ -289,7 +287,10 @@ impl JailLocalHost {
                 Err(error) => Err(error),
             };
             let cleanup = terminate(child, group).await;
-            let child = owned.child.take().expect("retained jail child is present");
+            let child = owned
+                .child
+                .take()
+                .unwrap_or_else(|| unreachable!("retained jail child is present"));
             retain_cleanup(&state, child, group, cleanup)?;
             result
         });
@@ -349,14 +350,13 @@ async fn wait_child(child: &mut OwnedChild) -> Result<tinybox_jail::ChildStatus>
     }
 }
 async fn terminate_unidentified_child(child: &mut OwnedChild) -> Result<()> {
-    if let Err(error) = child.terminate() {
-        if child
+    if let Err(error) = child.terminate()
+        && child
             .try_wait()
             .map_err(|wait_error| Error::io("inspect unidentified jail child", &wait_error))?
             .is_none()
-        {
-            return Err(Error::io("terminate unidentified jail child", &error));
-        }
+    {
+        return Err(Error::io("terminate unidentified jail child", &error));
     }
     wait_child(child).await.map(|_| ())
 }
