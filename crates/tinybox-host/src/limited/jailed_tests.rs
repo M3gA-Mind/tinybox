@@ -557,13 +557,25 @@ async fn cancelling_a_pipe_read_releases_its_descriptor() -> Result<(), Box<dyn 
     let reader = std::fs::File::from(reader);
     let raw_reader = reader.as_raw_fd();
     let mut reader = async_pipe(reader)?;
+    let (started, waiting) = oneshot::channel();
     let task = tokio::spawn(async move {
         let mut buffer = [0; 1];
-        tokio::io::AsyncReadExt::read(&mut reader, &mut buffer).await
+        let mut read = Box::pin(tokio::io::AsyncReadExt::read(&mut reader, &mut buffer));
+        let mut started = Some(started);
+        std::future::poll_fn(|cx| {
+            let result = std::future::Future::poll(read.as_mut(), cx);
+            if result.is_pending()
+                && let Some(started) = started.take()
+            {
+                let _ = started.send(());
+            }
+            result
+        })
+        .await
     });
 
-    // Keep the writer open so the read remains pending until cancellation.
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // Confirm the pending read was polled while the writer is held open.
+    waiting.await?;
     task.abort();
     let _ = task.await;
     drop(writer);
