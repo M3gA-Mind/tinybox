@@ -451,7 +451,12 @@ pub trait JailBackend: Send + Sync {
     ///
     /// Backends that need a custom process owner may override this method to
     /// provide pipe files and process supervision without exposing a
-    /// `std::process::Child`. Existing backends use the default adapter.
+    /// `std::process::Child`. The default adapter owns only the direct child;
+    /// override it when the backend must also own and stop descendants.
+    /// Implementations of [`OwnedProcess::terminate`] must return promptly;
+    /// callers bound asynchronous waiting, but cannot preempt a blocking
+    /// synchronous termination operation. Existing backends use the default
+    /// adapter.
     /// # Errors
     /// Returns the provider's confinement or native startup error.
     fn spawn_owned_captured(&self, jail: &Jail, cmd: Command) -> std::io::Result<OwnedChild> {
@@ -489,7 +494,9 @@ impl ChildStatus {
 /// Process operations retained independently from its captured standard pipes.
 ///
 /// Implementations must not report completion until the owned process has
-/// exited. `terminate` must stop every process the backend owns for this run.
+/// exited. `terminate` must return promptly and stop every process the
+/// backend owns for this run. A backend that owns only the direct child must
+/// document that boundary; callers may separately supervise a process group.
 pub trait OwnedProcess: Send {
     /// Native identifier, when one is available.
     fn id(&self) -> Option<u32>;
@@ -497,7 +504,13 @@ pub trait OwnedProcess: Send {
     /// # Errors
     /// Returns an operating-system error while inspecting the process.
     fn try_wait(&mut self) -> std::io::Result<Option<ChildStatus>>;
-    /// Stop the owned process (and its descendants where the backend owns them).
+    /// Stop the processes this backend owns, returning promptly.
+    ///
+    /// The standard-child adapter owns and stops only the direct child. A
+    /// backend may stop descendants when it has an explicit ownership
+    /// mechanism, such as a process group or job object. This synchronous
+    /// method must not perform unbounded blocking work because async callers
+    /// cannot preempt it with a timeout.
     /// # Errors
     /// Returns an operating-system error while terminating the process.
     fn terminate(&mut self) -> std::io::Result<()>;
@@ -565,7 +578,10 @@ impl OwnedChild {
         self.process.try_wait()
     }
 
-    /// Stop the process tree owned by this backend.
+    /// Stop the processes owned by this backend, returning promptly.
+    ///
+    /// The standard-child adapter stops only the direct child; backends with
+    /// an explicit process-tree ownership mechanism may stop descendants.
     /// # Errors
     /// Returns an operating-system error while terminating the process.
     pub fn terminate(&mut self) -> std::io::Result<()> {
