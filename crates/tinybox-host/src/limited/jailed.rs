@@ -490,6 +490,13 @@ async fn process_group_id(child: &mut OwnedChild) -> Result<i32> {
             "missing native process identifier".into(),
         ));
     };
+    if id == 0 {
+        terminate_unidentified_child(child).await?;
+        return Err(failure(
+            "identify jail child",
+            "invalid zero process identifier".into(),
+        ));
+    }
     match i32::try_from(id) {
         Ok(group) => Ok(group),
         Err(error) => {
@@ -519,15 +526,29 @@ async fn identify_owned_group(owned: &mut RetainedOnDrop) -> Result<i32> {
     }
 }
 async fn terminate_unidentified_child(child: &mut OwnedChild) -> Result<()> {
-    if let Err(error) = child.terminate()
-        && child
-            .try_wait()
-            .map_err(|wait_error| Error::io("inspect unidentified jail child", &wait_error))?
-            .is_none()
-    {
-        return Err(Error::io("terminate unidentified jail child", &error));
-    }
-    wait_child(child).await.map(|_| ())
+    terminate_unidentified_child_with_timeout(child, std::time::Duration::from_secs(5)).await
+}
+async fn terminate_unidentified_child_with_timeout(
+    child: &mut OwnedChild,
+    deadline: std::time::Duration,
+) -> Result<()> {
+    let cleanup = async {
+        if let Err(error) = child.terminate()
+            && child
+                .try_wait()
+                .map_err(|wait_error| Error::io("inspect unidentified jail child", &wait_error))?
+                .is_none()
+        {
+            return Err(Error::io("terminate unidentified jail child", &error));
+        }
+        wait_child(child).await.map(|_| ())
+    };
+    tokio::time::timeout(deadline, cleanup).await.map_err(|_| {
+        failure(
+            "drain unidentified jail child",
+            "cleanup deadline exceeded".into(),
+        )
+    })?
 }
 async fn terminate(child: &mut OwnedChild, group: i32) -> Result<()> {
     #[cfg(not(unix))]

@@ -562,16 +562,14 @@ async fn unidentified_child_reap_wait_uses_a_bounded_cleanup_deadline()
         None,
     );
 
-    let result = tokio::time::timeout(
-        std::time::Duration::from_millis(50),
-        terminate_unidentified_child(&mut child),
-    )
-    .await;
+    let result =
+        terminate_unidentified_child_with_timeout(&mut child, std::time::Duration::from_millis(20))
+            .await;
     child.terminate()?;
     let _ = child.try_wait()?;
     assert!(
-        matches!(result, Ok(Err(_))),
-        "the cleanup helper must enforce its own deadline and return a retained-child error"
+        result.is_err(),
+        "the cleanup helper must enforce its deadline and return a retained-child error"
     );
     assert!(
         !skip_next_termination.load(std::sync::atomic::Ordering::SeqCst),
