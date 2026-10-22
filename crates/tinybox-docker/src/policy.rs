@@ -41,6 +41,11 @@ pub fn run_policy_issues(
     if network == Some(HOST_NETWORK) {
         issues.push("Docker run uses the host network, which defeats network isolation".into());
     }
+    if let Some(container) = network.and_then(|network| network.strip_prefix("container:")) {
+        issues.push(format!(
+            "Docker run joins the network namespace of container {container}, which defeats network isolation"
+        ));
+    }
     for mount in read_only_mounts {
         if is_dangerous_mount(mount) {
             issues.push(format!("Dangerous read-only mount: {mount}"));
