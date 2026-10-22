@@ -331,6 +331,7 @@ impl tinybox_jail::OwnedProcess for UnidentifiedProcess {
             .store(true, std::sync::atomic::Ordering::SeqCst);
         self.child.kill()?;
         if self.report_termination_error_after_stop {
+            let _ = self.child.wait()?;
             Err(std::io::Error::other("child exited during termination"))
         } else {
             Ok(())
