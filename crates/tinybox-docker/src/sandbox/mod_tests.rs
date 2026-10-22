@@ -388,6 +388,28 @@ async fn creating_a_box_runs_a_detached_named_labelled_container() -> Result<()>
 }
 
 #[tokio::test]
+async fn an_image_that_looks_like_a_flag_stays_a_positional() -> Result<()> {
+    let (sandbox, host, _store) = sandbox();
+
+    sandbox
+        .create(&spec_from(WorkspaceSource::OciImage(
+            "--privileged".to_owned(),
+        ))?)
+        .await?;
+
+    let argv = host.command(0).unwrap_or_default();
+    let image = argv.iter().position(|part| part == "--privileged");
+    assert_eq!(
+        image
+            .and_then(|index| argv.get(index - 1))
+            .map(String::as_str),
+        Some("--"),
+        "{argv:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn the_container_is_held_open_so_commands_have_somewhere_to_land() -> Result<()> {
     let (sandbox, host, _store) = sandbox();
 

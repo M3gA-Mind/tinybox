@@ -131,6 +131,8 @@ pub(super) fn run(
         argv.push(format!("{key}={value}"));
     }
 
+    // End docker's options so an image like `--privileged` stays a positional.
+    argv.push("--".to_owned());
     argv.push(image_reference(spec)?);
     argv.extend(KEEPALIVE.iter().map(|part| (*part).to_owned()));
     Ok(argv)
