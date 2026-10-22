@@ -314,6 +314,7 @@ fn jailed_host_debug_excludes_workspace_and_label() -> Result<(), Box<dyn std::e
 struct UnidentifiedProcess {
     child: std::process::Child,
     terminated: Arc<std::sync::atomic::AtomicBool>,
+    report_termination_error_after_stop: bool,
 }
 #[cfg(unix)]
 impl tinybox_jail::OwnedProcess for UnidentifiedProcess {
@@ -328,7 +329,12 @@ impl tinybox_jail::OwnedProcess for UnidentifiedProcess {
     fn terminate(&mut self) -> std::io::Result<()> {
         self.terminated
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        self.child.kill()
+        self.child.kill()?;
+        if self.report_termination_error_after_stop {
+            Err(std::io::Error::other("child exited during termination"))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -359,6 +365,7 @@ impl tinybox_jail::JailBackend for UnidentifiedBackend {
             UnidentifiedProcess {
                 child,
                 terminated: self.0.clone(),
+                report_termination_error_after_stop: false,
             },
             None,
             None,
@@ -391,6 +398,81 @@ async fn unidentified_owned_child_is_terminated_before_returning_error()
     assert!(
         terminated.load(std::sync::atomic::Ordering::SeqCst),
         "the backend-owned child must be stopped before its handle is dropped"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+struct UnrepresentableIdProcess(UnidentifiedProcess);
+#[cfg(unix)]
+impl tinybox_jail::OwnedProcess for UnrepresentableIdProcess {
+    fn id(&self) -> Option<u32> {
+        Some(u32::MAX)
+    }
+    fn try_wait(&mut self) -> std::io::Result<Option<tinybox_jail::ChildStatus>> {
+        self.0.try_wait()
+    }
+    fn terminate(&mut self) -> std::io::Result<()> {
+        self.0.terminate()
+    }
+}
+
+#[cfg(unix)]
+struct UnrepresentableIdBackend(Arc<std::sync::atomic::AtomicBool>);
+#[cfg(unix)]
+impl tinybox_jail::JailBackend for UnrepresentableIdBackend {
+    fn name(&self) -> &'static str {
+        "unrepresentable-id-fixture"
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn spawn(
+        &self,
+        _: &tinybox_jail::Jail,
+        _: std::process::Command,
+    ) -> std::io::Result<std::process::Child> {
+        Err(std::io::Error::other("owned spawn expected"))
+    }
+    fn spawn_owned_captured(
+        &self,
+        _: &tinybox_jail::Jail,
+        mut command: std::process::Command,
+    ) -> std::io::Result<tinybox_jail::OwnedChild> {
+        let child = command.spawn()?;
+        Ok(tinybox_jail::OwnedChild::new(
+            UnrepresentableIdProcess(UnidentifiedProcess {
+                child,
+                terminated: self.0.clone(),
+                report_termination_error_after_stop: true,
+            }),
+            None,
+            None,
+            None,
+        ))
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unrepresentable_owned_child_id_is_terminated_before_error()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let host = JailLocalHost::with_backend(
+        tinybox_jail::Jail::new(root.path(), "unrepresentable-child-id"),
+        Arc::new(UnrepresentableIdBackend(terminated.clone())),
+        64,
+    )?;
+
+    let error = host
+        .run(&ExecRequest::new(["/bin/sh", "-c", "sleep 30"]))
+        .await
+        .expect_err("a process id that cannot name a process group must be refused");
+    assert!(error.to_string().contains("out of range"));
+    assert!(
+        terminated.load(std::sync::atomic::Ordering::SeqCst),
+        "the child must be stopped even when its process-group id cannot be represented"
     );
     Ok(())
 }
