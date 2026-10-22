@@ -284,6 +284,27 @@ pub(crate) fn reject_symlink_below(ancestor: &Path, path: &Path) -> std::io::Res
     Ok(())
 }
 
+/// Refuses `deny` when it sits two or more levels inside `writable`: the child
+/// could rename the directory in between and read the denied path under its
+/// new name, which a path-based mask or profile rule no longer matches. A
+/// direct child of `writable` (or a path outside it) passes.
+#[must_use]
+pub fn nested_denial(deny: &Path, writable: &Path) -> Option<std::io::Error> {
+    if !deny.starts_with(writable) || deny.parent() == Some(writable) {
+        return None;
+    }
+    Some(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!(
+            "deny_read {} is nested inside writable grant {}; the child could rename \
+             a parent directory and bypass the mask (deny a direct child of the grant, \
+             or make the grant read-only)",
+            deny.display(),
+            writable.display()
+        ),
+    ))
+}
+
 /// OS-specific enforcement of a [`Jail`].
 ///
 /// We model spawning rather than `Command` mutation because Windows
@@ -305,6 +326,15 @@ pub trait JailBackend: Send + Sync {
     /// grant, so they keep the default `false`.
     fn carves_denials(&self) -> bool {
         false
+    }
+
+    /// Refuses a [`Jail::deny_read`] entry this backend's carve cannot hold.
+    /// Callers run it before admitting a jail; the default refuses nothing.
+    ///
+    /// # Errors
+    /// `InvalidInput` naming the denial.
+    fn validate_carved_denials(&self, _jail: &Jail) -> std::io::Result<()> {
+        Ok(())
     }
 
     /// Stable identifier, used in logs / audit ("landlock", "seatbelt",

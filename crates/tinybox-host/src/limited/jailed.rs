@@ -1,12 +1,12 @@
 //! Bounded collection of standard-library children created by native jail backends.
-use super::{observer_cancelled, pipe, read_with_observer};
+use super::{collect_until_exit, observer_cancelled, pipe};
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
-use tinybox_core::{Error, ExecOutput, ExecRequest, ExecutionObserver, Host, OutputStream, Result};
+use tinybox_core::{Error, ExecOutput, ExecRequest, ExecutionObserver, Host, Result};
 use tinybox_jail::{Jail, JailBackend, OwnedChild};
 use tokio::io::AsyncWriteExt;
 #[cfg(unix)]
@@ -395,24 +395,30 @@ impl JailLocalHost {
             let result = match pipes {
                 Ok((stdout, stderr, stdin)) => {
                     let budget = Arc::new(AtomicUsize::new(0));
-                    let collection = async {
-                        tokio::try_join!(
-                            read_with_observer(stdout, budget.clone(), limit, OutputStream::Stdout, observer.clone()),
-                            read_with_observer(stderr, budget, limit, OutputStream::Stderr, observer.clone()),
-                            async {
-                                if let (Some(mut stdin), Some(payload)) = (stdin, payload) {
-                                    stdin
-                                        .write_all(&payload)
-                                        .await
-                                        .map_err(|error| Error::io("write stdin", &error))?;
-                                }
-                                Ok(())
-                            },
-                            wait_child(child)
-                        )
-                    };
+                    let collection = collect_until_exit(
+                        stdout,
+                        stderr,
+                        budget,
+                        limit,
+                        observer.clone(),
+                        async {
+                            let ((), status) = tokio::try_join!(
+                                async {
+                                    if let (Some(mut stdin), Some(payload)) = (stdin, payload) {
+                                        stdin
+                                            .write_all(&payload)
+                                            .await
+                                            .map_err(|error| Error::io("write stdin", &error))?;
+                                    }
+                                    Ok(())
+                                },
+                                wait_child(child)
+                            )?;
+                            Ok(status)
+                        },
+                    );
                     tokio::select! {
-                        result = collection => result.map(|(stdout, stderr, (), status)| ExecOutput::new(status.code().unwrap_or(128), stdout, stderr)),
+                        result = collection => result,
                         () = observer_cancelled(observer.as_deref()) => Err(failure("collect native jail", "execution cancelled".into())),
                         _ = cancelled => Err(failure("collect native jail", "execution cancelled".into())),
                     }
@@ -471,13 +477,13 @@ fn retain_cleanup(state: &State, child: OwnedChild, group: i32, outcome: Result<
     outcome
 }
 
-async fn wait_child(child: &mut OwnedChild) -> Result<tinybox_jail::ChildStatus> {
+async fn wait_child(child: &mut OwnedChild) -> Result<Option<i32>> {
     loop {
         if let Some(status) = child
             .try_wait()
             .map_err(|error| Error::io("wait native jail", &error))?
         {
-            return Ok(status);
+            return Ok(status.code());
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
