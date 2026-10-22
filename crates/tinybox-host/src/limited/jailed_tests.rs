@@ -573,11 +573,12 @@ async fn unidentified_child_reap_wait_uses_a_bounded_cleanup_deadline()
         state: host.state.clone(),
     };
 
-    let result = terminate_unidentified_child_with_timeout(
-        retained.child.as_mut().expect("owned child exists"),
-        std::time::Duration::from_millis(20),
-    )
-    .await;
+    let Some(child) = retained.child.as_mut() else {
+        return Err("retained test child is absent".into());
+    };
+    let result =
+        terminate_unidentified_child_with_timeout(child, std::time::Duration::from_millis(20))
+            .await;
     assert!(
         result.is_err(),
         "the cleanup helper must enforce its deadline and return a retained-child error"
