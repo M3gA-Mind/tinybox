@@ -514,6 +514,72 @@ async fn unidentified_child_is_retained_when_termination_fails_while_running()
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn zero_process_group_id_is_rejected_before_cleanup_can_signal_group_zero()
+-> Result<(), Box<dyn std::error::Error>> {
+    let child = std::process::Command::new("sleep").arg("30").spawn()?;
+    let mut child = tinybox_jail::OwnedChild::new(
+        UnidentifiedProcess {
+            child,
+            reported_id: Some(0),
+            terminated: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            report_termination_error_after_stop: false,
+            fail_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            skip_next_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        },
+        None,
+        None,
+        None,
+    );
+
+    let result = process_group_id(&mut child).await;
+    if result.is_ok() {
+        child.terminate()?;
+        let _ = child.try_wait()?;
+    }
+    assert!(result.is_err(), "process-group zero is not a child group");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unidentified_child_reap_wait_uses_a_bounded_cleanup_deadline()
+-> Result<(), Box<dyn std::error::Error>> {
+    let child = std::process::Command::new("sleep").arg("30").spawn()?;
+    let skip_next_termination = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let mut child = tinybox_jail::OwnedChild::new(
+        UnidentifiedProcess {
+            child,
+            reported_id: None,
+            terminated: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            report_termination_error_after_stop: false,
+            fail_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            skip_next_termination: skip_next_termination.clone(),
+        },
+        None,
+        None,
+        None,
+    );
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        terminate_unidentified_child(&mut child),
+    )
+    .await;
+    child.terminate()?;
+    let _ = child.try_wait()?;
+    assert!(
+        matches!(result, Ok(Err(_))),
+        "the cleanup helper must enforce its own deadline and return a retained-child error"
+    );
+    assert!(
+        !skip_next_termination.load(std::sync::atomic::Ordering::SeqCst),
+        "the test child ignored the first termination request"
+    );
+    Ok(())
+}
+
 struct CountedBackend(Arc<std::sync::atomic::AtomicUsize>);
 impl tinybox_jail::JailBackend for CountedBackend {
     fn name(&self) -> &'static str {
