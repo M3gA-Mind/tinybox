@@ -215,6 +215,38 @@ fn deny_read_masks_a_file_inside_the_root() -> io::Result<()> {
 }
 
 #[test]
+fn deny_read_of_a_missing_path_refuses_without_creating_a_host_mountpoint() -> io::Result<()> {
+    let Some(backend) = backend()? else {
+        return Ok(());
+    };
+    let start = Instant::now();
+    let root = tempfile::tempdir()?;
+    let denied = root.path().join(".ssh");
+    let mut j = jail(root.path());
+    j.deny_read = vec![denied.clone()];
+    let cmd = Command::new("/bin/true");
+    let error = match spawn_captured_with(&backend, &j, cmd) {
+        Ok(mut child) => {
+            let _ = child.wait()?;
+            return Err(io::Error::other(format!(
+                "missing deny_read path unexpectedly started a sandbox (host path exists: {})",
+                denied.exists()
+            )));
+        }
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    assert!(!denied.exists(), "preflight created the host deny path");
+    std::fs::write(&denied, "host-file-can-still-be-created")?;
+    assert_eq!(
+        std::fs::read_to_string(&denied)?,
+        "host-file-can-still-be-created"
+    );
+    done("deny-missing-refused-without-host-mutation", start);
+    Ok(())
+}
+
+#[test]
 fn deny_read_masks_a_runtime_directory() -> io::Result<()> {
     let Some(backend) = backend()? else {
         return Ok(());
