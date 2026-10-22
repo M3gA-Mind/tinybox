@@ -546,9 +546,15 @@ async fn zero_process_group_id_is_rejected_before_cleanup_can_signal_group_zero(
 #[tokio::test]
 async fn unidentified_child_reap_wait_uses_a_bounded_cleanup_deadline()
 -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let host = JailLocalHost::with_backend(
+        tinybox_jail::Jail::new(root.path(), "unidentified-child-timeout"),
+        Arc::new(FixtureBackend),
+        64,
+    )?;
     let child = std::process::Command::new("sleep").arg("30").spawn()?;
     let skip_next_termination = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let mut child = tinybox_jail::OwnedChild::new(
+    let child = tinybox_jail::OwnedChild::new(
         UnidentifiedProcess {
             child,
             reported_id: None,
@@ -561,12 +567,17 @@ async fn unidentified_child_reap_wait_uses_a_bounded_cleanup_deadline()
         None,
         None,
     );
+    let mut retained = RetainedOnDrop {
+        child: Some(child),
+        group: None,
+        state: host.state.clone(),
+    };
 
-    let result =
-        terminate_unidentified_child_with_timeout(&mut child, std::time::Duration::from_millis(20))
-            .await;
-    child.terminate()?;
-    let _ = child.try_wait()?;
+    let result = terminate_unidentified_child_with_timeout(
+        retained.child.as_mut().expect("owned child exists"),
+        std::time::Duration::from_millis(20),
+    )
+    .await;
     assert!(
         result.is_err(),
         "the cleanup helper must enforce its deadline and return a retained-child error"
@@ -575,6 +586,13 @@ async fn unidentified_child_reap_wait_uses_a_bounded_cleanup_deadline()
         !skip_next_termination.load(std::sync::atomic::Ordering::SeqCst),
         "the test child ignored the first termination request"
     );
+    drop(retained);
+    assert!(
+        host.has_pending_cleanup(),
+        "timeout must preserve ownership"
+    );
+    host.drain_checked().await?;
+    assert!(!host.has_pending_cleanup());
     Ok(())
 }
 
