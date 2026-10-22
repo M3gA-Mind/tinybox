@@ -549,7 +549,7 @@ fn owned_file_pipes_collect_streams_and_exit_status() -> Result<(), Box<dyn std:
 }
 
 #[cfg(unix)]
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn cancelling_a_pipe_read_releases_its_descriptor() -> Result<(), Box<dyn std::error::Error>> {
     use std::os::fd::AsRawFd;
 
@@ -566,12 +566,13 @@ async fn cancelling_a_pipe_read_releases_its_descriptor() -> Result<(), Box<dyn 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     task.abort();
     let _ = task.await;
-    let descriptor = nix::fcntl::fcntl(raw_reader, nix::fcntl::FcntlArg::F_GETFD);
     drop(writer);
+    let replacement = std::fs::File::open("/dev/null")?;
 
     assert!(
-        matches!(descriptor, Err(nix::errno::Errno::EBADF)),
-        "cancelling a read must release the pipe descriptor, got {descriptor:?}"
+        replacement.as_raw_fd() == raw_reader,
+        "cancelling a read must release descriptor {raw_reader}, got {}",
+        replacement.as_raw_fd()
     );
     Ok(())
 }
