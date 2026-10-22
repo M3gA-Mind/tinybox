@@ -582,9 +582,8 @@ async fn cancelling_a_pipe_read_releases_its_descriptor() -> Result<(), Box<dyn 
     task.abort();
     let _ = task.await;
     drop(writer);
-    let descriptor_reused = std::fs::read_link(&descriptor)
-        .map(|target| target != pipe_identity)
-        .unwrap_or(true);
+    let descriptor_reused =
+        std::fs::read_link(&descriptor).map_or(true, |target| target != pipe_identity);
 
     assert!(
         descriptor_reused,
