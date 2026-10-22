@@ -313,13 +313,14 @@ fn jailed_host_debug_excludes_workspace_and_label() -> Result<(), Box<dyn std::e
 #[cfg(unix)]
 struct UnidentifiedProcess {
     child: std::process::Child,
+    reported_id: Option<u32>,
     terminated: Arc<std::sync::atomic::AtomicBool>,
     report_termination_error_after_stop: bool,
 }
 #[cfg(unix)]
 impl tinybox_jail::OwnedProcess for UnidentifiedProcess {
     fn id(&self) -> Option<u32> {
-        None
+        self.reported_id
     }
     fn try_wait(&mut self) -> std::io::Result<Option<tinybox_jail::ChildStatus>> {
         self.child
@@ -340,7 +341,11 @@ impl tinybox_jail::OwnedProcess for UnidentifiedProcess {
 }
 
 #[cfg(unix)]
-struct UnidentifiedBackend(Arc<std::sync::atomic::AtomicBool>);
+struct UnidentifiedBackend {
+    reported_id: Option<u32>,
+    terminated: Arc<std::sync::atomic::AtomicBool>,
+    report_termination_error_after_stop: bool,
+}
 #[cfg(unix)]
 impl tinybox_jail::JailBackend for UnidentifiedBackend {
     fn name(&self) -> &'static str {
@@ -365,8 +370,9 @@ impl tinybox_jail::JailBackend for UnidentifiedBackend {
         Ok(tinybox_jail::OwnedChild::new(
             UnidentifiedProcess {
                 child,
-                terminated: self.0.clone(),
-                report_termination_error_after_stop: false,
+                reported_id: self.reported_id,
+                terminated: self.terminated.clone(),
+                report_termination_error_after_stop: self.report_termination_error_after_stop,
             },
             None,
             None,
@@ -383,7 +389,11 @@ async fn unidentified_owned_child_is_terminated_before_returning_error()
     let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let host = JailLocalHost::with_backend(
         tinybox_jail::Jail::new(root.path(), "unidentified-child"),
-        Arc::new(UnidentifiedBackend(terminated.clone())),
+        Arc::new(UnidentifiedBackend {
+            reported_id: None,
+            terminated: terminated.clone(),
+            report_termination_error_after_stop: false,
+        }),
         64,
     )?;
 
@@ -406,56 +416,6 @@ async fn unidentified_owned_child_is_terminated_before_returning_error()
 }
 
 #[cfg(unix)]
-struct UnrepresentableIdProcess(UnidentifiedProcess);
-#[cfg(unix)]
-impl tinybox_jail::OwnedProcess for UnrepresentableIdProcess {
-    fn id(&self) -> Option<u32> {
-        Some(u32::MAX)
-    }
-    fn try_wait(&mut self) -> std::io::Result<Option<tinybox_jail::ChildStatus>> {
-        self.0.try_wait()
-    }
-    fn terminate(&mut self) -> std::io::Result<()> {
-        self.0.terminate()
-    }
-}
-
-#[cfg(unix)]
-struct UnrepresentableIdBackend(Arc<std::sync::atomic::AtomicBool>);
-#[cfg(unix)]
-impl tinybox_jail::JailBackend for UnrepresentableIdBackend {
-    fn name(&self) -> &'static str {
-        "unrepresentable-id-fixture"
-    }
-    fn is_available(&self) -> bool {
-        true
-    }
-    fn spawn(
-        &self,
-        _: &tinybox_jail::Jail,
-        _: std::process::Command,
-    ) -> std::io::Result<std::process::Child> {
-        Err(std::io::Error::other("owned spawn expected"))
-    }
-    fn spawn_owned_captured(
-        &self,
-        _: &tinybox_jail::Jail,
-        mut command: std::process::Command,
-    ) -> std::io::Result<tinybox_jail::OwnedChild> {
-        let child = command.spawn()?;
-        Ok(tinybox_jail::OwnedChild::new(
-            UnrepresentableIdProcess(UnidentifiedProcess {
-                child,
-                terminated: self.0.clone(),
-                report_termination_error_after_stop: true,
-            }),
-            None,
-            None,
-            None,
-        ))
-    }
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn unrepresentable_owned_child_id_is_terminated_before_error()
@@ -464,7 +424,11 @@ async fn unrepresentable_owned_child_id_is_terminated_before_error()
     let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let host = JailLocalHost::with_backend(
         tinybox_jail::Jail::new(root.path(), "unrepresentable-child-id"),
-        Arc::new(UnrepresentableIdBackend(terminated.clone())),
+        Arc::new(UnidentifiedBackend {
+            reported_id: Some(u32::MAX),
+            terminated: terminated.clone(),
+            report_termination_error_after_stop: true,
+        }),
         64,
     )?;
 
