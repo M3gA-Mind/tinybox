@@ -548,6 +548,34 @@ fn owned_file_pipes_collect_streams_and_exit_status() -> Result<(), Box<dyn std:
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn cancelling_a_pipe_read_releases_its_descriptor() -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::fd::AsRawFd;
+
+    let (reader, writer) = nix::unistd::pipe()?;
+    let reader = std::fs::File::from(reader);
+    let raw_reader = reader.as_raw_fd();
+    let mut reader = tokio::fs::File::from_std(reader);
+    let task = tokio::spawn(async move {
+        let mut buffer = [0; 1];
+        tokio::io::AsyncReadExt::read(&mut reader, &mut buffer).await
+    });
+
+    // Keep the writer open so the read remains pending until cancellation.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    task.abort();
+    let _ = task.await;
+    let descriptor = nix::fcntl::fcntl(raw_reader, nix::fcntl::FcntlArg::F_GETFD);
+    drop(writer);
+
+    assert!(
+        matches!(descriptor, Err(nix::errno::Errno::EBADF)),
+        "cancelling a read must release the pipe descriptor, got {descriptor:?}"
+    );
+    Ok(())
+}
+
 struct MissingOutputBackend;
 impl tinybox_jail::JailBackend for MissingOutputBackend {
     fn name(&self) -> &'static str {
