@@ -187,3 +187,15 @@ fn the_check_sees_a_planted_link_however_the_root_is_spelled() -> std::io::Resul
     }
     Ok(())
 }
+
+#[test]
+fn nested_denial_refuses_only_paths_deeper_than_a_direct_child() {
+    let writable = Path::new("/work");
+    assert!(nested_denial(Path::new("/work/secret"), writable).is_none());
+    assert!(nested_denial(Path::new("/elsewhere/a/secret"), writable).is_none());
+    assert!(nested_denial(Path::new("/workshop/a/secret"), writable).is_none());
+    for nested in ["/work/a/secret", "/work/a/b/secret", "/work"] {
+        let error = nested_denial(Path::new(nested), writable).expect(nested);
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput, "{nested}");
+    }
+}
