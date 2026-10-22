@@ -467,9 +467,8 @@ fn jail_supervisor_fault_retains_child_for_cleanup_acknowledgement()
     Ok(())
 }
 
-#[tokio::test]
-async fn owned_file_pipes_collect_streams_and_exit_status() -> Result<(), Box<dyn std::error::Error>>
-{
+#[test]
+fn owned_file_pipes_collect_streams_and_exit_status() -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
     let host = JailLocalHost::with_backend(
         tinybox_jail::Jail::new(root.path(), "owned-pipe-fixture"),
