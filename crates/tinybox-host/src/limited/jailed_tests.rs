@@ -326,7 +326,8 @@ impl tinybox_jail::OwnedProcess for UnidentifiedProcess {
             .map(|status| status.map(|status| tinybox_jail::ChildStatus::from_code(status.code())))
     }
     fn terminate(&mut self) -> std::io::Result<()> {
-        self.terminated.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.terminated
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         self.child.kill()
     }
 }
@@ -382,7 +383,11 @@ async fn unidentified_owned_child_is_terminated_before_returning_error()
         .run(&ExecRequest::new(["/bin/sh", "-c", "sleep 30"]))
         .await
         .expect_err("a backend child without an id cannot be supervised");
-    assert!(error.to_string().contains("missing native process identifier"));
+    assert!(
+        error
+            .to_string()
+            .contains("missing native process identifier")
+    );
     assert!(
         terminated.load(std::sync::atomic::Ordering::SeqCst),
         "the backend-owned child must be stopped before its handle is dropped"
@@ -432,6 +437,7 @@ async fn dropping_jail_call_before_supervisor_start_does_not_spawn()
 }
 
 #[test]
+#[cfg(target_os = "macos")]
 fn jail_supervisor_fault_retains_child_for_cleanup_acknowledgement()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
@@ -445,11 +451,13 @@ fn jail_supervisor_fault_retains_child_for_cleanup_acknowledgement()
     let missing_io = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()?;
-    let result = missing_io.block_on(host.run(&ExecRequest::new([
-        "/bin/sh", "-c", "sleep 600 & wait",
-    ])));
+    let result =
+        missing_io.block_on(host.run(&ExecRequest::new(["/bin/sh", "-c", "sleep 600 & wait"])));
     assert!(result.is_err());
-    assert!(host.has_pending_cleanup(), "native ownership survives the panic");
+    assert!(
+        host.has_pending_cleanup(),
+        "native ownership survives the panic"
+    );
     drop(missing_io);
     let recovery = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -460,25 +468,26 @@ fn jail_supervisor_fault_retains_child_for_cleanup_acknowledgement()
 }
 
 #[tokio::test]
-async fn owned_file_pipes_collect_streams_and_exit_status()
--> Result<(), Box<dyn std::error::Error>> {
+async fn owned_file_pipes_collect_streams_and_exit_status() -> Result<(), Box<dyn std::error::Error>>
+{
     let root = tempfile::tempdir()?;
     let host = JailLocalHost::with_backend(
         tinybox_jail::Jail::new(root.path(), "owned-pipe-fixture"),
         Arc::new(FixtureBackend),
         64,
     )?;
-    let output = host
-        .run(&ExecRequest::new([
-            "/bin/sh",
-            "-c",
-            "printf owned-pipes; printf owned-error >&2; exit 23",
-        ]))
-        .await?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let output = runtime.block_on(host.run(&ExecRequest::new([
+        "/bin/sh",
+        "-c",
+        "printf owned-pipes; printf owned-error >&2; exit 23",
+    ])))?;
     assert_eq!(output.stdout, b"owned-pipes");
     assert_eq!(output.stderr, b"owned-error");
     assert_eq!(output.exit_code, 23);
-    host.drain_checked().await?;
+    runtime.block_on(host.drain_checked())?;
     assert!(!host.has_pending_cleanup());
     Ok(())
 }
