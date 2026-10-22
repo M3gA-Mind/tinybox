@@ -24,24 +24,9 @@ type AsyncPipe = tokio::fs::File;
 fn async_pipe(file: std::fs::File) -> Result<AsyncPipe> {
     #[cfg(unix)]
     {
-        use nix::fcntl::{FcntlArg, OFlag, fcntl};
+        use nix::fcntl::fcntl;
 
-        let flags = fcntl(&file, FcntlArg::F_GETFL).map_err(|error| {
-            Error::io(
-                "make native pipe nonblocking",
-                &std::io::Error::from_raw_os_error(error as i32),
-            )
-        })?;
-        fcntl(
-            &file,
-            FcntlArg::F_SETFL(OFlag::from_bits_retain(flags) | OFlag::O_NONBLOCK),
-        )
-        .map_err(|error| {
-            Error::io(
-                "make native pipe nonblocking",
-                &std::io::Error::from_raw_os_error(error as i32),
-            )
-        })?;
+        set_nonblocking_with(&file, |descriptor, argument| fcntl(descriptor, argument))?;
         tokio::io::unix::AsyncFd::new(file)
             .map(AsyncPipe)
             .map_err(|error| Error::io("register native pipe", &error))
@@ -50,6 +35,35 @@ fn async_pipe(file: std::fs::File) -> Result<AsyncPipe> {
     {
         Ok(tokio::fs::File::from_std(file))
     }
+}
+
+#[cfg(unix)]
+fn set_nonblocking_with<F>(file: &std::fs::File, mut fcntl: F) -> Result<()>
+where
+    F: FnMut(
+        &std::fs::File,
+        nix::fcntl::FcntlArg<'_>,
+    ) -> nix::Result<std::os::raw::c_int>,
+{
+    use nix::fcntl::{FcntlArg, OFlag};
+
+    let flags = fcntl(file, FcntlArg::F_GETFL).map_err(|error| {
+        Error::io(
+            "make native pipe nonblocking",
+            &std::io::Error::from_raw_os_error(error as i32),
+        )
+    })?;
+    fcntl(
+        file,
+        FcntlArg::F_SETFL(OFlag::from_bits_retain(flags) | OFlag::O_NONBLOCK),
+    )
+    .map_err(|error| {
+        Error::io(
+            "make native pipe nonblocking",
+            &std::io::Error::from_raw_os_error(error as i32),
+        )
+    })?;
+    Ok(())
 }
 
 #[cfg(unix)]
