@@ -611,8 +611,7 @@ where
         .map(|error| Error::io("inspect jail child", &error));
     match group_alive(group).await {
         Ok(true) => {
-            if let Err(error) =
-                kill_jail_group(group, kill_group, |group| group_alive(group)).await
+            if let Err(error) = kill_jail_group(group, kill_group, |group| group_alive(group)).await
             {
                 group_error.get_or_insert(error);
             }
@@ -639,9 +638,8 @@ where
     };
     match tokio::time::timeout(std::time::Duration::from_secs(5), completion).await {
         Ok(result) => result,
-        Err(_) => Err(group_error.unwrap_or_else(|| {
-            failure("drain native jail", "cleanup deadline exceeded".into())
-        })),
+        Err(_) => Err(group_error
+            .unwrap_or_else(|| failure("drain native jail", "cleanup deadline exceeded".into()))),
     }
 }
 fn failure(operation: &'static str, message: String) -> Error {

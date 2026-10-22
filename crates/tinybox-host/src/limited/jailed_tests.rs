@@ -65,7 +65,10 @@ async fn supplied_payload_is_rejected_when_owned_child_has_no_stdin()
     request.stdin = Some(b"payload".to_vec());
 
     let result = host.run(&request).await;
-    assert!(result.is_err(), "a supplied payload must not be silently lost");
+    assert!(
+        result.is_err(),
+        "a supplied payload must not be silently lost"
+    );
     host.drain_checked().await?;
     assert!(!host.has_pending_cleanup());
     Ok(())
@@ -616,18 +619,13 @@ async fn owned_termination_runs_even_when_group_kill_is_denied()
         None,
         None,
     );
-    let result = terminate_with_group_ops(
-        &mut child,
-        group,
-        |_| Err(nix::errno::Errno::EPERM),
-        {
+    let result = terminate_with_group_ops(&mut child, group, |_| Err(nix::errno::Errno::EPERM), {
+        let terminated = terminated.clone();
+        move |_| {
             let terminated = terminated.clone();
-            move |_| {
-                let terminated = terminated.clone();
-                async move { Ok(!terminated.load(std::sync::atomic::Ordering::SeqCst)) }
-            }
-        },
-    )
+            async move { Ok(!terminated.load(std::sync::atomic::Ordering::SeqCst)) }
+        }
+    })
     .await;
     if result.is_err() {
         child.terminate()?;
