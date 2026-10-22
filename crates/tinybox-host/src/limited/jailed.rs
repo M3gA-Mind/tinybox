@@ -594,7 +594,8 @@ async fn terminate(child: &mut OwnedChild, group: i32) -> Result<()> {
         };
         tokio::time::timeout(std::time::Duration::from_secs(5), completion)
             .await
-            .map_err(|_| failure("drain native jail", "cleanup deadline exceeded".into()))?
+            .map_err(|_| failure("drain native jail", "cleanup deadline exceeded".into()))??;
+        Ok(())
     }
 }
 
