@@ -550,7 +550,8 @@ fn owned_file_pipes_collect_streams_and_exit_status() -> Result<(), Box<dyn std:
 
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
-async fn cancelling_a_pipe_read_releases_its_descriptor() -> Result<(), Box<dyn std::error::Error>> {
+async fn cancelling_a_pipe_read_releases_its_descriptor() -> Result<(), Box<dyn std::error::Error>>
+{
     use std::os::fd::AsRawFd;
 
     let (reader, writer) = nix::unistd::pipe()?;

@@ -14,6 +14,8 @@ use tokio::sync::{oneshot, watch};
 #[cfg(unix)]
 struct AsyncPipe(tokio::io::unix::AsyncFd<std::fs::File>);
 
+// Native jail supervision is Unix-only today; retain a compile-time adapter for
+// other targets so this module stays buildable if that capability is added.
 #[cfg(not(unix))]
 type AsyncPipe = tokio::fs::File;
 
@@ -22,13 +24,12 @@ fn async_pipe(file: std::fs::File) -> Result<AsyncPipe> {
     {
         use nix::fcntl::{FcntlArg, OFlag, fcntl};
 
-        let flags = fcntl(&file, FcntlArg::F_GETFL)
-            .map_err(|error| {
-                Error::io(
-                    "make native pipe nonblocking",
-                    &std::io::Error::from_raw_os_error(error as i32),
-                )
-            })?;
+        let flags = fcntl(&file, FcntlArg::F_GETFL).map_err(|error| {
+            Error::io(
+                "make native pipe nonblocking",
+                &std::io::Error::from_raw_os_error(error as i32),
+            )
+        })?;
         fcntl(
             &file,
             FcntlArg::F_SETFL(OFlag::from_bits_retain(flags) | OFlag::O_NONBLOCK),
