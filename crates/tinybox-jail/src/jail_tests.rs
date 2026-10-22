@@ -164,7 +164,8 @@ fn owned_captured_spawn_does_not_claim_the_child_pid_as_a_process_group() -> std
     let root = tempfile::tempdir()?;
     let jail = Jail::new(root.path(), "owned-captured-spawn");
     let backend = crate::NoopBackend;
-    let command = std::process::Command::new("cmd").args(["/C", "exit 0"]);
+    let mut command = std::process::Command::new("cmd");
+    command.args(["/C", "exit 0"]);
 
     let child = crate::spawn_owned_captured_with(&backend, &jail, command)?;
 
