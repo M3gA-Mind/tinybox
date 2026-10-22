@@ -9,20 +9,13 @@ use tinybus::{Connection, broker::Broker, module::ModuleHost, transport::memory:
 async fn compiled_manifest_admits_and_executes_grant_and_shell_discovery()
 -> Result<(), Box<dyn std::error::Error>> {
     let built_artifact = compiled_artifact()?;
-    // Cargo output inherits the checkout ACL on Windows, which need not meet
-    // production module admission. Stage the real artifact with private ACLs.
+    // Cargo output inherits checkout permissions and writable ancestors, which
+    // need not meet production admission. Stage the real artifact privately.
+    let mut staging = tempfile::Builder::new();
+    staging.prefix("admitted-module-");
     #[cfg(unix)]
-    let staged = {
-        let mut builder = tempfile::Builder::new();
-        builder
-            .prefix("admitted-module-")
-            .permissions(std::fs::Permissions::from_mode(0o700));
-        builder.tempdir()?
-    };
-    #[cfg(windows)]
-    let staged = tempfile::Builder::new()
-        .prefix("admitted-module-")
-        .tempdir_in(built_artifact.parent().ok_or("artifact has no directory")?)?;
+    staging.permissions(std::fs::Permissions::from_mode(0o700));
+    let staged = staging.tempdir_in(std::env::temp_dir())?;
     #[cfg(windows)]
     secure_staging_directory(staged.path())?;
     // macOS exposes the temporary root through symlinked system paths such as
