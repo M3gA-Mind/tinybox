@@ -121,6 +121,7 @@ type Retained = Arc<tokio::sync::Mutex<Option<OwnedChild>>>;
 struct State {
     active: AtomicUsize,
     failed: Mutex<BTreeMap<i32, Retained>>,
+    unidentified: Mutex<Vec<Retained>>,
     cleanup: tokio::sync::Mutex<()>,
     finished: watch::Sender<u64>,
 }
@@ -138,26 +139,35 @@ impl Drop for Active {
 // and aborts so the module can acknowledge cleanup through its normal drain path.
 struct RetainedOnDrop {
     child: Option<OwnedChild>,
-    group: i32,
+    group: Option<i32>,
     state: Arc<State>,
 }
 impl Drop for RetainedOnDrop {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            #[cfg(unix)]
-            {
-                use nix::{
-                    sys::signal::{Signal, killpg},
-                    unistd::Pid,
-                };
-                let _ = killpg(Pid::from_raw(self.group), Signal::SIGKILL);
+            if let Some(group) = self.group {
+                #[cfg(unix)]
+                {
+                    use nix::{
+                        sys::signal::{Signal, killpg},
+                        unistd::Pid,
+                    };
+                    let _ = killpg(Pid::from_raw(group), Signal::SIGKILL);
+                }
+                let _ = child.terminate();
+                self.state
+                    .failed
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(group, Arc::new(tokio::sync::Mutex::new(Some(child))));
+            } else {
+                let _ = child.terminate();
+                self.state
+                    .unidentified
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(Arc::new(tokio::sync::Mutex::new(Some(child))));
             }
-            let _ = child.terminate();
-            self.state
-                .failed
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(self.group, Arc::new(tokio::sync::Mutex::new(Some(child))));
         }
     }
 }
@@ -207,6 +217,7 @@ impl JailLocalHost {
             state: Arc::new(State {
                 active: AtomicUsize::new(0),
                 failed: Mutex::new(BTreeMap::new()),
+                unidentified: Mutex::new(Vec::new()),
                 cleanup: tokio::sync::Mutex::new(()),
                 finished,
             }),
@@ -221,6 +232,12 @@ impl JailLocalHost {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_empty()
+            || !self
+                .state
+                .unidentified
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
     }
     /// Join supervisors and retry all retained native cleanup.
     /// # Errors
@@ -260,6 +277,27 @@ impl JailLocalHost {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .remove(&group);
+        }
+        let unidentified = self
+            .state
+            .unidentified
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        for slot in unidentified {
+            let mut child = slot.lock().await;
+            if let Some(child) = child.as_mut()
+                && let Err(error) = terminate_unidentified_child(child).await
+            {
+                failure.get_or_insert(error);
+                continue;
+            }
+            child.take();
+            self.state
+                .unidentified
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .retain(|retained| !Arc::ptr_eq(retained, &slot));
         }
         if let Some(error) = failure {
             Err(error)
@@ -327,18 +365,36 @@ impl JailLocalHost {
             if !matches!(cancelled.try_recv(), Err(oneshot::error::TryRecvError::Empty)) {
                 return Err(failure("start native jail", "execution cancelled".into()));
             }
-            let mut child = tokio::task::spawn_blocking(move || {
+            let child = tokio::task::spawn_blocking(move || {
                 tinybox_jail::spawn_owned_captured_with(backend.as_ref(), &jail, command)
             })
             .await
             .map_err(|error| failure("start native jail", error.to_string()))?
             .map_err(|error| Error::io("spawn native jail", &error))?;
-            let group = process_group_id(&mut child).await?;
             let mut owned = RetainedOnDrop {
                 child: Some(child),
-                group,
+                group: None,
                 state: state.clone(),
             };
+            let child = owned
+                .child
+                .as_mut()
+                .unwrap_or_else(|| unreachable!("newly retained jail child is present"));
+            let group = match process_group_id(child).await {
+                Ok(group) => group,
+                Err(error) => {
+                    if owned
+                        .child
+                        .as_mut()
+                        .and_then(|child| child.try_wait().ok().flatten())
+                        .is_some()
+                    {
+                        owned.child.take();
+                    }
+                    return Err(error);
+                }
+            };
+            owned.group = Some(group);
             let child = owned
                 .child
                 .as_mut()

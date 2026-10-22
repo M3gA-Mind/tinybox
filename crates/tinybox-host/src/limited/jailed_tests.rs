@@ -331,7 +331,10 @@ impl tinybox_jail::OwnedProcess for UnidentifiedProcess {
     fn terminate(&mut self) -> std::io::Result<()> {
         self.terminated
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        if self.fail_termination.load(std::sync::atomic::Ordering::SeqCst) {
+        if self
+            .fail_termination
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             return Err(std::io::Error::other("termination temporarily unavailable"));
         }
         self.child.kill()?;
@@ -484,7 +487,11 @@ async fn unidentified_child_is_retained_when_termination_fails_while_running()
     else {
         return Err("a backend child without an id cannot be supervised".into());
     };
-    assert!(error.to_string().contains("termination temporarily unavailable"));
+    assert!(
+        error
+            .to_string()
+            .contains("termination temporarily unavailable")
+    );
     assert!(
         host.has_pending_cleanup(),
         "failed termination must retain the unidentified child for retry"
