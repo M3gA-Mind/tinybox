@@ -221,7 +221,7 @@ impl JailLocalHost {
             if !matches!(cancelled.try_recv(), Err(oneshot::error::TryRecvError::Empty)) {
                 return Err(failure("start native jail", "execution cancelled".into()));
             }
-            let child = tokio::task::spawn_blocking(move || {
+            let mut child = tokio::task::spawn_blocking(move || {
                 tinybox_jail::spawn_owned_captured_with(backend.as_ref(), &jail, command)
             })
             .await
