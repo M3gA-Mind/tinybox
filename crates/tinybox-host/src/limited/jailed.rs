@@ -376,24 +376,7 @@ impl JailLocalHost {
                 group: None,
                 state: state.clone(),
             };
-            let child = owned
-                .child
-                .as_mut()
-                .unwrap_or_else(|| unreachable!("newly retained jail child is present"));
-            let group = match process_group_id(child).await {
-                Ok(group) => group,
-                Err(error) => {
-                    if owned
-                        .child
-                        .as_mut()
-                        .and_then(|child| child.try_wait().ok().flatten())
-                        .is_some()
-                    {
-                        owned.child.take();
-                    }
-                    return Err(error);
-                }
-            };
+            let group = identify_owned_group(&mut owned).await?;
             owned.group = Some(group);
             let child = owned
                 .child
@@ -512,6 +495,26 @@ async fn process_group_id(child: &mut OwnedChild) -> Result<i32> {
         Err(error) => {
             terminate_unidentified_child(child).await?;
             Err(failure("identify jail child", error.to_string()))
+        }
+    }
+}
+async fn identify_owned_group(owned: &mut RetainedOnDrop) -> Result<i32> {
+    let child = owned
+        .child
+        .as_mut()
+        .unwrap_or_else(|| unreachable!("newly retained jail child is present"));
+    match process_group_id(child).await {
+        Ok(group) => Ok(group),
+        Err(error) => {
+            if owned
+                .child
+                .as_mut()
+                .and_then(|child| child.try_wait().ok().flatten())
+                .is_some()
+            {
+                owned.child.take();
+            }
+            Err(error)
         }
     }
 }
