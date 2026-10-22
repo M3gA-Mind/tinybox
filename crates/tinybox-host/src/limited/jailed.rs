@@ -227,20 +227,7 @@ impl JailLocalHost {
             .await
             .map_err(|error| failure("start native jail", error.to_string()))?
             .map_err(|error| Error::io("spawn native jail", &error))?;
-            let Some(id) = child.id() else {
-                terminate_unidentified_child(&mut child).await?;
-                return Err(failure(
-                    "identify jail child",
-                    "missing native process identifier".into(),
-                ));
-            };
-            let group = match i32::try_from(id) {
-                Ok(group) => group,
-                Err(error) => {
-                    terminate_unidentified_child(&mut child).await?;
-                    return Err(failure("identify jail child", error.to_string()));
-                }
-            };
+            let group = process_group_id(&mut child).await?;
             let mut owned = RetainedOnDrop {
                 child: Some(child),
                 group,
@@ -347,6 +334,22 @@ async fn wait_child(child: &mut OwnedChild) -> Result<tinybox_jail::ChildStatus>
             return Ok(status);
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+async fn process_group_id(child: &mut OwnedChild) -> Result<i32> {
+    let Some(id) = child.id() else {
+        terminate_unidentified_child(child).await?;
+        return Err(failure(
+            "identify jail child",
+            "missing native process identifier".into(),
+        ));
+    };
+    match i32::try_from(id) {
+        Ok(group) => Ok(group),
+        Err(error) => {
+            terminate_unidentified_child(child).await?;
+            Err(failure("identify jail child", error.to_string()))
+        }
     }
 }
 async fn terminate_unidentified_child(child: &mut OwnedChild) -> Result<()> {
