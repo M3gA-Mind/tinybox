@@ -316,6 +316,7 @@ struct UnidentifiedProcess {
     reported_id: Option<u32>,
     terminated: Arc<std::sync::atomic::AtomicBool>,
     report_termination_error_after_stop: bool,
+    fail_termination: Arc<std::sync::atomic::AtomicBool>,
 }
 #[cfg(unix)]
 impl tinybox_jail::OwnedProcess for UnidentifiedProcess {
@@ -330,6 +331,9 @@ impl tinybox_jail::OwnedProcess for UnidentifiedProcess {
     fn terminate(&mut self) -> std::io::Result<()> {
         self.terminated
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        if self.fail_termination.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(std::io::Error::other("termination temporarily unavailable"));
+        }
         self.child.kill()?;
         if self.report_termination_error_after_stop {
             let _ = self.child.wait()?;
@@ -345,6 +349,7 @@ struct UnidentifiedBackend {
     reported_id: Option<u32>,
     terminated: Arc<std::sync::atomic::AtomicBool>,
     report_termination_error_after_stop: bool,
+    fail_termination: Arc<std::sync::atomic::AtomicBool>,
 }
 #[cfg(unix)]
 impl tinybox_jail::JailBackend for UnidentifiedBackend {
@@ -373,6 +378,7 @@ impl tinybox_jail::JailBackend for UnidentifiedBackend {
                 reported_id: self.reported_id,
                 terminated: self.terminated.clone(),
                 report_termination_error_after_stop: self.report_termination_error_after_stop,
+                fail_termination: self.fail_termination.clone(),
             },
             None,
             None,
@@ -393,6 +399,7 @@ async fn unidentified_owned_child_is_terminated_before_returning_error()
             reported_id: None,
             terminated: terminated.clone(),
             report_termination_error_after_stop: false,
+            fail_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }),
         64,
     )?;
@@ -428,6 +435,7 @@ async fn unrepresentable_owned_child_id_is_terminated_before_error()
             reported_id: Some(u32::MAX),
             terminated: terminated.clone(),
             report_termination_error_after_stop: true,
+            fail_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }),
         64,
     )?;
@@ -449,6 +457,42 @@ async fn unrepresentable_owned_child_id_is_terminated_before_error()
         terminated.load(std::sync::atomic::Ordering::SeqCst),
         "the child must be stopped even when its process-group id cannot be represented"
     );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unidentified_child_is_retained_when_termination_fails_while_running()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fail_termination = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let host = JailLocalHost::with_backend(
+        tinybox_jail::Jail::new(root.path(), "unidentified-child-retry"),
+        Arc::new(UnidentifiedBackend {
+            reported_id: None,
+            terminated,
+            report_termination_error_after_stop: false,
+            fail_termination: fail_termination.clone(),
+        }),
+        64,
+    )?;
+
+    let Err(error) = host
+        .run(&ExecRequest::new(["/bin/sh", "-c", "sleep 30"]))
+        .await
+    else {
+        return Err("a backend child without an id cannot be supervised".into());
+    };
+    assert!(error.to_string().contains("termination temporarily unavailable"));
+    assert!(
+        host.has_pending_cleanup(),
+        "failed termination must retain the unidentified child for retry"
+    );
+
+    fail_termination.store(false, std::sync::atomic::Ordering::SeqCst);
+    host.drain_checked().await?;
+    assert!(!host.has_pending_cleanup());
     Ok(())
 }
 
