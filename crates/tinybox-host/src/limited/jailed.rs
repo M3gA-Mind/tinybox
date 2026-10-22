@@ -266,7 +266,7 @@ impl JailLocalHost {
         for (group, slot) in slots {
             let mut child = slot.lock().await;
             if let Some(child) = child.as_mut()
-                && let Err(error) = terminate(child, group).await
+                && let Err(error) = terminate(child, Some(group)).await
             {
                 failure.get_or_insert(error);
                 continue;
@@ -377,7 +377,7 @@ impl JailLocalHost {
                 state: state.clone(),
             };
             let group = identify_owned_group(&mut owned).await?;
-            owned.group = Some(group);
+            owned.group = group;
             let child = owned
                 .child
                 .as_mut()
@@ -457,13 +457,27 @@ impl Host for JailLocalHost {
         self.retry_retained_cleanup().await
     }
 }
-fn retain_cleanup(state: &State, child: OwnedChild, group: i32, outcome: Result<()>) -> Result<()> {
+fn retain_cleanup(
+    state: &State,
+    child: OwnedChild,
+    group: Option<i32>,
+    outcome: Result<()>,
+) -> Result<()> {
     if outcome.is_err() {
-        state
-            .failed
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(group, Arc::new(tokio::sync::Mutex::new(Some(child))));
+        let retained = Arc::new(tokio::sync::Mutex::new(Some(child)));
+        if let Some(group) = group {
+            state
+                .failed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(group, retained);
+        } else {
+            state
+                .unidentified
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(retained);
+        }
     }
     outcome
 }
@@ -500,35 +514,31 @@ async fn wait_child(child: &mut OwnedChild) -> Result<Option<i32>> {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 }
-async fn process_group_id(child: &mut OwnedChild) -> Result<i32> {
-    let Some(id) = child.id() else {
-        terminate_unidentified_child(child).await?;
-        return Err(failure(
-            "identify jail child",
-            "missing native process identifier".into(),
-        ));
+async fn verified_local_process_group_id(child: &mut OwnedChild) -> Result<Option<i32>> {
+    let Some(id) = child.local_process_group_id() else {
+        return Ok(None);
     };
     if id == 0 {
         terminate_unidentified_child(child).await?;
         return Err(failure(
             "identify jail child",
-            "invalid zero process identifier".into(),
+            "invalid zero process-group identifier".into(),
         ));
     }
     match i32::try_from(id) {
-        Ok(group) => Ok(group),
+        Ok(group) => Ok(Some(group)),
         Err(error) => {
             terminate_unidentified_child(child).await?;
             Err(failure("identify jail child", error.to_string()))
         }
     }
 }
-async fn identify_owned_group(owned: &mut RetainedOnDrop) -> Result<i32> {
+async fn identify_owned_group(owned: &mut RetainedOnDrop) -> Result<Option<i32>> {
     let child = owned
         .child
         .as_mut()
         .unwrap_or_else(|| unreachable!("newly retained jail child is present"));
-    match process_group_id(child).await {
+    match verified_local_process_group_id(child).await {
         Ok(group) => Ok(group),
         Err(error) => {
             if owned
@@ -568,34 +578,29 @@ async fn terminate_unidentified_child_with_timeout(
         )
     })?
 }
-async fn terminate(child: &mut OwnedChild, group: i32) -> Result<()> {
+async fn terminate(child: &mut OwnedChild, group: Option<i32>) -> Result<()> {
     #[cfg(unix)]
     {
-        use nix::{
-            sys::signal::{Signal, killpg},
-            unistd::Pid,
-        };
-        terminate_with_group_ops(
-            child,
-            group,
-            |group| killpg(Pid::from_raw(group), Signal::SIGKILL),
-            super::process::group_alive,
-        )
-        .await
+        if let Some(group) = group {
+            use nix::{
+                sys::signal::{Signal, killpg},
+                unistd::Pid,
+            };
+            terminate_with_group_ops(
+                child,
+                group,
+                |group| killpg(Pid::from_raw(group), Signal::SIGKILL),
+                super::process::group_alive,
+            )
+            .await
+        } else {
+            terminate_unidentified_child(child).await
+        }
     }
     #[cfg(not(unix))]
     {
         let _ = group;
-        let completion = async {
-            child
-                .terminate()
-                .map_err(|error| Error::io("kill jail child", &error))?;
-            wait_child(child).await
-        };
-        tokio::time::timeout(std::time::Duration::from_secs(5), completion)
-            .await
-            .map_err(|_| failure("drain native jail", "cleanup deadline exceeded".into()))??;
-        Ok(())
+        terminate_unidentified_child(child).await
     }
 }
 

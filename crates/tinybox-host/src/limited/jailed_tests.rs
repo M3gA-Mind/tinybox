@@ -410,6 +410,7 @@ impl tinybox_jail::OwnedProcess for UnidentifiedProcess {
 #[cfg(unix)]
 struct UnidentifiedBackend {
     reported_id: Option<u32>,
+    local_group: Option<u32>,
     terminated: Arc<std::sync::atomic::AtomicBool>,
     report_termination_error_after_stop: bool,
     fail_termination: Arc<std::sync::atomic::AtomicBool>,
@@ -436,7 +437,7 @@ impl tinybox_jail::JailBackend for UnidentifiedBackend {
         mut command: std::process::Command,
     ) -> std::io::Result<tinybox_jail::OwnedChild> {
         let child = command.spawn()?;
-        Ok(tinybox_jail::OwnedChild::new(
+        let owned = tinybox_jail::OwnedChild::new(
             UnidentifiedProcess {
                 child,
                 reported_id: self.reported_id,
@@ -448,7 +449,11 @@ impl tinybox_jail::JailBackend for UnidentifiedBackend {
             None,
             None,
             None,
-        ))
+        );
+        Ok(match self.local_group {
+            Some(group) => owned.with_local_process_group_id(group),
+            None => owned,
+        })
     }
 }
 
@@ -462,6 +467,7 @@ async fn unidentified_owned_child_is_terminated_before_returning_error()
         tinybox_jail::Jail::new(root.path(), "unidentified-child"),
         Arc::new(UnidentifiedBackend {
             reported_id: None,
+            local_group: None,
             terminated: terminated.clone(),
             report_termination_error_after_stop: false,
             fail_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -476,11 +482,7 @@ async fn unidentified_owned_child_is_terminated_before_returning_error()
     else {
         return Err("a backend child without an id cannot be supervised".into());
     };
-    assert!(
-        error
-            .to_string()
-            .contains("missing native process identifier")
-    );
+    assert!(error.to_string().contains("missing stdout pipe"));
     assert!(
         terminated.load(std::sync::atomic::Ordering::SeqCst),
         "the backend-owned child must be stopped before its handle is dropped"
@@ -498,6 +500,7 @@ async fn unrepresentable_owned_child_id_is_terminated_before_error()
         tinybox_jail::Jail::new(root.path(), "unrepresentable-child-id"),
         Arc::new(UnidentifiedBackend {
             reported_id: Some(u32::MAX),
+            local_group: Some(u32::MAX),
             terminated: terminated.clone(),
             report_termination_error_after_stop: true,
             fail_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -537,6 +540,7 @@ async fn unidentified_child_is_retained_when_termination_fails_while_running()
         tinybox_jail::Jail::new(root.path(), "unidentified-child-retry"),
         Arc::new(UnidentifiedBackend {
             reported_id: None,
+            local_group: None,
             terminated,
             report_termination_error_after_stop: false,
             fail_termination: fail_termination.clone(),
@@ -584,9 +588,10 @@ async fn zero_process_group_id_is_rejected_before_cleanup_can_signal_group_zero(
         None,
         None,
         None,
-    );
+    )
+    .with_local_process_group_id(0);
 
-    let result = process_group_id(&mut child).await;
+    let result = verified_local_process_group_id(&mut child).await;
     if result.is_ok() {
         child.terminate()?;
         let _ = child.try_wait()?;
@@ -617,8 +622,7 @@ async fn generic_owned_process_id_is_not_treated_as_a_local_process_group()
 
     assert_eq!(child.id(), Some(reported_id));
     assert_eq!(verified_local_process_group_id(&mut child).await?, None);
-    child.terminate()?;
-    let _ = wait_child(&mut child).await?;
+    terminate(&mut child, None).await?;
     Ok(())
 }
 
