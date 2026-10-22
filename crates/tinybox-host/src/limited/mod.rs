@@ -266,7 +266,7 @@ impl LimitedLocalHost {
                                 .map_err(|error| Error::io("wait", &error))
                         }
                     )?;
-                    Ok(status)
+                    Ok(status.code())
                 });
             let result = tokio::select! {
                 result = collection => result,
@@ -445,7 +445,7 @@ async fn collect_until_exit(
     budget: Arc<AtomicUsize>,
     limit: usize,
     observer: Option<Arc<dyn ExecutionObserver>>,
-    exited: impl std::future::Future<Output = Result<std::process::ExitStatus>>,
+    exited: impl std::future::Future<Output = Result<Option<i32>>>,
 ) -> Result<ExecOutput> {
     let stdout_bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
     let stderr_bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -503,11 +503,7 @@ async fn collect_until_exit(
     if held {
         stderr.extend_from_slice(OUTPUT_HELD_NOTE.as_bytes());
     }
-    Ok(ExecOutput::new(
-        status.code().unwrap_or(128),
-        stdout,
-        stderr,
-    ))
+    Ok(ExecOutput::new(status.unwrap_or(128), stdout, stderr))
 }
 
 /// How long the output pipes may stay open after the command exits before
