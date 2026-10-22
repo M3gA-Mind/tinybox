@@ -248,9 +248,10 @@ impl JailLocalHost {
                 group,
                 state: state.clone(),
             };
-            let child = owned.child.as_mut().ok_or_else(|| {
-                failure("own jail child", "missing native child".into())
-            })?;
+            let child = owned
+                .child
+                .as_mut()
+                .expect("newly retained jail child is present");
             let pipes = (|| {
                 Ok::<_, Error>((
                     tokio::fs::File::from_std(pipe(child.take_stdout(), "stdout")?),
@@ -288,9 +289,7 @@ impl JailLocalHost {
                 Err(error) => Err(error),
             };
             let cleanup = terminate(child, group).await;
-            let child = owned.child.take().ok_or_else(|| {
-                failure("release jail child", "missing native child".into())
-            })?;
+            let child = owned.child.take().expect("retained jail child is present");
             retain_cleanup(&state, child, group, cleanup)?;
             result
         });
