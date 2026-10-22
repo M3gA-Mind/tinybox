@@ -310,7 +310,7 @@ fn jailed_host_debug_excludes_workspace_and_label() -> Result<(), Box<dyn std::e
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 struct UnidentifiedProcess {
     child: std::process::Child,
     reported_id: Option<u32>,
@@ -552,7 +552,7 @@ fn owned_file_pipes_collect_streams_and_exit_status() -> Result<(), Box<dyn std:
 #[tokio::test(flavor = "current_thread")]
 async fn cancelling_a_pipe_read_releases_its_descriptor() -> Result<(), Box<dyn std::error::Error>>
 {
-    use std::os::fd::AsRawFd;
+    use std::{os::fd::AsRawFd, path::PathBuf};
 
     let (reader, writer) = nix::unistd::pipe()?;
     let reader = std::fs::File::from(reader);
@@ -580,12 +580,11 @@ async fn cancelling_a_pipe_read_releases_its_descriptor() -> Result<(), Box<dyn 
     task.abort();
     let _ = task.await;
     drop(writer);
-    let replacement = std::fs::File::open("/dev/null")?;
+    let descriptor = PathBuf::from(format!("/proc/self/fd/{raw_reader}"));
 
     assert!(
-        replacement.as_raw_fd() == raw_reader,
-        "cancelling a read must release descriptor {raw_reader}, got {}",
-        replacement.as_raw_fd()
+        std::fs::symlink_metadata(&descriptor).is_err(),
+        "cancelling a read must release descriptor {raw_reader}"
     );
     Ok(())
 }
