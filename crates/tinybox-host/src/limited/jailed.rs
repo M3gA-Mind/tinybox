@@ -383,13 +383,20 @@ impl JailLocalHost {
                 .as_mut()
                 .unwrap_or_else(|| unreachable!("newly retained jail child is present"));
             let pipes = (|| {
+                let stdin = match child.take_stdin() {
+                    Some(stdin) => Some(async_pipe(stdin)?),
+                    None if payload.is_some() => {
+                        return Err(failure(
+                            "write stdin",
+                            "owned child did not provide a stdin pipe".into(),
+                        ));
+                    }
+                    None => None,
+                };
                 Ok::<_, Error>((
                     async_pipe(pipe(child.take_stdout(), "stdout")?)?,
                     async_pipe(pipe(child.take_stderr(), "stderr")?)?,
-                    child
-                        .take_stdin()
-                        .map(async_pipe)
-                        .transpose()?,
+                    stdin,
                 ))
             })();
             let result = match pipes {
@@ -557,42 +564,85 @@ async fn terminate_unidentified_child_with_timeout(
     })?
 }
 async fn terminate(child: &mut OwnedChild, group: i32) -> Result<()> {
-    #[cfg(not(unix))]
-    let _ = group;
     #[cfg(unix)]
     {
         use nix::{
             sys::signal::{Signal, killpg},
             unistd::Pid,
         };
-        if child
-            .try_wait()
-            .map_err(|error| Error::io("inspect jail child", &error))?
-            .is_none()
-            || super::process::group_alive(group).await?
-        {
-            kill_jail_group(
-                group,
-                |group| killpg(Pid::from_raw(group), Signal::SIGKILL),
-                super::process::group_alive,
-            )
-            .await?;
+        terminate_with_group_ops(
+            child,
+            group,
+            |group| killpg(Pid::from_raw(group), Signal::SIGKILL),
+            super::process::group_alive,
+        )
+        .await
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = group;
+        let completion = async {
+            child
+                .terminate()
+                .map_err(|error| Error::io("kill jail child", &error))?;
+            wait_child(child).await
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(5), completion)
+            .await
+            .map_err(|_| failure("drain native jail", "cleanup deadline exceeded".into()))?
+    }
+}
+
+#[cfg(unix)]
+async fn terminate_with_group_ops<K, A, AFut>(
+    child: &mut OwnedChild,
+    group: i32,
+    kill_group: K,
+    mut group_alive: A,
+) -> Result<()>
+where
+    K: FnOnce(i32) -> std::result::Result<(), nix::errno::Errno>,
+    A: FnMut(i32) -> AFut,
+    AFut: std::future::Future<Output = Result<bool>>,
+{
+    let mut group_error = child
+        .try_wait()
+        .err()
+        .map(|error| Error::io("inspect jail child", &error));
+    match group_alive(group).await {
+        Ok(true) => {
+            if let Err(error) =
+                kill_jail_group(group, kill_group, |group| group_alive(group)).await
+            {
+                group_error.get_or_insert(error);
+            }
+        }
+        Ok(false) => {}
+        Err(error) => {
+            group_error.get_or_insert(error);
         }
     }
     let completion = async {
-        child
-            .terminate()
-            .map_err(|error| Error::io("kill jail child", &error))?;
+        if let Err(error) = child.terminate()
+            && child
+                .try_wait()
+                .map_err(|wait_error| Error::io("inspect jail child", &wait_error))?
+                .is_none()
+        {
+            return Err(Error::io("kill jail child", &error));
+        }
         wait_child(child).await?;
-        #[cfg(unix)]
-        while super::process::group_alive(group).await? {
+        while group_alive(group).await? {
             tokio::task::yield_now().await;
         }
         Ok(())
     };
-    tokio::time::timeout(std::time::Duration::from_secs(5), completion)
-        .await
-        .map_err(|_| failure("drain native jail", "cleanup deadline exceeded".into()))?
+    match tokio::time::timeout(std::time::Duration::from_secs(5), completion).await {
+        Ok(result) => result,
+        Err(_) => Err(group_error.unwrap_or_else(|| {
+            failure("drain native jail", "cleanup deadline exceeded".into())
+        })),
+    }
 }
 fn failure(operation: &'static str, message: String) -> Error {
     Error::Backend {

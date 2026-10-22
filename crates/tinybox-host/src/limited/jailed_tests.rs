@@ -21,6 +21,56 @@ impl tinybox_jail::JailBackend for FixtureBackend {
     }
 }
 
+#[cfg(unix)]
+struct MissingStdinBackend;
+#[cfg(unix)]
+impl tinybox_jail::JailBackend for MissingStdinBackend {
+    fn name(&self) -> &'static str {
+        "missing-stdin-fixture"
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn spawn(
+        &self,
+        _: &tinybox_jail::Jail,
+        _: std::process::Command,
+    ) -> std::io::Result<std::process::Child> {
+        Err(std::io::Error::other("owned spawn expected"))
+    }
+    fn spawn_owned_captured(
+        &self,
+        _: &tinybox_jail::Jail,
+        mut command: std::process::Command,
+    ) -> std::io::Result<tinybox_jail::OwnedChild> {
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        tinybox_jail::OwnedChild::from_std(command.spawn()?)
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn supplied_payload_is_rejected_when_owned_child_has_no_stdin()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let host = JailLocalHost::with_backend(
+        tinybox_jail::Jail::new(root.path(), "missing-stdin"),
+        Arc::new(MissingStdinBackend),
+        64,
+    )?;
+    let mut request = ExecRequest::new(["/bin/sh", "-c", "cat; printf completed"]);
+    request.stdin = Some(b"payload".to_vec());
+
+    let result = host.run(&request).await;
+    assert!(result.is_err(), "a supplied payload must not be silently lost");
+    host.drain_checked().await?;
+    assert!(!host.has_pending_cleanup());
+    Ok(())
+}
+
 #[tokio::test]
 async fn jail_collection_caps_combined_output_and_drains_native_ownership()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -539,6 +589,56 @@ async fn zero_process_group_id_is_rejected_before_cleanup_can_signal_group_zero(
         let _ = child.try_wait()?;
     }
     assert!(result.is_err(), "process-group zero is not a child group");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn owned_termination_runs_even_when_group_kill_is_denied()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = std::process::Command::new("sleep");
+    command.arg("30").process_group(0);
+    let child = command.spawn()?;
+    let group = i32::try_from(child.id())?;
+    let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut child = tinybox_jail::OwnedChild::new(
+        UnidentifiedProcess {
+            child,
+            reported_id: Some(u32::try_from(group)?),
+            terminated: terminated.clone(),
+            report_termination_error_after_stop: false,
+            fail_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            skip_next_termination: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        },
+        None,
+        None,
+        None,
+    );
+    let result = terminate_with_group_ops(
+        &mut child,
+        group,
+        |_| Err(nix::errno::Errno::EPERM),
+        {
+            let terminated = terminated.clone();
+            move |_| {
+                let terminated = terminated.clone();
+                async move { Ok(!terminated.load(std::sync::atomic::Ordering::SeqCst)) }
+            }
+        },
+    )
+    .await;
+    if result.is_err() {
+        child.terminate()?;
+        let _ = wait_child(&mut child).await?;
+    }
+
+    assert!(
+        terminated.load(std::sync::atomic::Ordering::SeqCst),
+        "the owned process must be asked to terminate after group signaling fails"
+    );
+    assert!(result.is_ok(), "the owner terminated the remaining group");
     Ok(())
 }
 
