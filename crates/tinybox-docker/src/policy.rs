@@ -56,8 +56,8 @@ pub fn run_policy_issues(
 
 /// Whether bind-mounting `path` would expose a dangerous host path.
 ///
-/// Docker treats a relative source as a named volume and `:`/`,` as option
-/// separators, so those are refused outright. Otherwise the lexical and the
+/// Docker treats a relative source as a named volume and, on Unix, `:`/`,`
+/// as option separators, so those are refused outright. Otherwise the lexical and the
 /// canonical form of `path` are each compared with the literal and canonical
 /// form of every [`DANGEROUS_MOUNTS`] entry: a path is dangerous when it is one
 /// of them or contains one, when it lies inside a [`DANGEROUS_TREES`] root, or
@@ -68,7 +68,9 @@ pub fn run_policy_issues(
 /// resolved if that matters.
 #[must_use]
 pub(crate) fn is_dangerous_mount(path: &str) -> bool {
-    if !Path::new(path).is_absolute() || path.contains([':', ',']) {
+    // `has_root`, not `is_absolute`: on Windows `/etc` names the same tree as
+    // on Unix, and a drive path legitimately carries a `:`.
+    if !Path::new(path).has_root() || (cfg!(unix) && path.contains([':', ','])) {
         return true;
     }
     let canonical = Path::new(path).canonicalize().ok();

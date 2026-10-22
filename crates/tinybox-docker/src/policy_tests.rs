@@ -63,11 +63,12 @@ fn files_inside_a_dangerous_directory_are_allowed() {
     );
 }
 
+#[cfg(unix)]
 #[test]
-fn audit_h1_aliases_of_dangerous_mounts_are_reported() {
-    let tmp = tempfile::tempdir().unwrap();
+fn audit_h1_aliases_of_dangerous_mounts_are_reported() -> std::io::Result<()> {
+    let tmp = tempfile::tempdir()?;
     let link = tmp.path().join("root");
-    std::os::unix::fs::symlink("/", &link).unwrap();
+    std::os::unix::fs::symlink("/", &link)?;
     let link = link.display().to_string();
     let accepted: Vec<&str> = [
         "/run/docker.sock",
@@ -88,15 +89,18 @@ fn audit_h1_aliases_of_dangerous_mounts_are_reported() {
         accepted.is_empty(),
         "policy accepted dangerous mount aliases {accepted:?}"
     );
+    Ok(())
 }
 
+#[cfg(unix)]
 #[test]
-fn a_symlink_to_a_socket_is_reported() {
-    let tmp = tempfile::tempdir().unwrap();
+fn a_symlink_to_a_socket_is_reported() -> std::io::Result<()> {
+    let tmp = tempfile::tempdir()?;
     let socket = tmp.path().join("agent.sock");
-    let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let _listener = std::os::unix::net::UnixListener::bind(&socket)?;
     let link = tmp.path().join("innocent");
-    std::os::unix::fs::symlink(&socket, &link).unwrap();
+    std::os::unix::fs::symlink(&socket, &link)?;
     let link = link.display().to_string();
     assert_eq!(run_policy_issues(None, Some(&link), &[]).len(), 1);
+    Ok(())
 }
