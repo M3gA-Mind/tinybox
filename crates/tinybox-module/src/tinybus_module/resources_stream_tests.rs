@@ -1313,7 +1313,7 @@ async fn concurrent_preparations_share_a_bounded_admission_budget()
 }
 
 #[cfg(target_os = "linux")]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resource_aware_bus_exec_cancellation_reports_events_and_reaps_descendants()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     if !native_resource_bus_available() {
