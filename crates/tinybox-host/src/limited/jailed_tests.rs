@@ -505,17 +505,17 @@ fn jail_supervisor_fault_retains_child_for_cleanup_acknowledgement()
     )?;
     // Simulate a supervisor panic after native startup and prove the owned
     // child remains available to the normal cleanup acknowledgement path.
-    let missing_io = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
+    let missing_timer = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .build()?;
     let result =
-        missing_io.block_on(host.run(&ExecRequest::new(["/bin/sh", "-c", "sleep 600 & wait"])));
+        missing_timer.block_on(host.run(&ExecRequest::new(["/bin/sh", "-c", "sleep 600 & wait"])));
     assert!(result.is_err());
     assert!(
         host.has_pending_cleanup(),
         "native ownership survives the panic"
     );
-    drop(missing_io);
+    drop(missing_timer);
     let recovery = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -548,7 +548,7 @@ fn owned_file_pipes_collect_streams_and_exit_status() -> Result<(), Box<dyn std:
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "current_thread")]
 async fn cancelling_a_pipe_read_releases_its_descriptor() -> Result<(), Box<dyn std::error::Error>>
 {
