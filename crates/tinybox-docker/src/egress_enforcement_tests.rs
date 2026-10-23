@@ -209,13 +209,62 @@ impl Host for PreparedNativeHost {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(argv.clone());
-        if argv.iter().any(|arg| arg == "iptables-restore")
+        if argv
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "iptables-restore" | "ip6tables-restore"))
             && let Some(stdin) = &request.stdin
         {
             self.restore_scripts
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(String::from_utf8_lossy(stdin).into_owned());
+        }
+        if let Some(restore_program) = argv
+            .iter()
+            .find(|arg| matches!(arg.as_str(), "iptables-restore" | "ip6tables-restore"))
+        {
+            let firewall = if restore_program == "ip6tables-restore" {
+                "ip6tables"
+            } else {
+                "iptables"
+            };
+            if let Some(stdin) = &request.stdin {
+                let script = String::from_utf8_lossy(stdin);
+                if self.fail_chain_marker && script.contains(&self.chain_owner_token) {
+                    return Ok(ExecOutput::new(
+                        1,
+                        Vec::new(),
+                        b"injected owner marker failure".to_vec(),
+                    ));
+                }
+                let mut chains = self
+                    .chains
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut marked_chains = self
+                    .marked_chains
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                for line in script.lines() {
+                    if let Some(chain) = line
+                        .strip_prefix(':')
+                        .and_then(|value| value.split_whitespace().next())
+                    {
+                        chains.insert((firewall.to_owned(), chain.to_owned()));
+                    }
+                    if let Some(chain) = line
+                        .strip_prefix("-A ")
+                        .and_then(|value| value.split_whitespace().next())
+                    {
+                        marked_chains.insert((firewall.to_owned(), chain.to_owned()));
+                    }
+                }
+            }
+            return Ok(ExecOutput::new(
+                0,
+                b"iptables-restore v1.8.10\n".to_vec(),
+                Vec::new(),
+            ));
         }
 
         if let Some(docker_index) = argv.iter().position(|arg| arg == "docker") {
@@ -761,14 +810,20 @@ async fn chain_creation_and_owner_marker_are_atomic_and_cleanup_survives_restart
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
     let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
 
-    controller.prepare(&host, namespace, &id, &allowlist).await?;
+    controller
+        .prepare(&host, namespace, &id, &allowlist)
+        .await?;
 
     let scripts = host
         .restore_scripts
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
-    assert_eq!(scripts.len(), 4, "each family/chain uses one restore transaction");
+    assert_eq!(
+        scripts.len(),
+        4,
+        "each family/chain uses one restore transaction"
+    );
     for script in scripts {
         assert!(script.starts_with("*filter\n:"));
         assert!(script.contains(&format!("--comment {} -j DROP\n", names.owner_token)));
@@ -1111,8 +1166,7 @@ async fn network_name_conflict_does_not_clean_an_existing_owners_firewall() -> R
 
 #[tokio::test]
 #[cfg(target_os = "linux")]
-async fn network_create_conflict_does_not_remove_an_existing_same_owner_network()
--> Result<()> {
+async fn network_create_conflict_does_not_remove_an_existing_same_owner_network() -> Result<()> {
     let id = BoxId::new("box-stale-owned-network")?;
     let namespace = "test";
     let names = NetworkNames::for_box(namespace, &id);
@@ -1130,8 +1184,8 @@ async fn network_create_conflict_does_not_remove_an_existing_same_owner_network(
         }) if message.contains("network name already exists")
     ));
     assert!(!host.commands().iter().any(|argv| {
-        argv.iter().any(|arg| arg == "rm") ||
-            (argv.iter().any(|arg| arg == "inspect")
+        argv.iter().any(|arg| arg == "rm")
+            || (argv.iter().any(|arg| arg == "inspect")
                 && argv.iter().any(|arg| arg.contains("{{.Id}}")))
     }));
     assert!(!host.commands().iter().any(|argv| {
@@ -1167,7 +1221,7 @@ async fn empty_successful_network_create_rolls_back_the_owned_network() -> Resul
 
 #[tokio::test]
 #[cfg(target_os = "linux")]
-async fn marker_install_failure_rolls_back_only_the_created_chain_and_network() -> Result<()> {
+async fn atomic_chain_marker_failure_leaves_no_chain_and_removes_network() -> Result<()> {
     let id = BoxId::new("box-marker-failure")?;
     let namespace = "test";
     let names = NetworkNames::for_box(namespace, &id);
@@ -1180,9 +1234,6 @@ async fn marker_install_failure_rolls_back_only_the_created_chain_and_network() 
 
     assert!(result.is_err());
     let commands = host.commands();
-    assert!(commands.iter().any(|argv| {
-        argv.iter().any(|arg| arg == "-X") && argv.iter().any(|arg| arg == &names.forward_chain)
-    }));
     assert!(commands.iter().any(|argv| {
         argv.iter().any(|arg| arg == "rm") && argv.iter().any(|arg| arg == &names.network)
     }));

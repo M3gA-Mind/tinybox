@@ -350,10 +350,17 @@ async fn verify_engine_and_firewall(host: &dyn Host) -> Result<()> {
 
     for firewall in ["iptables", "ip6tables"] {
         let restore = host
-            .run(&ExecRequest::new(["sudo", "-n", firewall_restore(firewall), "--version"]))
+            .run(&ExecRequest::new([
+                "sudo",
+                "-n",
+                firewall_restore(firewall),
+                "--version",
+            ]))
             .await?;
         if !restore.succeeded() {
-            return Err(unsupported("required atomic firewall restore tool is unavailable"));
+            return Err(unsupported(
+                "required atomic firewall restore tool is unavailable",
+            ));
         }
         for chain in ["DOCKER-USER", "INPUT"] {
             let output = host
@@ -682,8 +689,15 @@ async fn create_chain_with_owner_marker(
     );
     let output = host
         .run(
-            &ExecRequest::new(["sudo", "-n", firewall_restore(firewall), "--noflush", "-w", "5"])
-                .with_stdin(script.into_bytes()),
+            &ExecRequest::new([
+                "sudo",
+                "-n",
+                firewall_restore(firewall),
+                "--noflush",
+                "-w",
+                "5",
+            ])
+            .with_stdin(script.into_bytes()),
         )
         .await?;
     if output.succeeded() {
@@ -699,6 +713,33 @@ fn firewall_restore(firewall: &str) -> &'static str {
     } else {
         "iptables-restore"
     }
+}
+
+async fn append_chain_owner_marker(
+    host: &dyn Host,
+    firewall: &str,
+    chain: &str,
+    owner_token: &str,
+    ipv6: bool,
+) -> Result<()> {
+    let impossible_source = if ipv6 { "::/128" } else { "0.0.0.0/32" };
+    firewall_success(
+        host,
+        firewall,
+        [
+            "-A",
+            chain,
+            "-s",
+            impossible_source,
+            "-m",
+            "comment",
+            "--comment",
+            owner_token,
+            "-j",
+            "DROP",
+        ],
+    )
+    .await
 }
 
 fn chain_has_owner_marker(rules: &str, chain: &str, owner_token: &str) -> bool {
@@ -975,7 +1016,7 @@ async fn cleanup_native_with_attempt(
         firewall_success(host, firewall, ["-F", chain]).await?;
         if let Err(delete_error) = firewall_success(host, firewall, ["-X", chain]).await {
             let ipv6 = firewall == "ip6tables";
-            return match install_chain_owner_marker(host, firewall, chain, &names.owner_token, ipv6)
+            return match append_chain_owner_marker(host, firewall, chain, &names.owner_token, ipv6)
                 .await
             {
                 Ok(()) => Err(delete_error),
