@@ -1198,14 +1198,48 @@ async fn docker_request(host: &dyn Host, argv: Vec<String>) -> Result<ExecOutput
 }
 
 fn force_local_rootful_docker(argv: Vec<String>) -> Vec<String> {
-    if argv.first().is_some_and(|program| program == "env")
-        || argv
-            .windows(2)
-            .any(|pair| pair == ["--host", DOCKER_SOCKET])
-    {
+    if argv.first().is_some_and(|program| program == "env") || has_local_docker_host_option(&argv) {
         return argv;
     }
-    let mut forced = vec!["docker".into(), "--host".into(), DOCKER_SOCKET.into()];
+    let mut forced = vec![
+        "docker".into(),
+        "--tls=false".into(),
+        "--tlsverify=false".into(),
+        "--host".into(),
+        DOCKER_SOCKET.into(),
+    ];
     forced.extend(argv.into_iter().skip(1));
     forced
+}
+
+fn has_local_docker_host_option(argv: &[String]) -> bool {
+    if argv.first().is_none_or(|program| program != "docker") {
+        return false;
+    }
+
+    let mut index = 1;
+    while let Some(argument) = argv.get(index) {
+        if !argument.starts_with('-') {
+            return false;
+        }
+        if argument == "--host" || argument == "-H" {
+            return argv
+                .get(index + 1)
+                .is_some_and(|value| value == DOCKER_SOCKET);
+        }
+        if argument == "--config"
+            || argument == "-c"
+            || argument == "--context"
+            || argument == "--log-level"
+            || argument == "-l"
+            || argument == "--tlscacert"
+            || argument == "--tlscert"
+            || argument == "--tlskey"
+        {
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    false
 }

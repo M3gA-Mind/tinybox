@@ -121,16 +121,41 @@ fn workload_docker_host_arguments_do_not_bypass_daemon_pinning() {
     ];
 
     let pinned = force_local_rootful_docker(command);
-    let run = pinned.iter().position(|part| part == "run").unwrap();
-    assert_eq!(&pinned[..run], ["docker", "--host", "unix:///var/run/docker.sock"]);
+    let run = pinned
+        .iter()
+        .position(|part| part == "run")
+        .unwrap_or(pinned.len());
+    assert!(
+        pinned[..run]
+            .windows(2)
+            .any(|pair| { pair == ["--host", "unix:///var/run/docker.sock"] })
+    );
+    assert_eq!(
+        pinned[run..],
+        [
+            "run",
+            "image",
+            "echo",
+            "--host",
+            "unix:///var/run/docker.sock"
+        ]
+    );
 }
 
 #[test]
 fn local_docker_daemon_pinning_disables_client_tls_from_workload_environment() {
     let pinned = force_local_rootful_docker(vec!["docker".into(), "info".into()]);
-    let info = pinned.iter().position(|part| part == "info").unwrap();
+    let info = pinned
+        .iter()
+        .position(|part| part == "info")
+        .unwrap_or(pinned.len());
 
-    assert!(pinned[..info].windows(2).any(|pair| pair == ["--tlsverify", "false"]));
+    assert!(pinned[..info].iter().any(|part| part == "--tls=false"));
+    assert!(
+        pinned[..info]
+            .iter()
+            .any(|part| part == "--tlsverify=false")
+    );
 }
 
 #[derive(Debug)]
