@@ -256,7 +256,9 @@ impl Host for PreparedNativeHost {
                     .remove(&(firewall, chain.clone()));
             }
             if self.fail_chain_marker
-                && argv.windows(2).any(|args| args == ["--comment", self.chain_owner_token])
+                && argv
+                    .windows(2)
+                    .any(|args| args == ["--comment", &self.chain_owner_token])
             {
                 return Ok(ExecOutput::new(
                     1,
