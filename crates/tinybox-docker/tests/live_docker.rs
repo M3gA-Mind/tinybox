@@ -29,8 +29,8 @@ use std::{
 };
 
 use tinybox_core::{
-    BoxSpec, EgressAllowlist, Error, ExecRequest, Host as _, HostRef, MemoryStore, NetworkPolicy,
-    Placement, PortMapping, Result, Sandbox, SandboxRef, WorkspaceSource,
+    BoxSpec, Error, ExecRequest, Host as _, HostRef, MemoryStore, NetworkPolicy, Placement,
+    PortMapping, Result, Sandbox, SandboxRef, WorkspaceSource,
 };
 use tinybox_docker::{DockerSandbox, EgressResolver, NativeLinuxDockerEgressController};
 use tinybox_host::LocalHost;
@@ -479,7 +479,7 @@ fn ipv6_address_inspect_template(network: &str) -> String {
 }
 
 fn allowlist_probe_ports() -> tinybox_core::EgressAllowlist {
-    tinybox_core::EgressAllowlist::new(["listener.test"], [18373])
+    tinybox_core::EgressAllowlist::new(["listener.test"], [18373, 18376])
 }
 
 #[test]
