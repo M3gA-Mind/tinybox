@@ -15,7 +15,7 @@ use crate::{EgressResolver, PinnedEgressPlan, plan_egress_allowlist};
 
 const DOCKER_SOCKET: &str = "unix:///var/run/docker.sock";
 const OWNER_LABEL: &str = "ai.tinyhumans.tinybox.egress.owner";
-const ALLOWLIST_PROTOCOLS: [&str; 2] = ["tcp", "udp"];
+const ALLOWLIST_PROTOCOLS: [&str; 1] = ["tcp"];
 
 /// A controller that installs and removes a per-box egress filter.
 ///
