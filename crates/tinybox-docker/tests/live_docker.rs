@@ -467,13 +467,21 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
         let allowed = sandbox
             .exec(
                 &info.id,
-                &ExecRequest::new(["sh", "-c", &format!("nc -z -w 3 {ip} {ALLOWED_PORT}")]),
+                &ExecRequest::new([
+                    "sh",
+                    "-c",
+                    &format!("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -z -w 3 {ip} {ALLOWED_PORT}"),
+                ]),
             )
             .await;
         let blocked = sandbox
             .exec(
                 &info.id,
-                &ExecRequest::new(["sh", "-c", &format!("nc -z -w 2 {ip} {BLOCKED_PORT}")]),
+                &ExecRequest::new([
+                    "sh",
+                    "-c",
+                    &format!("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -z -w 2 {ip} {BLOCKED_PORT}"),
+                ]),
             )
             .await;
         let host_gateway = sandbox
@@ -482,7 +490,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 &ExecRequest::new([
                     "sh",
                     "-c",
-                    &format!("nc -z -w 2 {} {}", host_address.ip(), host_address.port()),
+                    &format!("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -z -w 2 {} {}", host_address.ip(), host_address.port()),
                 ]),
             )
             .await;
