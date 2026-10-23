@@ -147,6 +147,7 @@ struct PreparedNativeHost {
     missing_final_drop: Option<String>,
     empty_network_create: bool,
     fail_chain_marker: bool,
+    fail_chain_delete_once: bool,
     network_owner: String,
     network_scope: String,
     network_subnets: String,
@@ -167,6 +168,7 @@ impl PreparedNativeHost {
             missing_final_drop: None,
             empty_network_create: false,
             fail_chain_marker: false,
+            fail_chain_delete_once: false,
             network_owner: id.to_string(),
             network_scope: names.owner_token.clone(),
             network_subnets: r#"[{"Subnet":"172.18.0.0/16"},{"Subnet":"fd00:dead:beef::/64"}]"#
@@ -307,6 +309,32 @@ impl Host for PreparedNativeHost {
             .iter()
             .any(|arg| arg == "iptables" || arg == "ip6tables")
         {
+            if let Some(index) = argv.iter().position(|arg| arg == "-F")
+                && let Some(chain) = argv.get(index + 1)
+            {
+                let firewall = argv
+                    .iter()
+                    .find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables"))
+                    .cloned()
+                    .unwrap_or_default();
+                self.marked_chains
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&(firewall, chain.clone()));
+            }
+            if self.fail_chain_delete_once
+                && let Some(index) = argv.iter().position(|arg| arg == "-X")
+                && let Some(chain) = argv.get(index + 1)
+            {
+                self.fail_chain_delete_once = false;
+                if chain == &self.forward_chain {
+                    return Ok(ExecOutput::new(
+                        1,
+                        Vec::new(),
+                        b"injected chain delete failure".to_vec(),
+                    ));
+                }
+            }
             if let Some(index) = argv.iter().position(|arg| arg == "-N")
                 && let Some(chain) = argv.get(index + 1)
             {
@@ -922,6 +950,38 @@ async fn cleanup_refuses_firewall_chains_with_another_owner_marker() -> Result<(
                 .iter()
                 .any(|part| part == "-D" || part == "-F" || part == "-X")
     }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn cleanup_restores_owner_marker_when_chain_delete_fails_after_flush() -> Result<()> {
+    let id = BoxId::new("box-delete-retry")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.fail_chain_delete_once = true;
+    host.chains
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(("iptables".to_owned(), names.forward_chain.clone()));
+    host.marked_chains
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(("iptables".to_owned(), names.forward_chain.clone()));
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+
+    assert!(controller.cleanup(&host, namespace, &id).await.is_err());
+    assert!(host
+        .marked_chains
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(&("iptables".to_owned(), names.forward_chain.clone())));
+    controller.cleanup(&host, namespace, &id).await?;
+    assert!(!host
+        .chains
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(&("iptables".to_owned(), names.forward_chain.clone())));
     Ok(())
 }
 
