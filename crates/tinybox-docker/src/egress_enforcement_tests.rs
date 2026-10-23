@@ -227,7 +227,7 @@ impl Host for PreparedNativeHost {
                 ));
             }
             if docker_args.iter().any(|arg| arg == "network") {
-                    #[cfg(target_os = "linux")]
+                #[cfg(target_os = "linux")]
                 if docker_args.iter().any(|arg| arg == "rm")
                     && *self
                         .fail_network_remove_once
