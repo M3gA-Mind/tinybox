@@ -73,10 +73,13 @@ impl ControllerHost {
             .argv
             .first()
             .is_some_and(|program| program == "docker");
-        if is_docker_command {
+        let should_rewrite = is_docker_command
+            && (!self.controller.requires_local_docker_host()
+                || self.inner.execution_location() == HostExecutionLocation::Local);
+        if should_rewrite {
             request.argv = self.controller.docker_argv(request.argv);
         }
-        let env_file = if is_docker_command {
+        let env_file = if should_rewrite {
             write_workload_docker_env_file(&mut request)?
         } else {
             None

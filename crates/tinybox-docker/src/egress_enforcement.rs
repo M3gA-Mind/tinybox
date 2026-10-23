@@ -74,6 +74,11 @@ pub trait DockerEgressController: Debug + Send + Sync {
 
     /// Bind a Docker CLI command to the daemon this controller verifies.
     fn docker_argv(&self, argv: Vec<String>) -> Vec<String>;
+
+    /// Whether Docker commands must run on a host explicitly identified as local.
+    fn requires_local_docker_host(&self) -> bool {
+        false
+    }
 }
 
 /// A firewall-protected network and the hostname mappings pinned for it.
@@ -261,6 +266,10 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
 
     fn docker_argv(&self, argv: Vec<String>) -> Vec<String> {
         force_local_rootful_docker(argv)
+    }
+
+    fn requires_local_docker_host(&self) -> bool {
+        true
     }
 }
 
