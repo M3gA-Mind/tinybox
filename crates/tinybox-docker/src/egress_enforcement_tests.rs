@@ -335,14 +335,19 @@ impl Host for PreparedNativeHost {
                     .find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables"))
                     .cloned()
                     .unwrap_or_default();
+                let firewall = argv
+                    .iter()
+                    .find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables"))
+                    .cloned()
+                    .unwrap_or_default();
                 self.marked_chains
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .remove(&(firewall, chain.clone()));
+                    .remove(&(firewall.clone(), chain.clone()));
                 self.chains_with_rules
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .remove(&(argv.iter().find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables")).cloned().unwrap_or_default(), chain.clone()));
+                    .remove(&(firewall, chain.clone()));
             }
             #[cfg(target_os = "linux")]
             if *self
@@ -393,6 +398,10 @@ impl Host for PreparedNativeHost {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .remove(&(firewall, chain.clone()));
+                self.chains_with_rules
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&(argv.iter().find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables")).cloned().unwrap_or_default(), chain.clone()));
             }
             if self.fail_chain_marker
                 && argv
@@ -421,7 +430,7 @@ impl Host for PreparedNativeHost {
                 self.chains_with_rules
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert((argv.iter().find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables")).cloned().unwrap_or_default(), chain.clone()));
+                    .insert((firewall, chain.clone()));
             } else if let Some(index) = argv.iter().position(|arg| arg == "-A")
                 && let Some(chain) = argv.get(index + 1)
             {
