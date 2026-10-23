@@ -441,6 +441,18 @@ fn docker_command(arguments: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
+fn ipv6_address_inspect_template(network: &str) -> String {
+    format!("{{{{(index .NetworkSettings.Networks \"{network}\").GlobalIPv6Address}}}}")
+}
+
+#[test]
+fn ipv6_address_inspect_template_quotes_the_network_name() {
+    assert_eq!(
+        ipv6_address_inspect_template("controlled-v6"),
+        r#"{{(index .NetworkSettings.Networks "controlled-v6").GlobalIPv6Address}}"#
+    );
+}
+
 /// A disposable Linux Engine proof for the native firewall controller.
 ///
 /// Both listeners run in a separate, test-owned bridge container, so this
@@ -516,9 +528,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
         let ipv6 = docker_command(&[
             "inspect",
             "--format",
-            &format!(
-                "{{{{(index .NetworkSettings.Networks \"{target_network}\").GlobalIPv6Address}}}}"
-            ),
+            &ipv6_address_inspect_template(&target_network),
             &target_name,
         ])?
         .parse::<std::net::IpAddr>()
