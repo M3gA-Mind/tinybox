@@ -315,8 +315,7 @@ impl EgressAllowlist {
             Ok(IpAddr::V6(address)) => Self::is_loopback_ipv6(address),
             Err(_) => {
                 Self::parse_scoped_ipv6(&host).is_some_and(Self::is_loopback_ipv6)
-                    || Self::parse_legacy_ipv4(&host)
-                        .is_some_and(|address| address.is_loopback())
+                    || Self::parse_legacy_ipv4(&host).is_some_and(|address| address.is_loopback())
             }
         }
     }
