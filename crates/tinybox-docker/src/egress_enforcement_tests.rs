@@ -147,7 +147,7 @@ struct PreparedNativeHost {
     missing_final_drop: Option<String>,
     empty_network_create: bool,
     fail_chain_marker: bool,
-    fail_chain_delete_once: bool,
+    fail_chain_delete_once: Mutex<bool>,
     network_owner: String,
     network_scope: String,
     network_subnets: String,
@@ -168,7 +168,7 @@ impl PreparedNativeHost {
             missing_final_drop: None,
             empty_network_create: false,
             fail_chain_marker: false,
-            fail_chain_delete_once: false,
+            fail_chain_delete_once: Mutex::new(false),
             network_owner: id.to_string(),
             network_scope: names.owner_token.clone(),
             network_subnets: r#"[{"Subnet":"172.18.0.0/16"},{"Subnet":"fd00:dead:beef::/64"}]"#
@@ -322,11 +322,17 @@ impl Host for PreparedNativeHost {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .remove(&(firewall, chain.clone()));
             }
-            if self.fail_chain_delete_once
+            if *self
+                .fail_chain_delete_once
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 && let Some(index) = argv.iter().position(|arg| arg == "-X")
                 && let Some(chain) = argv.get(index + 1)
             {
-                self.fail_chain_delete_once = false;
+                *self
+                    .fail_chain_delete_once
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
                 if chain == &self.forward_chain {
                     return Ok(ExecOutput::new(
                         1,
@@ -959,7 +965,10 @@ async fn cleanup_restores_owner_marker_when_chain_delete_fails_after_flush() -> 
     let namespace = "test";
     let names = NetworkNames::for_box(namespace, &id);
     let mut host = PreparedNativeHost::new(&id, &names);
-    host.fail_chain_delete_once = true;
+    *host
+        .fail_chain_delete_once
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
     host.chains
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
