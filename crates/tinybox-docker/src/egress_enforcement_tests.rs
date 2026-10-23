@@ -119,13 +119,19 @@ struct BridgeLinkHost {
     exists: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum NetworkCreateBehavior {
+    Succeed,
+    CommandFailure,
+    HostErrorAfterSideEffect,
+}
+
 #[derive(Debug)]
 struct PreparedNativeHost {
     commands: Mutex<Vec<Vec<String>>>,
     chains: Mutex<std::collections::BTreeSet<(String, String)>>,
     marked_chains: Mutex<std::collections::BTreeSet<(String, String)>>,
-    fail_network_create: bool,
-    network_create_side_effect_then_host_error: bool,
+    network_create_behavior: NetworkCreateBehavior,
     network_missing_on_inspect: bool,
     empty_network_create: bool,
     fail_chain_marker: bool,
@@ -143,8 +149,7 @@ impl PreparedNativeHost {
             commands: Mutex::new(Vec::new()),
             chains: Mutex::new(std::collections::BTreeSet::new()),
             marked_chains: Mutex::new(std::collections::BTreeSet::new()),
-            fail_network_create: false,
-            network_create_side_effect_then_host_error: false,
+            network_create_behavior: NetworkCreateBehavior::Succeed,
             network_missing_on_inspect: false,
             empty_network_create: false,
             fail_chain_marker: false,
@@ -194,14 +199,17 @@ impl Host for PreparedNativeHost {
             }
             if docker_args.iter().any(|arg| arg == "network") {
                 if docker_args.iter().any(|arg| arg == "create") {
-                    if self.fail_network_create {
+                    if matches!(self.network_create_behavior, NetworkCreateBehavior::CommandFailure) {
                         return Ok(ExecOutput::new(
                             1,
                             Vec::new(),
                             b"network name already exists".to_vec(),
                         ));
                     }
-                    if self.network_create_side_effect_then_host_error {
+                    if matches!(
+                        self.network_create_behavior,
+                        NetworkCreateBehavior::HostErrorAfterSideEffect
+                    ) {
                         return Err(Error::Backend {
                             sandbox: "fake-native".to_owned(),
                             operation: "run Docker network create",
@@ -361,7 +369,7 @@ async fn uncertain_network_create_removes_only_the_verified_owned_network() -> R
     let namespace = "test";
     let names = NetworkNames::for_box(namespace, &id);
     let mut host = PreparedNativeHost::new(&id, &names);
-    host.network_create_side_effect_then_host_error = true;
+    host.network_create_behavior = NetworkCreateBehavior::HostErrorAfterSideEffect;
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
     let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
 
@@ -401,7 +409,7 @@ async fn ambiguous_network_create_keeps_the_original_error_when_absent_or_foreig
         let namespace = "test";
         let names = NetworkNames::for_box(namespace, &id);
         let mut host = PreparedNativeHost::new(&id, &names);
-        host.network_create_side_effect_then_host_error = true;
+        host.network_create_behavior = NetworkCreateBehavior::HostErrorAfterSideEffect;
         host.network_missing_on_inspect = absent;
         if !absent {
             host.network_owner = "another-box".to_owned();
@@ -773,7 +781,7 @@ async fn network_name_conflict_does_not_clean_an_existing_owners_firewall() -> R
     let namespace = "test";
     let names = NetworkNames::for_box(namespace, &id);
     let mut host = PreparedNativeHost::new(&id, &names);
-    host.fail_network_create = true;
+    host.network_create_behavior = NetworkCreateBehavior::CommandFailure;
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
     let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
 

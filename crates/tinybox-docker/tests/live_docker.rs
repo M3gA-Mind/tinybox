@@ -498,7 +498,7 @@ fn live_allowlist_covers_both_listener_probe_ports() {
 
 #[test]
 fn alpine_busybox_nc_uses_literal_ipv6_without_unsupported_flag() {
-    let address = "fd42::1234".parse().expect("valid IPv6 fixture");
+    let address = Ipv6Addr::new(0xfd42, 0, 0, 0, 0, 0, 0, 0x1234);
     let probe = ipv6_listener_probe(address);
     assert!(TARGET_LISTENER_SCRIPT.contains("nc -l -p 18376"));
     assert!(!TARGET_LISTENER_SCRIPT.contains("nc -6"));
