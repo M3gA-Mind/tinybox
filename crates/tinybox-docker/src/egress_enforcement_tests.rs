@@ -300,10 +300,7 @@ impl Host for PreparedNativeHost {
                     } else if format.contains(".IPAM.Config") {
                         self.network_subnets.clone()
                     } else {
-                        format!(
-                            "{owner}|{}|{}",
-                            self.network_scope, self.network_attempt
-                        )
+                        format!("{owner}|{}|{}", self.network_scope, self.network_attempt)
                     };
                     return Ok(ExecOutput::new(0, stdout.into_bytes(), Vec::new()));
                 }
@@ -434,7 +431,11 @@ impl Host for PreparedNativeHost {
             } else if let Some(index) = argv.iter().position(|arg| arg == "-A")
                 && let Some(chain) = argv.get(index + 1)
             {
-                let firewall = argv.iter().find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables")).cloned().unwrap_or_default();
+                let firewall = argv
+                    .iter()
+                    .find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables"))
+                    .cloned()
+                    .unwrap_or_default();
                 self.chains_with_rules
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -566,13 +567,24 @@ async fn ambiguous_create_preserves_same_box_network_from_an_older_attempt() -> 
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
     let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
 
-    assert!(controller.prepare(&host, namespace, &id, &allowlist).await.is_err());
+    assert!(
+        controller
+            .prepare(&host, namespace, &id, &allowlist)
+            .await
+            .is_err()
+    );
     let commands = host.commands();
     assert!(commands.iter().any(|argv| {
         argv.iter().any(|arg| arg == "inspect")
-            && argv.iter().any(|arg| arg.contains("ai.tinyhumans.tinybox.egress.attempt"))
+            && argv
+                .iter()
+                .any(|arg| arg.contains("ai.tinyhumans.tinybox.egress.attempt"))
     }));
-    assert!(!commands.iter().any(|argv| argv.iter().any(|arg| arg == "rm")));
+    assert!(
+        !commands
+            .iter()
+            .any(|argv| argv.iter().any(|arg| arg == "rm"))
+    );
     Ok(())
 }
 
@@ -826,11 +838,13 @@ async fn cleanup_reclaims_an_empty_attempt_chain_after_restart() -> Result<()> {
     NativeLinuxDockerEgressController::new(Arc::new(Resolver))
         .cleanup(&host, namespace, &id)
         .await?;
-    assert!(!host
-        .chains
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .contains(&("iptables".to_owned(), names.forward_chain.clone())));
+    assert!(
+        !host
+            .chains
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&("iptables".to_owned(), names.forward_chain.clone()))
+    );
     assert!(host.commands().iter().any(|argv| {
         argv.iter().any(|arg| arg == "-X") && argv.iter().any(|arg| arg == &names.forward_chain)
     }));
@@ -854,18 +868,22 @@ async fn cleanup_refuses_a_nonempty_unmarked_attempt_chain_after_restart() -> Re
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(("iptables".to_owned(), names.forward_chain.clone()));
 
-    assert!(NativeLinuxDockerEgressController::new(Arc::new(Resolver))
-        .cleanup(&host, namespace, &id)
-        .await
-        .is_err());
+    assert!(
+        NativeLinuxDockerEgressController::new(Arc::new(Resolver))
+            .cleanup(&host, namespace, &id)
+            .await
+            .is_err()
+    );
     assert!(!host.commands().iter().any(|argv| {
-        argv.iter().any(|arg| matches!(arg.as_str(), "-D" | "-F" | "-X"))
+        argv.iter()
+            .any(|arg| matches!(arg.as_str(), "-D" | "-F" | "-X"))
     }));
-    assert!(host
-        .chains
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .contains(&("iptables".to_owned(), names.forward_chain.clone())));
+    assert!(
+        host.chains
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&("iptables".to_owned(), names.forward_chain.clone()))
+    );
     Ok(())
 }
 

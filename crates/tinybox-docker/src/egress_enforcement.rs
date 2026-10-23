@@ -185,14 +185,8 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
         };
         if network.is_empty() {
             let error = unsupported("Docker did not confirm the egress network");
-            return match cleanup_native_with_attempt(
-                host,
-                namespace,
-                id,
-                &BTreeSet::new(),
-                false,
-            )
-            .await
+            return match cleanup_native_with_attempt(host, namespace, id, &BTreeSet::new(), false)
+                .await
             {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(Error::Backend {
@@ -212,14 +206,9 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
         }
         .await;
         if let Err(error) = setup {
-            let cleanup = cleanup_native_with_attempt(
-                host,
-                namespace,
-                id,
-                &attempt_owned_chains,
-                false,
-            )
-            .await;
+            let cleanup =
+                cleanup_native_with_attempt(host, namespace, id, &attempt_owned_chains, false)
+                    .await;
             return match cleanup {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(Error::Backend {
@@ -868,10 +857,7 @@ async fn reconcile_ambiguous_network_create(
 
     let inspect_stdout = inspect.stdout_lossy();
     let (network_id, owner, scope, attempt) = parse_network_ownership(&inspect_stdout)?;
-    if owner != id.to_string()
-        || scope != names.owner_token
-        || attempt != names.attempt_token
-    {
+    if owner != id.to_string() || scope != names.owner_token || attempt != names.attempt_token {
         return Ok(());
     }
 
@@ -918,10 +904,7 @@ async fn reconcile_ambiguous_network_create(
     }
     let verify_stdout = verify.stdout_lossy();
     let (_network_id, owner, scope, attempt) = parse_network_ownership(&verify_stdout)?;
-    if owner != id.to_string()
-        || scope != names.owner_token
-        || attempt != names.attempt_token
-    {
+    if owner != id.to_string() || scope != names.owner_token || attempt != names.attempt_token {
         return Ok(());
     }
     Err(unsupported("owned egress network rollback failed"))
@@ -1097,7 +1080,7 @@ async fn cleanup_native_with_attempt(
                 &names.chain_owner_token,
                 ipv6,
             )
-                .await
+            .await
             {
                 Ok(()) => Err(delete_error),
                 Err(restore_error) => Err(Error::Backend {
