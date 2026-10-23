@@ -245,6 +245,36 @@ async fn controller_failure_rolls_back_before_dropping_the_box_record() -> Resul
     Ok(())
 }
 
+#[test]
+fn allowlist_run_args_pin_every_resolved_address_and_disable_upstream_dns() -> Result<()> {
+    let id = BoxId::new("box-0")?;
+    let prepared = crate::PreparedEgressNetwork::new(
+        "tinybox-egress-test".to_owned(),
+        vec![
+            (
+                "service.test".to_owned(),
+                std::net::IpAddr::from([203, 0, 113, 8]),
+            ),
+            (
+                "service.test".to_owned(),
+                std::net::IpAddr::V6(std::net::Ipv6Addr::new(
+                    0x2001, 0x0db8, 0, 0, 0, 0, 0, 8,
+                )),
+            ),
+        ],
+    );
+
+    let argv = args::run("test", &id, "attempt", &spec()?, Some(&prepared))?;
+    assert_eq!(flag_value(&argv, "--dns"), Some("127.0.0.1"));
+    assert!(argv.windows(2).any(|args| {
+        args[0] == "--add-host" && args[1] == "service.test:203.0.113.8"
+    }));
+    assert!(argv.windows(2).any(|args| {
+        args[0] == "--add-host" && args[1] == "service.test:[2001:db8::8]"
+    }));
+    Ok(())
+}
+
 #[tokio::test]
 async fn native_controller_refuses_hosts_without_explicit_local_identity() -> Result<()> {
     #[derive(Debug)]
