@@ -232,6 +232,19 @@ fn allows_private_addresses_when_the_policy_does_not_forbid_them()
 }
 
 #[test]
+fn normalizes_ipv4_mapped_ipv6_answers_to_ipv4_targets()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resolver = addresses("mapped.example", &["::ffff:203.0.113.11"])?;
+    let allowlist = EgressAllowlist::new(["mapped.example"], [443]);
+
+    let plan = plan_egress_allowlist(&allowlist, &resolver)?;
+
+    assert_eq!(plan.targets().len(), 1);
+    assert_eq!(plan.targets()[0].address(), "203.0.113.11".parse::<IpAddr>()?);
+    Ok(())
+}
+
+#[test]
 fn rejects_a_hostname_with_no_resolver_answers()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let resolver = addresses("empty.example", &[])?;
