@@ -15,6 +15,7 @@ use crate::{EgressResolver, PinnedEgressPlan, plan_egress_allowlist};
 
 const DOCKER_SOCKET: &str = "unix:///var/run/docker.sock";
 const OWNER_LABEL: &str = "ai.tinyhumans.tinybox.egress.owner";
+const ALLOWLIST_PROTOCOLS: [&str; 2] = ["tcp", "udp"];
 
 /// A controller that installs and removes a per-box egress filter.
 ///
@@ -122,6 +123,7 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
 
         let setup = async {
             verify_created_network(host, &names, id).await?;
+            verify_created_bridge_link(host, &names).await?;
             install_firewall(host, &names, &plan).await
         }
         .await;
@@ -283,6 +285,32 @@ async fn verify_created_network(host: &dyn Host, names: &NetworkNames, id: &BoxI
     Ok(())
 }
 
+async fn verify_created_bridge_link(host: &dyn Host, names: &NetworkNames) -> Result<()> {
+    let output = host
+        .run(&ExecRequest::new([
+            "ip",
+            "-o",
+            "link",
+            "show",
+            "dev",
+            &names.bridge,
+        ]))
+        .await
+        .map_err(|_| unsupported("Docker bridge is not visible in the local network namespace"))?;
+    let interface_exists = output.succeeded()
+        && output.stdout_lossy().lines().any(|line| {
+            line.split_whitespace()
+                .nth(1)
+                .is_some_and(|name| name.trim_end_matches(':') == names.bridge)
+        });
+    if !interface_exists {
+        return Err(unsupported(
+            "Docker bridge is not visible in the local network namespace",
+        ));
+    }
+    Ok(())
+}
+
 async fn install_firewall(
     host: &dyn Host,
     names: &NetworkNames,
@@ -343,7 +371,7 @@ async fn install_family(
         if is_ipv6(&address) != ipv6 {
             continue;
         }
-        for protocol in ["tcp", "udp"] {
+        for protocol in ALLOWLIST_PROTOCOLS {
             firewall_success(
                 host,
                 firewall,

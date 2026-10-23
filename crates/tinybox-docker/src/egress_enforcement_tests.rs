@@ -6,9 +6,12 @@ use std::{
 };
 
 use async_trait::async_trait;
-use tinybox_core::{Error, ExecOutput, ExecRequest, Host, HostExecutionLocation, Result};
+use tinybox_core::{BoxId, Error, ExecOutput, ExecRequest, Host, HostExecutionLocation, Result};
 
-use super::{DockerEgressController, NativeLinuxDockerEgressController};
+use super::{
+    DockerEgressController, NativeLinuxDockerEgressController, NetworkNames,
+    verify_created_bridge_link,
+};
 use crate::EgressResolver;
 
 #[derive(Debug)]
@@ -92,6 +95,64 @@ impl EgressResolver for Resolver {
     fn resolve(&self, _hostname: &str) -> std::io::Result<Vec<IpAddr>> {
         Ok(vec![IpAddr::from([203, 0, 113, 8])])
     }
+}
+
+#[derive(Debug)]
+struct BridgeLinkHost {
+    exists: bool,
+}
+
+#[async_trait]
+impl Host for BridgeLinkHost {
+    fn name(&self) -> &str {
+        "bridge-link-host"
+    }
+
+    fn execution_location(&self) -> HostExecutionLocation {
+        HostExecutionLocation::Local
+    }
+
+    async fn run(&self, request: &ExecRequest) -> Result<ExecOutput> {
+        let bridge = request.argv.last().map_or("", String::as_str);
+        if self.exists {
+            Ok(ExecOutput::new(
+                0,
+                format!("17: {bridge}: <BROADCAST,MULTICAST,UP>\n").into_bytes(),
+                Vec::new(),
+            ))
+        } else {
+            Ok(ExecOutput::new(1, Vec::new(), b"Device not found".to_vec()))
+        }
+    }
+}
+
+#[test]
+fn allowlist_protocol_set_is_tcp_only() {
+    assert_eq!(super::ALLOWLIST_PROTOCOLS, ["tcp"]);
+}
+
+#[tokio::test]
+async fn missing_local_bridge_link_refuses_enforcement() -> Result<()> {
+    let names = NetworkNames::for_box("test", &BoxId::new("box-0")?);
+    let host = BridgeLinkHost { exists: false };
+
+    assert!(matches!(
+        verify_created_bridge_link(&host, &names).await,
+        Err(Error::ConstraintNotEnforced {
+            constraint: tinybox_core::Constraint::Network,
+            enforcement: tinybox_core::Enforcement::Unsupported,
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn existing_local_bridge_link_is_verified() -> Result<()> {
+    let names = NetworkNames::for_box("test", &BoxId::new("box-0")?);
+    let host = BridgeLinkHost { exists: true };
+
+    verify_created_bridge_link(&host, &names).await
 }
 
 #[tokio::test]
