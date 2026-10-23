@@ -521,6 +521,27 @@ async fn uncertain_network_create_removes_only_the_verified_owned_network() -> R
 
 #[tokio::test]
 #[cfg(target_os = "linux")]
+async fn ambiguous_create_preserves_same_box_network_from_an_older_attempt() -> Result<()> {
+    let id = BoxId::new("box-create-old-attempt")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.network_create_behavior = NetworkCreateBehavior::HostErrorAfterSideEffect;
+    host.network_attempt = "older-attempt-token".to_owned();
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+    let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
+
+    assert!(controller.prepare(&host, namespace, &id, &allowlist).await.is_err());
+    let commands = host.commands();
+    assert!(commands.iter().any(|argv| {
+        argv.iter().any(|arg| arg == "inspect") && argv.iter().any(|arg| arg.contains(ATTEMPT_LABEL))
+    }));
+    assert!(!commands.iter().any(|argv| argv.iter().any(|arg| arg == "rm")));
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
 async fn ambiguous_network_create_keeps_the_original_error_when_absent_or_foreign() -> Result<()> {
     for absent in [false, true] {
         let id = BoxId::new(if absent {
