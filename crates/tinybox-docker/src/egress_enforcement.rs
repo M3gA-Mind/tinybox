@@ -184,7 +184,15 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
         };
         if network.is_empty() {
             let error = unsupported("Docker did not confirm the egress network");
-            return match cleanup_native(host, namespace, id).await {
+            return match cleanup_native_with_attempt(
+                host,
+                namespace,
+                id,
+                &BTreeSet::new(),
+                false,
+            )
+            .await
+            {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(Error::Backend {
                     sandbox: "docker".to_owned(),
@@ -203,8 +211,14 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
         }
         .await;
         if let Err(error) = setup {
-            let cleanup =
-                cleanup_native_with_attempt(host, namespace, id, &attempt_owned_chains).await;
+            let cleanup = cleanup_native_with_attempt(
+                host,
+                namespace,
+                id,
+                &attempt_owned_chains,
+                false,
+            )
+            .await;
             return match cleanup {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(Error::Backend {
@@ -757,6 +771,25 @@ fn chain_has_owner_marker(rules: &str, chain: &str, owner_token: &str) -> bool {
     })
 }
 
+fn chain_has_rules(rules: &str, chain: &str) -> bool {
+    let prefix = format!("-A {chain} ");
+    rules.lines().any(|line| line.starts_with(&prefix))
+}
+
+fn chain_is_referenced(rules: &str, chain: &str) -> bool {
+    rules.lines().any(|line| {
+        let mut fields = line.split_whitespace();
+        let (Some("-A"), Some(parent)) = (fields.next(), fields.next()) else {
+            return false;
+        };
+        parent != chain
+            && fields
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|pair| pair == ["-j", chain])
+    })
+}
+
 fn deny_rules(ipv6: bool) -> Vec<Vec<String>> {
     if ipv6 {
         ["::1/128", "fd00:ec2::254/128"]
@@ -792,7 +825,7 @@ async fn verify_hook(
 
 #[allow(clippy::too_many_lines)] // Keep ownership preflight and cleanup order together.
 async fn cleanup_native(host: &dyn Host, namespace: &str, id: &BoxId) -> Result<()> {
-    cleanup_native_with_attempt(host, namespace, id, &BTreeSet::new()).await
+    cleanup_native_with_attempt(host, namespace, id, &BTreeSet::new(), true).await
 }
 
 /// Reconcile a network create whose command result is ambiguous.
@@ -920,14 +953,31 @@ fn parse_network_ownership(output: &str) -> Result<(String, String, String)> {
     ))
 }
 
+fn parse_network_labels(output: &str) -> Result<(String, String, String)> {
+    let fields = output.trim().split('|').collect::<Vec<_>>();
+    if fields.len() != 3 || fields.iter().any(|field| field.is_empty()) {
+        return Err(Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "inspect egress network ownership",
+            message: "Docker returned missing or malformed egress ownership labels".to_owned(),
+        });
+    }
+    Ok((
+        fields[0].to_owned(),
+        fields[1].to_owned(),
+        fields[2].to_owned(),
+    ))
+}
+
 #[allow(clippy::too_many_lines)] // Keep ownership preflight and cleanup order together.
 async fn cleanup_native_with_attempt(
     host: &dyn Host,
     namespace: &str,
     id: &BoxId,
     attempt_owned_chains: &BTreeSet<(String, String)>,
+    allow_empty_orphan_reclaim: bool,
 ) -> Result<()> {
-    let names = NetworkNames::for_box(namespace, id);
+    let base_names = NetworkNames::for_box(namespace, id);
     let inspect = docker_request(
         host,
         force_local_rootful_docker(vec![
@@ -936,25 +986,39 @@ async fn cleanup_native_with_attempt(
             "inspect".into(),
             "--format".into(),
             format!(
-                "{{{{index .Labels \"{OWNER_LABEL}\"}}}}|{{{{index .Labels \"{SCOPE_LABEL}\"}}}}"
+                "{{{{index .Labels \"{OWNER_LABEL}\"}}}}|{{{{index .Labels \"{SCOPE_LABEL}\"}}}}|{{{{index .Labels \"{ATTEMPT_LABEL}\"}}}}"
             ),
-            names.network.clone(),
+            base_names.network.clone(),
         ]),
     )
     .await?;
-    let network_exists = if inspect.succeeded() {
-        let owner = inspect.stdout_lossy();
-        let expected_owner = format!("{}|{}", id, names.owner_token);
-        if owner.trim() != expected_owner {
+    let names = if inspect.succeeded() {
+        let fields = inspect.stdout_lossy();
+        let (owner, scope, attempt) = parse_network_labels(&fields)?;
+        if owner != id.to_string() || scope != base_names.owner_token {
             return Err(unsupported(
                 "egress network ownership could not be verified",
             ));
         }
-        true
+        if !valid_attempt_token(&attempt) {
+            return Err(unsupported("egress network attempt identity is malformed"));
+        }
+        NetworkNames::for_attempt(namespace, id, &attempt)
     } else if inspect.stderr_lossy().contains("No such network")
         || inspect.stderr_lossy().contains("not found")
     {
-        false
+        for firewall in ["iptables", "ip6tables"] {
+            let rules = firewall_output(host, firewall, ["-S"]).await?;
+            if rules.lines().any(|line| {
+                line.split_whitespace()
+                    .any(|word| word.starts_with(&base_names.chain_prefix))
+            }) {
+                return Err(unsupported(
+                    "orphaned egress firewall chain has no verifiable Docker network owner",
+                ));
+            }
+        }
+        return Ok(());
     } else {
         return Err(unsupported("egress network cleanup could not be verified"));
     };
@@ -975,7 +1039,11 @@ async fn cleanup_native_with_attempt(
         if chain_exists {
             let created_by_attempt =
                 attempt_owned_chains.contains(&(firewall.to_owned(), chain.to_owned()));
-            if !created_by_attempt && !chain_has_owner_marker(&rules, chain, &names.owner_token) {
+            let marked = chain_has_owner_marker(&rules, chain, &names.chain_owner_token);
+            let recoverable_empty_orphan = (created_by_attempt || allow_empty_orphan_reclaim)
+                && !chain_has_rules(&rules, chain)
+                && !chain_is_referenced(&rules, chain);
+            if !marked && !recoverable_empty_orphan {
                 return Err(unsupported(
                     "egress firewall chain ownership could not be verified",
                 ));
