@@ -1,8 +1,7 @@
-//! Planning helpers for future network allowlist enforcement.
+//! Resolve and pin network allowlist destinations for the Docker firewall.
 //!
-//! These types pin resolver answers for a later proxy or firewall to consume.
-//! They do not enforce traffic and do not make `NetworkPolicy::Allowlist`
-//! available in [`DockerSandbox`](crate::DockerSandbox).
+//! The native Linux controller consumes pinned answers for firewall rules and
+//! container `/etc/hosts` entries. Planning alone does not enforce traffic.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -23,6 +22,9 @@ pub trait EgressResolver: std::fmt::Debug + Send + Sync {
 }
 
 /// A resolved allowlist plan whose destinations no longer depend on DNS.
+///
+/// The native Linux Docker controller uses each target both to install a
+/// destination rule and to create a static hostname mapping for the workload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinnedEgressPlan {
     targets: Vec<PinnedEgressTarget>,
@@ -76,8 +78,8 @@ impl PinnedEgressTarget {
 /// is a cloud metadata or loopback address, the whole plan is rejected. Safe
 /// private addresses are retained because this policy does not forbid them.
 ///
-/// This function only prepares data for an enforcing proxy or firewall. It does
-/// not apply network rules and does not enable allowlists in `DockerSandbox`.
+/// This function only prepares pinned data. It does not apply network rules;
+/// the native Linux Docker controller consumes the result during preparation.
 /// The resolver must answer in the environment where the eventual enforcer will
 /// use the plan, which may be remote from the caller for an SSH-backed host.
 ///

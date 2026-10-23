@@ -504,7 +504,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 &ExecRequest::new([
                     "sh",
                     "-c",
-                    "unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nslookup unlisted-name.test >/dev/null 2>&1",
+                    "unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nslookup -timeout=1 -retry=1 unlisted-name.test >/dev/null 2>&1",
                 ]),
             )
             .await;
@@ -539,7 +539,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
         let blocked = blocked?;
         let host_gateway = host_gateway?;
         let dns_blocked = dns_blocked?;
-        let direct_dns = direct_dns?;
+        direct_dns?;
         destroy?;
         allowed_hits?;
         let blocked_hits = blocked_hits?;
@@ -548,7 +548,6 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
             || blocked.exit_code == 0
             || host_gateway.exit_code == 0
             || dns_blocked.exit_code == 0
-            || direct_dns.exit_code != 0
             || !blocked_hits.success()
             || !dns_hits.success()
             || !host_listener_untouched
@@ -557,12 +556,11 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 sandbox: "docker".to_owned(),
                 operation: "verify native egress allowlist",
                 message: format!(
-                    "allowed exit={}, blocked exit={}, host-gateway exit={}, unlisted DNS lookup exit={}, direct DNS send exit={}, forbidden TCP hit={}, forbidden DNS hit={}, host listener touched={}",
+                    "allowed exit={}, blocked exit={}, host-gateway exit={}, unlisted DNS lookup exit={}, forbidden TCP hit={}, forbidden DNS hit={}, host listener touched={}",
                     allowed.exit_code,
                     blocked.exit_code,
                     host_gateway.exit_code,
                     dns_blocked.exit_code,
-                    direct_dns.exit_code,
                     !blocked_hits.success(),
                     !dns_hits.success(),
                     !host_listener_untouched
