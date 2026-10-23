@@ -123,6 +123,7 @@ struct PreparedNativeHost {
     chains: Mutex<std::collections::BTreeSet<(String, String)>>,
     fail_network_create: bool,
     empty_network_create: bool,
+    fail_chain_marker: bool,
     network_owner: String,
     network_scope: String,
     chain_owner_token: String,
@@ -138,6 +139,7 @@ impl PreparedNativeHost {
             chains: Mutex::new(std::collections::BTreeSet::new()),
             fail_network_create: false,
             empty_network_create: false,
+            fail_chain_marker: false,
             network_owner: id.to_string(),
             network_scope: names.owner_token.clone(),
             chain_owner_token: names.owner_token.clone(),
@@ -252,6 +254,15 @@ impl Host for PreparedNativeHost {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .remove(&(firewall, chain.clone()));
+            }
+            if self.fail_chain_marker
+                && argv.windows(2).any(|args| args == ["--comment", self.chain_owner_token])
+            {
+                return Ok(ExecOutput::new(
+                    1,
+                    Vec::new(),
+                    b"injected owner marker failure".to_vec(),
+                ));
             }
             if argv.iter().any(|arg| arg == "FORWARD") {
                 return Ok(ExecOutput::new(
@@ -672,6 +683,34 @@ async fn empty_successful_network_create_rolls_back_the_owned_network() -> Resul
     assert!(host.commands().iter().any(|argv| {
         argv.iter().any(|arg| arg == "rm") && argv.iter().any(|arg| arg == &names.network)
     }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn marker_install_failure_rolls_back_only_the_created_chain_and_network() -> Result<()> {
+    let id = BoxId::new("box-marker-failure")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.fail_chain_marker = true;
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+    let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
+
+    let result = controller.prepare(&host, namespace, &id, &allowlist).await;
+
+    assert!(result.is_err());
+    let commands = host.commands();
+    assert!(commands.iter().any(|argv| {
+        argv.iter().any(|arg| arg == "-X") && argv.iter().any(|arg| arg == &names.forward_chain)
+    }));
+    assert!(commands.iter().any(|argv| {
+        argv.iter().any(|arg| arg == "rm") && argv.iter().any(|arg| arg == &names.network)
+    }));
+    assert!(host
+        .chains
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .is_empty());
     Ok(())
 }
 
