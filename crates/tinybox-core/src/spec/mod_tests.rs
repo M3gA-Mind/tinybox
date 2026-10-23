@@ -258,6 +258,18 @@ fn allowlist_validation_rejects_loopback_targets() {
 }
 
 #[test]
+fn allowlist_validation_rejects_legacy_numeric_loopback_targets() {
+    use super::EgressAllowlist;
+
+    for host in ["127.1", "2130706433", "0x7f000001", "0177.0.0.1"] {
+        assert!(
+            EgressAllowlist::new([host], [80]).validate().is_err(),
+            "{host} must be refused"
+        );
+    }
+}
+
+#[test]
 fn allowlist_policy_allows_egress_but_open_is_highest_risk() {
     use super::EgressAllowlist;
     let policy = NetworkPolicy::Allowlist(EgressAllowlist::new(["example.com"], [443]));
