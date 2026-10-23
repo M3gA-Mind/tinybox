@@ -55,7 +55,7 @@ fn last_argv(inner: &RecordingHost) -> Vec<String> {
 
 #[test]
 fn it_reports_its_name() -> Result<()> {
-    let (host, _inner) = host()?;
+    let (host, inner) = host()?;
 
     assert_eq!(host.name(), "ssh");
     assert_eq!(host.name(), NAME);
