@@ -86,6 +86,22 @@ async fn allowlist_controller_prepares_before_start_and_cleans_after_destroy() -
 }
 
 #[tokio::test]
+async fn destroy_skips_egress_cleanup_for_non_allowlist_boxes() -> Result<()> {
+    let host = ScriptedHost::silent();
+    let sandbox = DockerSandbox::new(host.clone(), Arc::new(MemoryStore::new()))
+        .with_egress_controller(Arc::new(RecordingEgressController));
+    let info = sandbox.create(&spec()?).await?;
+
+    sandbox.destroy(&info.id).await?;
+
+    assert!(!host
+        .commands()
+        .iter()
+        .any(|command| command.first().is_some_and(|word| word == "controller")));
+    Ok(())
+}
+
+#[tokio::test]
 async fn destroying_persisted_allowlist_without_controller_refuses_before_removal() -> Result<()> {
     let host = ScriptedHost::silent();
     let store = Arc::new(MemoryStore::new());

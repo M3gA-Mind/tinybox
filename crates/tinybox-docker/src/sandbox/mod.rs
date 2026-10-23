@@ -956,9 +956,8 @@ impl Sandbox for DockerSandbox {
     async fn destroy(&self, id: &BoxId) -> Result<()> {
         // Fail on an unknown box before touching Docker.
         let info = self.store.get(id)?;
-        if matches!(info.spec.network, NetworkPolicy::Allowlist(_))
-            && self.egress_controller.is_none()
-        {
+        let has_egress_network = matches!(info.spec.network, NetworkPolicy::Allowlist(_));
+        if has_egress_network && self.egress_controller.is_none() {
             return Err(unsupported_egress_policy());
         }
         let attempt = self
@@ -991,7 +990,9 @@ impl Sandbox for DockerSandbox {
         // recoverable, a container without a record is a leak.
         self.remove_container(args::remove(&self.namespace, id))
             .await?;
-        self.cleanup_egress(id).await?;
+        if has_egress_network {
+            self.cleanup_egress(id).await?;
+        }
         self.mark_observed_box_destroyed(id);
         self.acknowledge_observed_cleanup_for_destroyed_box(id);
         self.store.remove(id)?;
