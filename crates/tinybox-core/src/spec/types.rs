@@ -370,9 +370,7 @@ impl EgressAllowlist {
         let address = match numbers.as_slice() {
             [whole] => *whole,
             [first, last] => (*first << 24) | *last,
-            [first, second, last] => {
-                (*first << 24) | (*second << 16) | *last
-            }
+            [first, second, last] => (*first << 24) | (*second << 16) | *last,
             [first, second, third, last] => {
                 (*first << 24) | (*second << 16) | (*third << 8) | *last
             }
