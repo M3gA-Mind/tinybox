@@ -165,6 +165,7 @@ struct BridgeLinkHost {
 enum NetworkCreateBehavior {
     Succeed,
     CommandFailure,
+    CommandFailureAfterSideEffect,
     HostErrorAfterSideEffect,
 }
 
@@ -296,6 +297,16 @@ impl Host for PreparedNativeHost {
                             1,
                             Vec::new(),
                             b"network name already exists".to_vec(),
+                        ));
+                    }
+                    if matches!(
+                        self.network_create_behavior,
+                        NetworkCreateBehavior::CommandFailureAfterSideEffect
+                    ) {
+                        return Ok(ExecOutput::new(
+                            1,
+                            Vec::new(),
+                            b"simulated lost command response after network creation".to_vec(),
                         ));
                     }
                     if matches!(
@@ -1422,6 +1433,37 @@ async fn network_create_conflict_does_not_remove_an_existing_same_owner_network(
                 && argv.iter().any(|arg| arg.contains("{{.Id}}")))
     }));
     assert!(!host.commands().iter().any(|argv| {
+        argv.iter()
+            .any(|arg| matches!(arg.as_str(), "-A" | "-D" | "-F" | "-X"))
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn nonzero_network_create_reconciles_a_current_attempt_side_effect() -> Result<()> {
+    let id = BoxId::new("box-nonzero-create-side-effect")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.network_create_behavior = NetworkCreateBehavior::CommandFailureAfterSideEffect;
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+    let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
+
+    assert!(matches!(
+        controller.prepare(&host, namespace, &id, &allowlist).await,
+        Err(Error::Backend {
+            operation: "configure egress filtering",
+            ref message,
+            ..
+        }) if message.contains("simulated lost command response after network creation")
+    ));
+    let commands = host.commands();
+    assert!(commands.iter().any(|argv| {
+        argv.iter().any(|arg| arg == "inspect") && argv.iter().any(|arg| arg.contains("{{.Id}}"))
+    }));
+    assert!(commands.iter().any(|argv| argv.iter().any(|arg| arg == "rm")));
+    assert!(!commands.iter().any(|argv| {
         argv.iter()
             .any(|arg| matches!(arg.as_str(), "-A" | "-D" | "-F" | "-X"))
     }));
