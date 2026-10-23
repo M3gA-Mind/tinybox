@@ -517,7 +517,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
             "inspect",
             "--format",
             &format!(
-                "{{{{(index .NetworkSettings.Networks \\\"{target_network}\\\").GlobalIPv6Address}}}}"
+                "{{{{(index .NetworkSettings.Networks \"{target_network}\").GlobalIPv6Address}}}}"
             ),
             &target_name,
         ])?
