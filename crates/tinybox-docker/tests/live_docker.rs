@@ -43,6 +43,7 @@ fn enabled() -> bool {
     std::env::var_os("TINYBOX_LIVE_DOCKER").is_some()
 }
 
+/// Enforce the CI opt-in contract and report whether live Docker tests should run.
 fn live_docker_enabled() -> Result<bool> {
     let enabled = enabled();
     if std::env::var_os("TINYBOX_REQUIRE_LIVE_DOCKER").is_some() && !enabled {
@@ -56,6 +57,7 @@ fn live_docker_enabled() -> Result<bool> {
     Ok(enabled)
 }
 
+/// Return the default bridge gateway used as the controlled listener address.
 fn docker_bridge_gateway() -> Result<Ipv4Addr> {
     let output = Command::new("docker")
         .args([
@@ -91,6 +93,7 @@ fn docker_bridge_gateway() -> Result<Ipv4Addr> {
         })
 }
 
+/// Accept one connection before `deadline`, polling a nonblocking listener.
 fn accept_before(listener: &TcpListener, deadline: Instant) -> std::io::Result<TcpStream> {
     loop {
         match listener.accept() {
@@ -109,10 +112,12 @@ fn accept_before(listener: &TcpListener, deadline: Instant) -> std::io::Result<T
     }
 }
 
+/// Build the bounded HTTP request the container uses to probe the listener.
 fn http_probe_command(address: SocketAddr) -> String {
     format!("wget -q -T 3 -O - http://{address}/probe")
 }
 
+/// Confirm the host can connect before using this listener to test container policy.
 fn prove_host_can_reach_listener(listener: &TcpListener, address: SocketAddr) -> Result<()> {
     let host = TcpStream::connect_timeout(&address, Duration::from_secs(3)).map_err(|error| {
         Error::Backend {
@@ -271,6 +276,7 @@ async fn live_egress_is_available_when_the_policy_allows_it() -> Result<()> {
     Ok(())
 }
 
+/// Checks host, Egress, and default-Denied connectivity to a controlled listener.
 #[tokio::test]
 async fn live_network_policy_controls_host_listener_connectivity() -> Result<()> {
     if !live_docker_enabled()? {
@@ -329,11 +335,6 @@ async fn live_network_policy_controls_host_listener_connectivity() -> Result<()>
         message: "listener thread panicked".to_owned(),
     })?;
     let egress_destroy = egress_sandbox.destroy(&egress_info.id).await;
-    egress_server_result.map_err(|error| Error::Backend {
-        sandbox: "docker".to_owned(),
-        operation: "accept the Egress container connection",
-        message: error.to_string(),
-    })?;
     let egress = egress_result?;
     egress_destroy?;
     assert_eq!(
@@ -342,6 +343,11 @@ async fn live_network_policy_controls_host_listener_connectivity() -> Result<()>
         "Egress container could not reach the listener: {}",
         egress.stderr_lossy()
     );
+    egress_server_result.map_err(|error| Error::Backend {
+        sandbox: "docker".to_owned(),
+        operation: "accept the Egress container connection",
+        message: error.to_string(),
+    })?;
     assert_eq!(egress.stdout_lossy().trim(), "docker-ok");
 
     let denied_sandbox = sandbox("ns-docker-network-denied")?;
