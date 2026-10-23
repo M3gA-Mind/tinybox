@@ -824,10 +824,26 @@ async fn chain_creation_and_owner_marker_are_atomic_and_cleanup_survives_restart
         4,
         "each family/chain uses one restore transaction"
     );
-    for script in scripts {
-        assert!(script.starts_with("*filter\n:"));
-        assert!(script.contains(&format!("--comment {} -j DROP\n", names.owner_token)));
-        assert!(script.ends_with("COMMIT\n"));
+    for (firewall, chain) in [
+        ("iptables", names.forward_chain.as_str()),
+        ("iptables", names.input_chain.as_str()),
+        ("ip6tables", names.forward_chain.as_str()),
+        ("ip6tables", names.input_chain.as_str()),
+    ] {
+        let restore_program = if firewall == "ip6tables" {
+            "ip6tables-restore"
+        } else {
+            "iptables-restore"
+        };
+        assert!(host.commands().iter().any(|argv| {
+            argv.iter().any(|arg| arg == restore_program)
+        }));
+        assert!(scripts.iter().any(|script| {
+            script.starts_with(&format!("*filter\n:{chain} - [0:0]\n"))
+                && script.contains(&format!("-A {chain} -s "))
+                && script.contains(&format!("--comment {} -j DROP\n", names.owner_token))
+                && script.ends_with("COMMIT\n")
+        }));
     }
 
     // A fresh controller has no in-memory ownership set; cleanup must recover
