@@ -90,7 +90,7 @@ struct Resolver;
 
 impl EgressResolver for Resolver {
     fn resolve(&self, _hostname: &str) -> std::io::Result<Vec<IpAddr>> {
-        Ok(vec!["203.0.113.8".parse().expect("test IP is valid")])
+        Ok(vec![IpAddr::from([203, 0, 113, 8])])
     }
 }
 
