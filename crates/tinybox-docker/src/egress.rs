@@ -138,10 +138,7 @@ pub fn plan_egress_allowlist(
 }
 
 fn normalize_host(host: &str) -> String {
-    host.trim()
-        .trim_matches(['[', ']'])
-        .trim_end_matches('.')
-        .to_ascii_lowercase()
+    host.trim().trim_matches(['[', ']']).to_ascii_lowercase()
 }
 
 fn is_forbidden_address(address: &IpAddr) -> bool {

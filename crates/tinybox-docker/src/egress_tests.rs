@@ -1,10 +1,12 @@
+//! Tests for resolver-backed egress allowlist planning.
+
+use super::*;
+
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::Mutex;
 
 use tinybox_core::{EgressAllowlist, Error};
-
-use super::{EgressResolver, plan_egress_allowlist};
 
 #[derive(Debug)]
 struct ChangingResolver {
@@ -42,11 +44,14 @@ impl EgressResolver for StaticResolver {
     }
 }
 
-fn addresses(host: &str, answers: &[&str]) -> Result<StaticResolver, Box<dyn std::error::Error>> {
+fn addresses(
+    host: &str,
+    answers: &[&str],
+) -> std::result::Result<StaticResolver, Box<dyn std::error::Error>> {
     let addresses = answers
         .iter()
         .map(|answer| answer.parse::<IpAddr>())
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(StaticResolver(BTreeMap::from([(
         host.to_owned(),
         addresses,
@@ -58,7 +63,7 @@ fn resolves_each_distinct_hostname_once_and_retains_the_answer() -> tinybox_core
     let resolver = ChangingResolver {
         calls: Mutex::new(Vec::new()),
     };
-    let allowlist = EgressAllowlist::new(["API.Example.Test.", "api.example.test"], [443, 8443]);
+    let allowlist = EgressAllowlist::new(["API.Example.Test.", "api.example.test."], [443, 8443]);
 
     let plan = plan_egress_allowlist(&allowlist, &resolver)?;
 
@@ -68,11 +73,11 @@ fn resolves_each_distinct_hostname_once_and_retains_the_answer() -> tinybox_core
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_slice(),
-        ["api.example.test"]
+        ["api.example.test."]
     );
     assert_eq!(plan.targets().len(), 2);
     assert!(plan.targets().iter().all(|target| {
-        target.host() == "api.example.test"
+        target.host() == "api.example.test."
             && target.address() == IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 8))
     }));
     assert_eq!(
@@ -82,9 +87,67 @@ fn resolves_each_distinct_hostname_once_and_retains_the_answer() -> tinybox_core
     Ok(())
 }
 
+#[derive(Debug)]
+struct AbsoluteAwareResolver {
+    calls: Mutex<Vec<String>>,
+}
+
+impl EgressResolver for AbsoluteAwareResolver {
+    fn resolve(&self, hostname: &str) -> std::io::Result<Vec<IpAddr>> {
+        self.calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(hostname.to_owned());
+        let answer = match hostname {
+            "service." => "203.0.113.17",
+            "service" => "203.0.113.23",
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("no fixture for {hostname}"),
+                ));
+            }
+        };
+        Ok(vec![answer.parse().map_err(|error| {
+            std::io::Error::other(format!("invalid fixture: {error}"))
+        })?])
+    }
+}
+
 #[test]
-fn rejects_a_plan_if_any_answer_is_loopback_or_metadata() -> Result<(), Box<dyn std::error::Error>>
-{
+fn resolves_absolute_names_with_the_root_dot_and_keeps_them_distinct() -> tinybox_core::Result<()> {
+    let resolver = AbsoluteAwareResolver {
+        calls: Mutex::new(Vec::new()),
+    };
+    let allowlist = EgressAllowlist::new(["Service.", "SERVICE.", "service"], [443]);
+
+    let plan = plan_egress_allowlist(&allowlist, &resolver)?;
+
+    assert_eq!(
+        resolver
+            .calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_slice(),
+        ["service.", "service"]
+    );
+    assert_eq!(plan.targets().len(), 2);
+    assert_eq!(plan.targets()[0].host(), "service");
+    assert_eq!(
+        plan.targets()[0].address(),
+        IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 23))
+    );
+    assert_eq!(plan.targets()[1].host(), "service.");
+    assert_eq!(
+        plan.targets()[1].address(),
+        IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 17))
+    );
+    Ok(())
+}
+
+#[test]
+fn rejects_a_plan_if_any_answer_is_loopback_or_metadata()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
     for (hostname, answer) in [
         ("loopback-v4.example", "127.0.0.1"),
         ("loopback-v6.example", "::1"),
@@ -109,7 +172,7 @@ fn rejects_a_plan_if_any_answer_is_loopback_or_metadata() -> Result<(), Box<dyn 
 
 #[test]
 fn rejects_mixed_safe_and_forbidden_answers_instead_of_dropping_one()
--> Result<(), Box<dyn std::error::Error>> {
+-> std::result::Result<(), Box<dyn std::error::Error>> {
     let resolver = addresses("mixed.example", &["203.0.113.8", "127.0.0.1"])?;
     let allowlist = EgressAllowlist::new(["mixed.example"], [443]);
 
@@ -122,7 +185,7 @@ fn rejects_mixed_safe_and_forbidden_answers_instead_of_dropping_one()
 
 #[test]
 fn allows_private_addresses_when_the_policy_does_not_forbid_them()
--> Result<(), Box<dyn std::error::Error>> {
+-> std::result::Result<(), Box<dyn std::error::Error>> {
     let resolver = addresses("private.example", &["10.2.3.4"])?;
     let allowlist = EgressAllowlist::new(["private.example"], [443]);
 
@@ -134,7 +197,8 @@ fn allows_private_addresses_when_the_policy_does_not_forbid_them()
 }
 
 #[test]
-fn rejects_a_hostname_with_no_resolver_answers() -> Result<(), Box<dyn std::error::Error>> {
+fn rejects_a_hostname_with_no_resolver_answers()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
     let resolver = addresses("empty.example", &[])?;
     let allowlist = EgressAllowlist::new(["empty.example"], [443]);
 
