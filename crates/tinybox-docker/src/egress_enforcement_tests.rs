@@ -835,9 +835,11 @@ async fn chain_creation_and_owner_marker_are_atomic_and_cleanup_survives_restart
         } else {
             "iptables-restore"
         };
-        assert!(host.commands().iter().any(|argv| {
-            argv.iter().any(|arg| arg == restore_program)
-        }));
+        assert!(
+            host.commands()
+                .iter()
+                .any(|argv| { argv.iter().any(|arg| arg == restore_program) })
+        );
         assert!(scripts.iter().any(|script| {
             script.starts_with(&format!("*filter\n:{chain} - [0:0]\n"))
                 && script.contains(&format!("-A {chain} -s "))
