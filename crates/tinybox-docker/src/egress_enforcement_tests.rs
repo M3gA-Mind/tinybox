@@ -126,6 +126,7 @@ struct PreparedNativeHost {
     marked_chains: Mutex<std::collections::BTreeSet<(String, String)>>,
     fail_network_create: bool,
     network_create_side_effect_then_host_error: bool,
+    network_missing_on_inspect: bool,
     empty_network_create: bool,
     fail_chain_marker: bool,
     network_owner: String,
@@ -144,6 +145,7 @@ impl PreparedNativeHost {
             marked_chains: Mutex::new(std::collections::BTreeSet::new()),
             fail_network_create: false,
             network_create_side_effect_then_host_error: false,
+            network_missing_on_inspect: false,
             empty_network_create: false,
             fail_chain_marker: false,
             network_owner: id.to_string(),
@@ -214,6 +216,13 @@ impl Host for PreparedNativeHost {
                     return Ok(ExecOutput::new(0, network_id, Vec::new()));
                 }
                 if let Some(inspect_index) = docker_args.iter().position(|arg| arg == "inspect") {
+                    if self.network_missing_on_inspect {
+                        return Ok(ExecOutput::new(
+                            1,
+                            Vec::new(),
+                            b"Error: No such network".to_vec(),
+                        ));
+                    }
                     let format = docker_args
                         .get(inspect_index + 2)
                         .map_or("", String::as_str);
@@ -377,6 +386,44 @@ async fn uncertain_network_create_removes_only_the_verified_owned_network() -> R
         argv.iter()
             .any(|arg| matches!(arg.as_str(), "-A" | "-D" | "-F" | "-X"))
     }));
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn ambiguous_network_create_keeps_the_original_error_when_absent_or_foreign() -> Result<()> {
+    for absent in [false, true] {
+        let id = BoxId::new(if absent {
+            "box-create-absent"
+        } else {
+            "box-create-foreign"
+        })?;
+        let namespace = "test";
+        let names = NetworkNames::for_box(namespace, &id);
+        let mut host = PreparedNativeHost::new(&id, &names);
+        host.network_create_side_effect_then_host_error = true;
+        host.network_missing_on_inspect = absent;
+        if !absent {
+            host.network_owner = "another-box".to_owned();
+        }
+        let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+        let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
+
+        assert!(matches!(
+            controller.prepare(&host, namespace, &id, &allowlist).await,
+            Err(Error::Backend {
+                operation: "run Docker network create",
+                ref message,
+                ..
+            }) if message.contains("simulated lost command response")
+        ));
+        assert!(
+            !host
+                .commands()
+                .iter()
+                .any(|argv| { argv.iter().any(|arg| arg == "rm") })
+        );
+    }
     Ok(())
 }
 
@@ -727,7 +774,6 @@ async fn network_name_conflict_does_not_clean_an_existing_owners_firewall() -> R
     let names = NetworkNames::for_box(namespace, &id);
     let mut host = PreparedNativeHost::new(&id, &names);
     host.fail_network_create = true;
-    host.network_owner = "foreign-owner".to_owned();
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
     let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
 
@@ -742,6 +788,9 @@ async fn network_name_conflict_does_not_clean_an_existing_owners_firewall() -> R
         !argv
             .iter()
             .any(|arg| matches!(arg.as_str(), "-D" | "-F" | "-X"))
+    }));
+    assert!(!host.commands().iter().any(|argv| {
+        argv.iter().any(|arg| arg == "inspect") || argv.iter().any(|arg| arg == "rm")
     }));
     Ok(())
 }
