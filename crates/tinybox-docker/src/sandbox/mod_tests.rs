@@ -102,6 +102,65 @@ async fn destroying_persisted_allowlist_without_controller_refuses_before_remova
 }
 
 #[tokio::test]
+async fn controller_host_forwards_host_capabilities_and_pins_docker_commands() -> Result<()> {
+    let inner = ScriptedHost::silent();
+    let host = super::ControllerHost {
+        inner: inner.clone(),
+        controller: Arc::new(RecordingEgressController),
+    };
+
+    assert_eq!(host.name(), "scripted");
+    assert_eq!(host.execution_location(), HostExecutionLocation::Unknown);
+    assert!(!host.has_pending_observed_cleanup());
+    host.retry_observed_cleanup().await?;
+    assert!(matches!(
+        host.open_workspace_file(std::path::Path::new("/workspace"), std::path::Path::new("file"))
+            .await,
+        Err(Error::UnsupportedHostFileTransfer { .. })
+    ));
+    assert!(matches!(
+        host.begin_workspace_file_write(
+            std::path::Path::new("/workspace"),
+            std::path::Path::new("file"),
+            "transfer",
+        )
+        .await,
+        Err(Error::UnsupportedHostFileTransfer { .. })
+    ));
+    assert!(matches!(
+        host.forward("127.0.0.1:1234".parse().expect("valid address")).await,
+        Err(Error::Unsupported { .. })
+    ));
+
+    let observer: Arc<dyn tinybox_core::ExecutionObserver> =
+        Arc::new(CapturingObserver::default());
+    host.run_observed(&ExecRequest::new(["docker", "version"]), observer)
+        .await?;
+    assert_eq!(inner.commands()[0], ["docker", "version"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_controller_during_egress_preparation_rolls_back_reserved_record() -> Result<()> {
+    let (sandbox, _host, store) = sandbox();
+    let id = BoxId::new("box-0")?;
+    let allowlist = tinybox_core::EgressAllowlist::new(["api.example.test"], [443]);
+    let spec = spec()?.with_network(NetworkPolicy::Allowlist(allowlist));
+    store.reserve(id.clone(), spec.clone())?;
+
+    assert!(matches!(
+        sandbox.prepare_egress_network(&spec, &id, "attempt").await,
+        Err(Error::ConstraintNotEnforced {
+            constraint: tinybox_core::Constraint::Network,
+            enforcement: tinybox_core::Enforcement::Unsupported,
+            ..
+        })
+    ));
+    assert!(matches!(store.get(&id), Err(Error::NotFound { .. })));
+    Ok(())
+}
+
+#[tokio::test]
 async fn controller_failure_rolls_back_before_dropping_the_box_record() -> Result<()> {
     #[derive(Debug)]
     struct FailingController;
