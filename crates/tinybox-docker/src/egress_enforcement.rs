@@ -960,7 +960,25 @@ async fn cleanup_native_with_attempt(
             .await?;
         }
         firewall_success(host, firewall, ["-F", chain]).await?;
-        firewall_success(host, firewall, ["-X", chain]).await?;
+        if let Err(delete_error) = firewall_success(host, firewall, ["-X", chain]).await {
+            let ipv6 = firewall == "ip6tables";
+            return match install_chain_owner_marker(
+                host,
+                firewall,
+                chain,
+                &names.owner_token,
+                ipv6,
+            )
+            .await
+            {
+                Ok(()) => Err(delete_error),
+                Err(restore_error) => Err(Error::Backend {
+                    sandbox: "docker".to_owned(),
+                    operation: "restore egress firewall ownership marker",
+                    message: format!("{delete_error}; restoring ownership marker failed: {restore_error}"),
+                }),
+            };
+        }
         let remaining = firewall_output(host, firewall, ["-S"]).await?;
         if remaining
             .lines()
