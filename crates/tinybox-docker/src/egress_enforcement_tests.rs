@@ -980,17 +980,20 @@ async fn cleanup_restores_owner_marker_when_chain_delete_fails_after_flush() -> 
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
 
     assert!(controller.cleanup(&host, namespace, &id).await.is_err());
-    assert!(host
-        .marked_chains
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .contains(&("iptables".to_owned(), names.forward_chain.clone())));
+    assert!(
+        host.marked_chains
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&("iptables".to_owned(), names.forward_chain.clone()))
+    );
     controller.cleanup(&host, namespace, &id).await?;
-    assert!(!host
-        .chains
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .contains(&("iptables".to_owned(), names.forward_chain.clone())));
+    assert!(
+        !host
+            .chains
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&("iptables".to_owned(), names.forward_chain.clone()))
+    );
     Ok(())
 }
 
