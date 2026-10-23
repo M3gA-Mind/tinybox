@@ -432,8 +432,8 @@ async fn install_family(
     }
     if ipv6 {
         // IPv6 needs Neighbor Solicitation to resolve the bridge gateway's
-        // link-layer address. Permit only this control message to the host;
-        // all other managed-bridge INPUT traffic remains dropped.
+        // link-layer address. Permit this control message; established replies
+        // are added below, while new host-bound traffic remains dropped.
         firewall_success(
             host,
             firewall,

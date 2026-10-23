@@ -57,11 +57,11 @@ Docker documents `--dns` as a per-container resolver setting, and its [embedded
 DNS security advisory](https://github.com/moby/moby/security/advisories/GHSA-mq39-4gv4-mvpx)
 explains that a custom upstream forces external lookups to originate from the
 container network namespace.
-All other traffic from that bridge to the Docker host is dropped; IPv6
-Neighbor Solicitation is permitted for bridge-gateway address resolution.
-Published-port replies are allowed only when connection tracking marks them
-`ESTABLISHED` or `RELATED`. The ordinary Docker sandbox continues to refuse
-allowlists unless this controller is installed.
+New traffic from that bridge to the Docker host is dropped, except IPv6
+Neighbor Solicitation for bridge-gateway address resolution. Existing
+`ESTABLISHED` or `RELATED` traffic is allowed so host-initiated connections,
+including published-port requests, can receive replies. The ordinary Docker
+sandbox continues to refuse allowlists unless this controller is installed.
 
 Docker Desktop, Windows, remote or unknown Hosts, rootless daemons, and daemons
 without the required firewall support refuse `Allowlist` as Unsupported.
