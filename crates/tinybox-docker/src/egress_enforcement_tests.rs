@@ -109,6 +109,7 @@ struct BridgeLinkHost {
 struct PreparedNativeHost {
     commands: Mutex<Vec<Vec<String>>>,
     fail_network_create: bool,
+    empty_network_create: bool,
     box_id: String,
     bridge: String,
     forward_chain: String,
@@ -120,6 +121,7 @@ impl PreparedNativeHost {
         Self {
             commands: Mutex::new(Vec::new()),
             fail_network_create: false,
+            empty_network_create: false,
             box_id: id.to_string(),
             bridge: names.bridge.clone(),
             forward_chain: names.forward_chain.clone(),
@@ -170,7 +172,12 @@ impl Host for PreparedNativeHost {
                             b"network name already exists".to_vec(),
                         ));
                     }
-                    return Ok(ExecOutput::new(0, b"network-id".to_vec(), Vec::new()));
+                    let network_id = if self.empty_network_create {
+                        Vec::new()
+                    } else {
+                        b"network-id".to_vec()
+                    };
+                    return Ok(ExecOutput::new(0, network_id, Vec::new()));
                 }
                 if let Some(inspect_index) = docker_args.iter().position(|arg| arg == "inspect") {
                     let format = docker_args
@@ -351,6 +358,29 @@ async fn network_name_conflict_does_not_clean_an_existing_owners_firewall() -> R
         !argv
             .iter()
             .any(|arg| matches!(arg.as_str(), "-D" | "-F" | "-X"))
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn empty_successful_network_create_rolls_back_the_owned_network() -> Result<()> {
+    let id = BoxId::new("box-0")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.empty_network_create = true;
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+    let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
+
+    assert!(matches!(
+        controller.prepare(&host, namespace, &id, &allowlist).await,
+        Err(Error::ConstraintNotEnforced {
+            enforcement: tinybox_core::Enforcement::Unsupported,
+            ..
+        })
+    ));
+    assert!(host.commands().iter().any(|argv| {
+        argv.iter().any(|arg| arg == "rm") && argv.iter().any(|arg| arg == &names.network)
     }));
     Ok(())
 }

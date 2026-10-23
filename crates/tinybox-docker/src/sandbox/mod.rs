@@ -246,16 +246,28 @@ impl DockerSandbox {
             return Ok(None);
         };
         let Some(controller) = &self.egress_controller else {
-            return Err(self
-                .rollback_failed_egress_create(id, attempt, unsupported_egress_policy())
-                .await);
+            self.discard_failed_create_record(id, attempt);
+            return Err(unsupported_egress_policy());
         };
         match controller
             .prepare(self.host.as_ref(), &self.namespace, id, allowlist)
             .await
         {
             Ok(network) => Ok(Some(network)),
-            Err(error) => Err(self.rollback_failed_egress_create(id, attempt, error).await),
+            Err(error) => {
+                if matches!(
+                    &error,
+                    Error::Backend {
+                        operation: "roll back egress network setup",
+                        ..
+                    }
+                ) {
+                    self.remember_failed_create_attempt(id, attempt);
+                } else {
+                    self.discard_failed_create_record(id, attempt);
+                }
+                Err(error)
+            }
         }
     }
 

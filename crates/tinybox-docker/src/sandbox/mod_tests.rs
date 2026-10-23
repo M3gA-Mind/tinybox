@@ -207,6 +207,8 @@ async fn controller_failure_rolls_back_before_dropping_the_box_record() -> Resul
         ) -> Result<crate::PreparedEgressNetwork> {
             host.run(&ExecRequest::new(["controller", "prepare"]))
                 .await?;
+            host.run(&ExecRequest::new(["controller", "cleanup"]))
+                .await?;
             Err(Error::ConstraintNotEnforced {
                 sandbox: NAME.to_owned(),
                 constraint: tinybox_core::Constraint::Network,

@@ -35,7 +35,11 @@ pub trait DockerEgressController: Debug + Send + Sync {
     /// Resolve, pin, and prepare a filtered network for this box.
     ///
     /// Implementations must not start the workload. The returned network name
-    /// is supplied to `docker run` only after this method succeeds.
+    /// is supplied to `docker run` only after this method succeeds. On error,
+    /// the controller must roll back every resource it created. If rollback
+    /// fails, it must return `Error::Backend` with operation
+    /// `"roll back egress network setup"`, allowing the sandbox to retain the
+    /// box record for a later cleanup retry.
     async fn prepare(
         &self,
         host: &dyn Host,
@@ -152,7 +156,15 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
         )
         .await?;
         if network.is_empty() {
-            return Err(unsupported("Docker did not confirm the egress network"));
+            let error = unsupported("Docker did not confirm the egress network");
+            return match cleanup_native(host, namespace, id, true).await {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(Error::Backend {
+                    sandbox: "docker".to_owned(),
+                    operation: "roll back egress network setup",
+                    message: format!("{error}; cleanup failed: {cleanup_error}"),
+                }),
+            };
         }
 
         let setup = async {
@@ -418,6 +430,26 @@ async fn install_family(
         command.extend(rule);
         firewall_success(host, firewall, command.iter().map(String::as_str)).await?;
     }
+    if ipv6 {
+        // IPv6 needs Neighbor Solicitation to resolve the bridge gateway's
+        // link-layer address. Permit only this control message to the host;
+        // all other managed-bridge INPUT traffic remains dropped.
+        firewall_success(
+            host,
+            firewall,
+            [
+                "-A",
+                &names.input_chain,
+                "-p",
+                "ipv6-icmp",
+                "--icmpv6-type",
+                "neighbor-solicitation",
+                "-j",
+                "ACCEPT",
+            ],
+        )
+        .await?;
+    }
     for target in plan.targets() {
         let address = target.address();
         if is_ipv6(&address) != ipv6 {
@@ -443,6 +475,21 @@ async fn install_family(
             .await?;
         }
     }
+    firewall_success(
+        host,
+        firewall,
+        [
+            "-A",
+            &names.forward_chain,
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "ESTABLISHED,RELATED",
+            "-j",
+            "ACCEPT",
+        ],
+    )
+    .await?;
     firewall_success(host, firewall, ["-A", &names.forward_chain, "-j", "DROP"]).await?;
     // Host-origin traffic from the managed bridge is categorically denied.
     // Allowlist entries apply only to routed container egress.
