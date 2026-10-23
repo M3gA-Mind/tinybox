@@ -124,6 +124,17 @@ pub(super) fn run(
     argv.extend(resource_flags(&spec.resources));
     if let Some(network) = allowlist_network {
         argv.extend(["--network".to_owned(), network.network().to_owned()]);
+        // Custom Docker bridges use an embedded resolver that can forward DNS
+        // outside our per-bridge firewall. Pin its sole upstream to the
+        // workload's own loopback; approved names arrive through --add-host.
+        argv.extend(["--dns".to_owned(), "127.0.0.1".to_owned()]);
+        for (hostname, address) in network.host_mappings() {
+            let address = match address {
+                std::net::IpAddr::V4(address) => address.to_string(),
+                std::net::IpAddr::V6(address) => format!("[{address}]"),
+            };
+            argv.extend(["--add-host".to_owned(), format!("{hostname}:{address}")]);
+        }
     } else {
         argv.extend(network_flags(&spec.network));
     }
