@@ -1198,7 +1198,11 @@ async fn docker_request(host: &dyn Host, argv: Vec<String>) -> Result<ExecOutput
 }
 
 fn force_local_rootful_docker(argv: Vec<String>) -> Vec<String> {
-    if argv.first().is_some_and(|program| program == "env") {
+    if argv.first().is_some_and(|program| program == "env")
+        || argv
+            .windows(2)
+            .any(|pair| pair == ["--host", DOCKER_SOCKET])
+    {
         return argv;
     }
     let mut forced = vec!["docker".into(), "--host".into(), DOCKER_SOCKET.into()];
