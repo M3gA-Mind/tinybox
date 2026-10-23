@@ -353,6 +353,36 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
             message: "rule was not installed".to_owned(),
         })?;
     assert!(established_position < forward_drop_position);
+    let input_established_position = commands
+        .iter()
+        .position(|argv| {
+            argv.iter().any(|arg| arg == "iptables")
+                && argv
+                    .windows(4)
+                    .any(|args| args == ["-A", &names.input_chain, "-m", "conntrack"])
+                && argv
+                    .windows(2)
+                    .any(|args| args == ["--ctstate", "ESTABLISHED,RELATED"])
+        })
+        .ok_or_else(|| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "find established INPUT return rule",
+            message: "rule was not installed".to_owned(),
+        })?;
+    let ipv4_input_drop_position = commands
+        .iter()
+        .position(|argv| {
+            argv.iter().any(|arg| arg == "iptables")
+                && argv
+                    .windows(4)
+                    .any(|args| args == ["-A", &names.input_chain, "-j", "DROP"])
+        })
+        .ok_or_else(|| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "find IPv4 INPUT default-drop rule",
+            message: "rule was not installed".to_owned(),
+        })?;
+    assert!(input_established_position < ipv4_input_drop_position);
     let neighbor_solicitation_position = commands
         .iter()
         .position(|argv| {
@@ -377,7 +407,8 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
             operation: "find INPUT default-drop rule",
             message: "rule was not installed".to_owned(),
         })?;
-    assert!(neighbor_solicitation_position < input_drop_position);
+    assert!(neighbor_solicitation_position < input_established_position);
+    assert!(input_established_position < input_drop_position);
     assert!(commands.iter().any(|argv| {
         argv.iter().any(|arg| arg == "-D") && argv.iter().any(|arg| arg == "DOCKER-USER")
     }));
