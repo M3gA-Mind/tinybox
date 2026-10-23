@@ -126,13 +126,22 @@ enum NetworkCreateBehavior {
     HostErrorAfterSideEffect,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum NetworkInspectBehavior {
+    Owned,
+    Absent,
+    Foreign,
+    Uncertain,
+    Malformed,
+}
+
 #[derive(Debug)]
 struct PreparedNativeHost {
     commands: Mutex<Vec<Vec<String>>>,
     chains: Mutex<std::collections::BTreeSet<(String, String)>>,
     marked_chains: Mutex<std::collections::BTreeSet<(String, String)>>,
     network_create_behavior: NetworkCreateBehavior,
-    network_missing_on_inspect: bool,
+    network_inspect_behavior: NetworkInspectBehavior,
     empty_network_create: bool,
     fail_chain_marker: bool,
     network_owner: String,
@@ -150,7 +159,7 @@ impl PreparedNativeHost {
             chains: Mutex::new(std::collections::BTreeSet::new()),
             marked_chains: Mutex::new(std::collections::BTreeSet::new()),
             network_create_behavior: NetworkCreateBehavior::Succeed,
-            network_missing_on_inspect: false,
+            network_inspect_behavior: NetworkInspectBehavior::Owned,
             empty_network_create: false,
             fail_chain_marker: false,
             network_owner: id.to_string(),
@@ -227,25 +236,50 @@ impl Host for PreparedNativeHost {
                     return Ok(ExecOutput::new(0, network_id, Vec::new()));
                 }
                 if let Some(inspect_index) = docker_args.iter().position(|arg| arg == "inspect") {
-                    if self.network_missing_on_inspect {
-                        return Ok(ExecOutput::new(
-                            1,
-                            Vec::new(),
-                            b"Error: No such network".to_vec(),
-                        ));
+                    match self.network_inspect_behavior {
+                        NetworkInspectBehavior::Absent => {
+                            return Ok(ExecOutput::new(
+                                1,
+                                Vec::new(),
+                                b"Error: No such network".to_vec(),
+                            ));
+                        }
+                        NetworkInspectBehavior::Uncertain => {
+                            return Ok(ExecOutput::new(
+                                1,
+                                Vec::new(),
+                                b"Error: daemon temporarily unavailable".to_vec(),
+                            ));
+                        }
+                        NetworkInspectBehavior::Owned
+                        | NetworkInspectBehavior::Foreign
+                        | NetworkInspectBehavior::Malformed => {}
                     }
                     let format = docker_args
                         .get(inspect_index + 2)
                         .map_or("", String::as_str);
-                    let stdout = if format.contains(".Id") {
-                        format!("network-id|{}|{}", self.network_owner, self.network_scope)
+                    let owner = if matches!(
+                        self.network_inspect_behavior,
+                        NetworkInspectBehavior::Foreign
+                    ) {
+                        "another-box"
+                    } else {
+                        &self.network_owner
+                    };
+                    let stdout = if matches!(
+                        self.network_inspect_behavior,
+                        NetworkInspectBehavior::Malformed
+                    ) {
+                        "network-id|owner-without-scope".to_owned()
+                    } else if format.contains(".Id") {
+                        format!("network-id|{owner}|{}", self.network_scope)
                     } else if format.contains(".Driver") {
                         format!(
                             "bridge|true|{}|{}|{}",
-                            self.bridge, self.network_owner, self.network_scope
+                            self.bridge, owner, self.network_scope
                         )
                     } else {
-                        format!("{}|{}", self.network_owner, self.network_scope)
+                        format!("{owner}|{}", self.network_scope)
                     };
                     return Ok(ExecOutput::new(0, stdout.into_bytes(), Vec::new()));
                 }
@@ -413,10 +447,11 @@ async fn ambiguous_network_create_keeps_the_original_error_when_absent_or_foreig
         let names = NetworkNames::for_box(namespace, &id);
         let mut host = PreparedNativeHost::new(&id, &names);
         host.network_create_behavior = NetworkCreateBehavior::HostErrorAfterSideEffect;
-        host.network_missing_on_inspect = absent;
-        if !absent {
-            host.network_owner = "another-box".to_owned();
-        }
+        host.network_inspect_behavior = if absent {
+            NetworkInspectBehavior::Absent
+        } else {
+            NetworkInspectBehavior::Foreign
+        };
         let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
         let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
 
@@ -435,6 +470,67 @@ async fn ambiguous_network_create_keeps_the_original_error_when_absent_or_foreig
                 .any(|argv| { argv.iter().any(|arg| arg == "rm") })
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn ambiguous_network_create_reports_rollback_uncertainty_when_inspection_fails() -> Result<()>
+{
+    let id = BoxId::new("box-create-inspect-uncertain")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.network_create_behavior = NetworkCreateBehavior::HostErrorAfterSideEffect;
+    host.network_inspect_behavior = NetworkInspectBehavior::Uncertain;
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+    let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
+
+    assert!(matches!(
+        controller.prepare(&host, namespace, &id, &allowlist).await,
+        Err(Error::Backend {
+            operation: "roll back egress network setup",
+            ref message,
+            ..
+        }) if message.contains("simulated lost command response")
+            && message.contains("could not be inspected")
+    ));
+    assert!(
+        !host
+            .commands()
+            .iter()
+            .any(|argv| { argv.iter().any(|arg| arg == "rm") })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn ambiguous_network_create_retains_ownership_uncertainty_for_malformed_inspection()
+-> Result<()> {
+    let id = BoxId::new("box-create-inspect-malformed")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.network_create_behavior = NetworkCreateBehavior::HostErrorAfterSideEffect;
+    host.network_inspect_behavior = NetworkInspectBehavior::Malformed;
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+    let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
+
+    assert!(matches!(
+        controller.prepare(&host, namespace, &id, &allowlist).await,
+        Err(Error::Backend {
+            operation: "roll back egress network setup",
+            ref message,
+            ..
+        }) if message.contains("ownership could not be verified")
+    ));
+    assert!(
+        !host
+            .commands()
+            .iter()
+            .any(|argv| { argv.iter().any(|arg| arg == "rm") })
+    );
     Ok(())
 }
 
