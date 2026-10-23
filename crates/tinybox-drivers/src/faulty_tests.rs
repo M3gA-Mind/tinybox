@@ -42,6 +42,9 @@ pub(crate) struct Faulty {
     source_replacement: Mutex<Option<(String, Value)>>,
     target_replacement: Mutex<Option<(String, Value)>>,
     receipt_race: std::sync::atomic::AtomicBool,
+    /// Like a host that owns the schema: declaring any collection outside this
+    /// list is refused.
+    grant: Option<Vec<String>>,
 }
 
 impl Faulty {
@@ -69,6 +72,7 @@ impl Faulty {
             source_replacement: Mutex::new(None),
             target_replacement: Mutex::new(None),
             receipt_race: std::sync::atomic::AtomicBool::new(false),
+            grant: None,
         })
     }
 
@@ -82,6 +86,7 @@ impl Faulty {
             source_replacement: Mutex::new(None),
             target_replacement: Mutex::new(None),
             receipt_race: std::sync::atomic::AtomicBool::new(false),
+            grant: None,
         })
     }
 
@@ -95,6 +100,7 @@ impl Faulty {
             source_replacement: Mutex::new(None),
             target_replacement: Mutex::new(None),
             receipt_race: std::sync::atomic::AtomicBool::new(false),
+            grant: None,
         })
     }
 
@@ -112,6 +118,7 @@ impl Faulty {
             source_replacement: Mutex::new(Some((source_id, replacement))),
             target_replacement: Mutex::new(None),
             receipt_race: std::sync::atomic::AtomicBool::new(false),
+            grant: None,
         })
     }
 
@@ -129,6 +136,23 @@ impl Faulty {
             source_replacement: Mutex::new(None),
             target_replacement: Mutex::new(Some((target_id, replacement))),
             receipt_race: std::sync::atomic::AtomicBool::new(false),
+            grant: None,
+        })
+    }
+
+    /// Refuses to declare any collection but `granted`, as a host that owns
+    /// the module's schema does (`schema-is-host-only`).
+    pub(crate) fn granting(inner: Arc<dyn DocumentStore>, granted: &[&str]) -> Arc<Self> {
+        Arc::new(Self {
+            failing: Failing::new(Arc::clone(&inner)),
+            inner,
+            conflicts: AtomicUsize::new(0),
+            fail_target_readback: false,
+            target_written: std::sync::atomic::AtomicBool::new(false),
+            source_replacement: Mutex::new(None),
+            target_replacement: Mutex::new(None),
+            receipt_race: std::sync::atomic::AtomicBool::new(false),
+            grant: Some(granted.iter().map(|name| (*name).to_owned()).collect()),
         })
     }
 
@@ -142,6 +166,7 @@ impl Faulty {
             source_replacement: Mutex::new(None),
             target_replacement: Mutex::new(None),
             receipt_race: std::sync::atomic::AtomicBool::new(true),
+            grant: None,
         })
     }
 }
@@ -153,6 +178,11 @@ impl DocumentStore for Faulty {
     }
 
     async fn ensure_collection(&self, spec: &CollectionSpec) -> Result<()> {
+        if let Some(grant) = &self.grant
+            && !grant.contains(&spec.name)
+        {
+            return Err(StorageError::invalid_input("schema-is-host-only"));
+        }
         self.failing
             .call("ensure", self.inner.ensure_collection(spec))
             .await

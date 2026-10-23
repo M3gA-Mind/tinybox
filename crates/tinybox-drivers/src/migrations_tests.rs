@@ -712,3 +712,59 @@ async fn malformed_receipts_and_failed_target_writes_preserve_migration_sources(
     );
     Ok(())
 }
+
+/// The current collection names, as a host that owns the module's schema
+/// grants them.
+fn granted_collections() -> Vec<String> {
+    collections().into_iter().map(|spec| spec.name).collect()
+}
+
+fn with_host_grant(storage: &Storage) -> Storage {
+    let granted = granted_collections();
+    let granted: Vec<&str> = granted.iter().map(String::as_str).collect();
+    Storage::new(
+        Faulty::granting(Arc::clone(storage.documents()), &granted),
+        Arc::clone(storage.streams()),
+        Arc::clone(storage.kv()),
+        Arc::clone(storage.blobs()),
+        Arc::clone(storage.queues()),
+        Arc::clone(storage.secrets()),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_owned_schema_refuses_what_open_declares_but_not_a_host_managed_open() -> TestResult
+{
+    let granted = with_host_grant(&storage("host-grant")?);
+
+    assert!(
+        DocumentBoxStore::open(granted.clone()).await.is_err(),
+        "open declares the v1 sources, which the host's grant refuses"
+    );
+    DocumentBoxStore::open_host_managed(granted.clone()).await?;
+    DocumentIndexStore::open_host_managed(granted, "registry").await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_managed_open_migrates_nothing() -> TestResult {
+    let storage = storage("host-managed")?;
+    seed_legacy(&storage, "legacy", old_box("legacy"), None).await?;
+
+    DocumentBoxStore::open_host_managed(storage.clone()).await?;
+
+    let documents = storage.documents();
+    assert!(
+        documents
+            .get(MIGRATIONS_COLLECTION, BOXES_STEP)
+            .await?
+            .is_none(),
+        "no receipt is written: the host's import owns the migration"
+    );
+    assert!(documents.get(BOX_COLLECTION, "legacy").await?.is_none());
+    assert!(
+        documents.get(V1_BOX_COLLECTION, "legacy").await?.is_some(),
+        "the v1 row is left for the host"
+    );
+    Ok(())
+}
