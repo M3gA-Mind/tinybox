@@ -574,7 +574,8 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
         })?;
 
         let resolver: Arc<dyn EgressResolver> = Arc::new(FixedResolver(vec![ipv4, ipv6]));
-        let sandbox = sandbox(&format!("ns-egress-{}", &suffix[..8]))?
+        let namespace = format!("ns-egress-{}", &suffix[..8]);
+        let sandbox = sandbox(&namespace)?
             .with_egress_controller(Arc::new(NativeLinuxDockerEgressController::new(resolver)));
         let allowlist = EgressAllowlist::new(["listener.test"], [18373]);
         let info = sandbox
@@ -586,16 +587,31 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
             .await?;
 
         let probes = async {
-        sandbox
+        let file_setup = sandbox
             .exec(
                 &info.id,
-                &ExecRequest::new([
-                    "sh",
-                    "-c",
-                    "printf 'published-ok\\n' >/tmp/index.html; httpd -f -p 18375 -h /tmp >/dev/null 2>&1 &",
-                ]),
+                &ExecRequest::new(["sh", "-c", "printf 'published-ok\\n' >/tmp/index.html"]),
             )
             .await?;
+        if file_setup.exit_code != 0 {
+            return Err(Error::Backend {
+                sandbox: "docker".to_owned(),
+                operation: "prepare the published-port response",
+                message: file_setup.stderr_lossy(),
+            });
+        }
+        let container = format!("tinybox-{namespace}-{}", info.id);
+        docker_command(&[
+            "exec",
+            "-d",
+            &container,
+            "httpd",
+            "-f",
+            "-p",
+            "0.0.0.0:18375",
+            "-h",
+            "/tmp",
+        ])?;
         let published_port = sandbox
             .published_ports(&info.id)
             .await?
