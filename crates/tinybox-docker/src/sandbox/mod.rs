@@ -321,9 +321,7 @@ impl DockerSandbox {
     /// Remove a named container, treating Docker's explicit missing-container
     /// response as an already-completed cleanup.
     async fn remove_container(&self, argv: Vec<String>) -> Result<()> {
-        let output = self
-            .run_docker(&ExecRequest::new(self.docker_argv(argv)))
-            .await?;
+        let output = self.run_docker(&ExecRequest::new(argv)).await?;
         if output.succeeded() || output.stderr_lossy().contains("No such container") {
             return Ok(());
         }
