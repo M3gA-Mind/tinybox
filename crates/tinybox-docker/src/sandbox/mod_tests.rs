@@ -319,6 +319,30 @@ fn docker_env_file_rewrite_preserves_exec_workload_arguments() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn remote_docker_client_keeps_tls_environment_without_a_local_env_file() -> Result<()> {
+    let host = super::ControllerHost {
+        inner: ScriptedHost::remote(),
+        controller: Arc::new(RecordingEgressController),
+    };
+    let mut request = ExecRequest::new([
+        "docker",
+        "run",
+        "--env",
+        "DOCKER_TLS_VERIFY",
+        "--",
+        "image",
+    ]);
+    request
+        .env
+        .insert("DOCKER_TLS_VERIFY".to_owned(), "1".to_owned());
+
+    let prepared = host.request(&request)?;
+    assert_eq!(prepared.request.argv, request.argv);
+    assert_eq!(prepared.request.env, request.env);
+    Ok(())
+}
+
 #[tokio::test]
 async fn allowlist_controller_prepares_before_start_and_cleans_after_destroy() -> Result<()> {
     let host = ScriptedHost::silent();
@@ -759,6 +783,13 @@ impl ScriptedHost {
     fn local() -> Arc<Self> {
         Arc::new(Self {
             location: Some(HostExecutionLocation::Local),
+            ..Self::default()
+        })
+    }
+
+    fn remote() -> Arc<Self> {
+        Arc::new(Self {
+            location: Some(HostExecutionLocation::Remote),
             ..Self::default()
         })
     }
