@@ -101,6 +101,9 @@ impl PreparedEgressNetwork {
 /// a local native Linux Docker Engine with non-interactive firewall privilege.
 /// Docker Desktop, SSH/remote hosts, rootless Docker, Windows containers, and
 /// hosts without the expected firewall chains are refused.
+/// The controller also inspects Docker-assigned IPAM subnets and refuses a
+/// pinned destination contained in one, avoiding on-link routing around the
+/// intended gateway path.
 #[derive(Debug)]
 pub struct NativeLinuxDockerEgressController {
     resolver: Arc<dyn EgressResolver>,
