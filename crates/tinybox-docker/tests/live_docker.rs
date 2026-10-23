@@ -116,7 +116,7 @@ fn accept_before(listener: &TcpListener, deadline: Instant) -> std::io::Result<T
 fn exchange_before(address: SocketAddr, deadline: Instant) -> Result<Vec<u8>> {
     loop {
         match TcpStream::connect_timeout(&address, Duration::from_millis(100)) {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 stream
                     .set_read_timeout(Some(Duration::from_secs(1)))
                     .map_err(|error| Error::io("set published-port read timeout", &error))?;
