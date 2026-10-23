@@ -133,8 +133,7 @@ fn exchange_before(address: SocketAddr, deadline: Instant) -> Result<Vec<u8>> {
                         Err(error)
                             if matches!(
                                 error.kind(),
-                                std::io::ErrorKind::WouldBlock
-                                    | std::io::ErrorKind::TimedOut
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                             ) && Instant::now() < deadline =>
                         {
                             continue;
