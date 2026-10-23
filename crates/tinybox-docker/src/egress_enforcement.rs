@@ -162,6 +162,8 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
                 format!("{OWNER_LABEL}={id}"),
                 "--label".into(),
                 format!("{SCOPE_LABEL}={}", names.owner_token),
+                "--label".into(),
+                format!("{ATTEMPT_LABEL}={}", names.attempt_token),
                 names.network.clone(),
             ]),
         )
@@ -430,7 +432,10 @@ async fn verify_created_network(host: &dyn Host, names: &NetworkNames, id: &BoxI
         ],
     )
     .await?;
-    let expected = format!("bridge|true|{}|{id}|{}", names.bridge, names.owner_token);
+    let expected = format!(
+        "bridge|true|{}|{id}|{}|{}",
+        names.bridge, names.owner_token, names.attempt_token
+    );
     if output != expected {
         return Err(unsupported(
             "Docker egress network did not match its verified configuration",
