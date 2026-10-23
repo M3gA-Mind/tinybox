@@ -102,6 +102,7 @@ pub(super) fn run(
     id: &BoxId,
     attempt: &str,
     spec: &BoxSpec,
+    allowlist_network: Option<&str>,
 ) -> Result<Vec<String>> {
     let mut argv = vec![
         "docker".to_owned(),
@@ -119,7 +120,11 @@ pub(super) fn run(
     ];
 
     argv.extend(resource_flags(&spec.resources));
-    argv.extend(network_flags(&spec.network));
+    if let Some(network) = allowlist_network {
+        argv.extend(["--network".to_owned(), network.to_owned()]);
+    } else {
+        argv.extend(network_flags(&spec.network));
+    }
     argv.extend(port_flags(spec));
 
     if let WorkspaceSource::LocalDir(path) = &spec.source {

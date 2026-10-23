@@ -522,7 +522,23 @@ impl Sandbox for DockerSandbox {
 
     async fn create(&self, spec: &BoxSpec) -> Result<BoxInfo> {
         spec.validate()?;
-        spec.network.refuse_allowlist(self.name())?;
+        let allowlist = match &spec.network {
+            NetworkPolicy::Allowlist(allowlist) => {
+                let controller = self.egress_controller.as_ref().ok_or_else(|| {
+                    Error::ConstraintNotEnforced {
+                        sandbox: NAME.to_owned(),
+                        constraint: tinybox_core::Constraint::Network,
+                        enforcement: tinybox_core::Enforcement::Unsupported,
+                    }
+                })?;
+                controller.validate_host(self.host.as_ref()).await?;
+                Some(allowlist)
+            }
+            _ => {
+                spec.network.refuse_allowlist(self.name())?;
+                None
+            }
+        };
         // The workspace is bind-mounted read-write, so it gets the one-shot
         // mount policy before any record or container exists.
         // ponytail: through an SSH host the daemon's filesystem is remote, so
@@ -542,11 +558,35 @@ impl Sandbox for DockerSandbox {
         let info =
             tinybox_core::insert_new(self.store.as_ref(), BoxState::Ready, spec, self.clock.now())?;
 
+        // Resolve and install the default-drop filter before Docker starts the
+        // image entrypoint. The controller is the only path that can make an
+        // allowlist runnable.
+        let network = if let Some(allowlist) = allowlist {
+            match self
+                .egress_controller
+                .as_ref()
+                .expect("allowlist requires a controller")
+                .prepare(self.host.as_ref(), &self.namespace, &info.id, allowlist)
+                .await
+            {
+                Ok(network) => Some(network),
+                Err(error) => {
+                    self.discard_failed_create_record(&info.id, &attempt);
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
+
         // Build the command before running anything, so a source this backend
         // cannot handle leaves no container behind.
-        let argv = match args::run(&self.namespace, &info.id, &attempt, spec) {
+        let argv = match args::run(&self.namespace, &info.id, &attempt, spec, network.as_deref()) {
             Ok(argv) => argv,
             Err(error) => {
+                if network.is_some() {
+                    let _ = self.cleanup_egress(&info.id).await;
+                }
                 self.discard_failed_create_record(&info.id, &attempt);
                 return Err(error);
             }
@@ -558,6 +598,9 @@ impl Sandbox for DockerSandbox {
             // Docker reports a name collision before creating a container.
             // Never remove that name: it belongs to the pre-existing owner.
             if is_name_conflict(&error) {
+                if network.is_some() {
+                    let _ = self.cleanup_egress(&info.id).await;
+                }
                 self.discard_failed_create_record(&info.id, &attempt);
                 return Err(error);
             }
@@ -579,6 +622,9 @@ impl Sandbox for DockerSandbox {
                         .await
                         .is_ok()
                     {
+                        if network.is_some() {
+                            let _ = self.cleanup_egress(&info.id).await;
+                        }
                         self.discard_failed_create_record(&info.id, &attempt);
                     } else {
                         self.failed_create_attempts
@@ -588,9 +634,15 @@ impl Sandbox for DockerSandbox {
                     }
                 }
                 Ok(_) => {
+                    if network.is_some() {
+                        let _ = self.cleanup_egress(&info.id).await;
+                    }
                     self.discard_failed_create_record(&info.id, &attempt);
                 }
                 Err(Error::Backend { message, .. }) if message.contains("No such container") => {
+                    if network.is_some() {
+                        let _ = self.cleanup_egress(&info.id).await;
+                    }
                     self.discard_failed_create_record(&info.id, &attempt);
                 }
                 Err(_) => {
@@ -881,6 +933,7 @@ impl Sandbox for DockerSandbox {
         // recoverable, a container without a record is a leak.
         self.remove_container(args::remove(&self.namespace, id))
             .await?;
+        self.cleanup_egress(id).await?;
         self.mark_observed_box_destroyed(id);
         self.acknowledge_observed_cleanup_for_destroyed_box(id);
         self.store.remove(id)?;
@@ -888,6 +941,15 @@ impl Sandbox for DockerSandbox {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(id);
+        Ok(())
+    }
+}
+
+impl DockerSandbox {
+    async fn cleanup_egress(&self, id: &BoxId) -> Result<()> {
+        if let Some(controller) = &self.egress_controller {
+            controller.cleanup(self.host.as_ref(), &self.namespace, id).await?;
+        }
         Ok(())
     }
 }
