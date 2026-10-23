@@ -71,6 +71,10 @@ impl NativeLinuxDockerEgressController {
     }
 }
 
+#[cfg(test)]
+#[path = "egress_enforcement_tests.rs"]
+mod tests;
+
 #[async_trait]
 impl DockerEgressController for NativeLinuxDockerEgressController {
     async fn validate_host(&self, host: &dyn Host) -> Result<()> {
