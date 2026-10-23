@@ -128,7 +128,7 @@ impl Host for BridgeLinkHost {
 
 #[test]
 fn allowlist_protocol_set_is_tcp_only() {
-    assert_eq!(super::ALLOWLIST_PROTOCOLS, ["tcp"]);
+    assert_eq!(&super::ALLOWLIST_PROTOCOLS[..], &["tcp"]);
 }
 
 #[tokio::test]
