@@ -155,6 +155,7 @@ impl PreparedNativeHost {
 }
 
 #[async_trait]
+#[allow(clippy::too_many_lines)] // The fake host models the firewall and Docker command surface.
 impl Host for PreparedNativeHost {
     fn name(&self) -> &'static str {
         "prepared-native"
@@ -272,13 +273,17 @@ impl Host for PreparedNativeHost {
                 let stdout = [&self.forward_chain, &self.input_chain]
                     .into_iter()
                     .filter(|chain| chains.contains(&(firewall.clone(), (*chain).clone())))
-                    .map(|chain| {
-                        format!(
-                            "-N {chain}\n-A {chain} -s 0.0.0.0/32 -m comment --comment {} -j DROP\n-A {chain} -j DROP\n",
+                    .fold(String::new(), |mut stdout, chain| {
+                        use std::fmt::Write as _;
+                        writeln!(
+                            stdout,
+                            "-N {chain}\n-A {chain} -s 0.0.0.0/32 -m comment --comment {} -j DROP\n-A {chain} -j DROP",
                             self.chain_owner_token
                         )
+                        .expect("writing to String cannot fail");
+                        stdout
                     })
-                    .collect::<String>();
+                    ;
                 return Ok(ExecOutput::new(0, stdout.into_bytes(), Vec::new()));
             }
             return Ok(ExecOutput::new(0, Vec::new(), Vec::new()));

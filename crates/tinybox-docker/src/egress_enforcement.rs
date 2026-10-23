@@ -4,7 +4,12 @@
 //! consumes pinned resolver answers and does not use proxy environment
 //! variables as an enforcement boundary.
 
-use std::{collections::BTreeSet, fmt::Debug, net::IpAddr, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    fmt::{Debug, Write},
+    net::IpAddr,
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
@@ -252,11 +257,12 @@ fn scope_token(namespace: &str, id: &str) -> String {
     hasher.update(namespace.as_bytes());
     hasher.update((id.len() as u64).to_be_bytes());
     hasher.update(id.as_bytes());
-    hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    let digest = hasher.finalize();
+    let mut token = String::with_capacity(64);
+    for byte in digest {
+        write!(&mut token, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    token
 }
 
 fn stable_hash(namespace: &[u8], id: &[u8]) -> u64 {
@@ -659,6 +665,7 @@ async fn verify_hook(
     firewall_success(host, firewall, ["-C", parent, "-i", bridge, "-j", chain]).await
 }
 
+#[allow(clippy::too_many_lines)] // Keep ownership preflight and cleanup order together.
 async fn cleanup_native(host: &dyn Host, namespace: &str, id: &BoxId) -> Result<()> {
     let names = NetworkNames::for_box(namespace, id);
     let inspect = docker_request(
