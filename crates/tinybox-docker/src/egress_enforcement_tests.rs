@@ -121,6 +121,7 @@ struct BridgeLinkHost {
 struct PreparedNativeHost {
     commands: Mutex<Vec<Vec<String>>>,
     chains: Mutex<std::collections::BTreeSet<(String, String)>>,
+    marked_chains: Mutex<std::collections::BTreeSet<(String, String)>>,
     fail_network_create: bool,
     empty_network_create: bool,
     fail_chain_marker: bool,
@@ -137,6 +138,7 @@ impl PreparedNativeHost {
         Self {
             commands: Mutex::new(Vec::new()),
             chains: Mutex::new(std::collections::BTreeSet::new()),
+            marked_chains: Mutex::new(std::collections::BTreeSet::new()),
             fail_network_create: false,
             empty_network_create: false,
             fail_chain_marker: false,
@@ -254,6 +256,10 @@ impl Host for PreparedNativeHost {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .remove(&(firewall, chain.clone()));
+                self.marked_chains
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&(firewall, chain.clone()));
             }
             if self.fail_chain_marker
                 && argv
@@ -265,6 +271,20 @@ impl Host for PreparedNativeHost {
                     Vec::new(),
                     b"injected owner marker failure".to_vec(),
                 ));
+            }
+            if argv.iter().any(|arg| arg == "--comment")
+                && let Some(index) = argv.iter().position(|arg| arg == "-A")
+                && let Some(chain) = argv.get(index + 1)
+            {
+                let firewall = argv
+                    .iter()
+                    .find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables"))
+                    .cloned()
+                    .unwrap_or_default();
+                self.marked_chains
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert((firewall, chain.clone()));
             }
             if argv.iter().any(|arg| arg == "FORWARD") {
                 return Ok(ExecOutput::new(
@@ -284,15 +304,23 @@ impl Host for PreparedNativeHost {
                     .chains
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let marked_chains = self
+                    .marked_chains
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let stdout = [&self.forward_chain, &self.input_chain]
                     .into_iter()
                     .filter(|chain| chains.contains(&(firewall.clone(), (*chain).clone())))
                     .fold(String::new(), |mut stdout, chain| {
-                        let _ = writeln!(
-                            stdout,
-                            "-N {chain}\n-A {chain} -s 0.0.0.0/32 -m comment --comment {} -j DROP\n-A {chain} -j DROP\n",
-                            self.chain_owner_token
-                        );
+                        let _ = writeln!(stdout, "-N {chain}");
+                        if marked_chains.contains(&(firewall.clone(), chain.clone())) {
+                            let _ = writeln!(
+                                stdout,
+                                "-A {chain} -s 0.0.0.0/32 -m comment --comment {} -j DROP",
+                                self.chain_owner_token
+                            );
+                        }
+                        let _ = writeln!(stdout, "-A {chain} -j DROP");
                         stdout
                     });
                 return Ok(ExecOutput::new(0, stdout.into_bytes(), Vec::new()));
