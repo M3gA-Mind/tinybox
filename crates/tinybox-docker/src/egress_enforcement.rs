@@ -4,12 +4,7 @@
 //! consumes pinned resolver answers and does not use proxy environment
 //! variables as an enforcement boundary.
 
-use std::{
-    collections::BTreeSet,
-    fmt::{Debug, Write},
-    net::IpAddr,
-    sync::Arc,
-};
+use std::{collections::BTreeSet, fmt::Debug, net::IpAddr, sync::Arc};
 
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
@@ -259,8 +254,10 @@ fn scope_token(namespace: &str, id: &str) -> String {
     hasher.update(id.as_bytes());
     let digest = hasher.finalize();
     let mut token = String::with_capacity(64);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     for byte in digest {
-        write!(&mut token, "{byte:02x}").expect("writing to String cannot fail");
+        token.push(char::from(HEX[usize::from(byte >> 4)]));
+        token.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     token
 }

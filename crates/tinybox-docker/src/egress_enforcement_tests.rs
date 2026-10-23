@@ -274,16 +274,12 @@ impl Host for PreparedNativeHost {
                     .into_iter()
                     .filter(|chain| chains.contains(&(firewall.clone(), (*chain).clone())))
                     .fold(String::new(), |mut stdout, chain| {
-                        use std::fmt::Write as _;
-                        writeln!(
-                            stdout,
-                            "-N {chain}\n-A {chain} -s 0.0.0.0/32 -m comment --comment {} -j DROP\n-A {chain} -j DROP",
+                        stdout.push_str(&format!(
+                            "-N {chain}\n-A {chain} -s 0.0.0.0/32 -m comment --comment {} -j DROP\n-A {chain} -j DROP\n",
                             self.chain_owner_token
-                        )
-                        .expect("writing to String cannot fail");
+                        ));
                         stdout
-                    })
-                    ;
+                    });
                 return Ok(ExecOutput::new(0, stdout.into_bytes(), Vec::new()));
             }
             return Ok(ExecOutput::new(0, Vec::new(), Vec::new()));
