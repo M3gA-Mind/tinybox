@@ -11,7 +11,7 @@ use tinybox_core::{BoxId, Error, ExecOutput, ExecRequest, Host, HostExecutionLoc
 
 use super::{
     DockerEgressController, NativeLinuxDockerEgressController, NetworkNames, deny_rules,
-    scope_token, stable_hash, verify_created_bridge_link,
+    force_local_rootful_docker, scope_token, stable_hash, verify_created_bridge_link,
 };
 use crate::EgressResolver;
 
@@ -99,6 +99,14 @@ impl EgressResolver for Resolver {
             IpAddr::from([203, 0, 113, 9]),
         ])
     }
+}
+
+#[test]
+fn local_docker_daemon_pinning_is_idempotent() {
+    let command = vec!["docker".to_owned(), "info".to_owned()];
+    let pinned = force_local_rootful_docker(command);
+
+    assert_eq!(force_local_rootful_docker(pinned.clone()), pinned);
 }
 
 #[derive(Debug)]
