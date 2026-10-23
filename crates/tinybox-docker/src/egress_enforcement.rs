@@ -563,7 +563,10 @@ async fn install_family(
     // to attach an image entrypoint to the network.
     for chain in [&names.forward_chain, &names.input_chain] {
         let rules = firewall_output(host, firewall, ["-S", chain]).await?;
-        if !rules.lines().any(|line| line.ends_with("-j DROP")) {
+        let chain_prefix = format!("-A {chain} ");
+        let expected_drop = format!("-A {chain} -j DROP");
+        let mut chain_rules = rules.lines().filter(|line| line.starts_with(&chain_prefix));
+        if chain_rules.next_back() != Some(expected_drop.as_str()) {
             return Err(unsupported("default-drop egress rules were not verified"));
         }
     }

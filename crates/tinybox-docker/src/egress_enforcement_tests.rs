@@ -142,6 +142,7 @@ struct PreparedNativeHost {
     marked_chains: Mutex<std::collections::BTreeSet<(String, String)>>,
     network_create_behavior: NetworkCreateBehavior,
     network_inspect_behavior: NetworkInspectBehavior,
+    missing_final_drop: Option<String>,
     empty_network_create: bool,
     fail_chain_marker: bool,
     network_owner: String,
@@ -160,6 +161,7 @@ impl PreparedNativeHost {
             marked_chains: Mutex::new(std::collections::BTreeSet::new()),
             network_create_behavior: NetworkCreateBehavior::Succeed,
             network_inspect_behavior: NetworkInspectBehavior::Owned,
+            missing_final_drop: None,
             empty_network_create: false,
             fail_chain_marker: false,
             network_owner: id.to_string(),
@@ -387,7 +389,9 @@ impl Host for PreparedNativeHost {
                                 self.chain_owner_token
                             );
                         }
-                        let _ = writeln!(stdout, "-A {chain} -j DROP");
+                        if self.missing_final_drop.as_deref() != Some(chain) {
+                            let _ = writeln!(stdout, "-A {chain} -j DROP");
+                        }
                         stdout
                     });
                 return Ok(ExecOutput::new(0, stdout.into_bytes(), Vec::new()));
@@ -397,6 +401,31 @@ impl Host for PreparedNativeHost {
 
         Ok(ExecOutput::new(0, Vec::new(), Vec::new()))
     }
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn owner_marker_drop_does_not_satisfy_default_drop_verification() -> Result<()> {
+    let id = BoxId::new("box-marker-is-not-default-drop")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.missing_final_drop = Some(names.forward_chain.clone());
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+    let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
+
+    assert!(matches!(
+        controller.prepare(&host, namespace, &id, &allowlist).await,
+        Err(Error::ConstraintNotEnforced {
+            constraint: tinybox_core::Constraint::Network,
+            enforcement: tinybox_core::Enforcement::Unsupported,
+            ..
+        })
+    ));
+    assert!(host.commands().iter().any(|argv| {
+        argv.iter().any(|arg| arg == "rm") && argv.iter().any(|arg| arg == &names.network)
+    }));
+    Ok(())
 }
 
 #[tokio::test]
