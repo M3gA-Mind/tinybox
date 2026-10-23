@@ -119,7 +119,7 @@ struct BridgeLinkHost {
 #[derive(Debug)]
 struct PreparedNativeHost {
     commands: Mutex<Vec<Vec<String>>>,
-    deleted_chains: Mutex<std::collections::BTreeSet<String>>,
+    chains: Mutex<std::collections::BTreeSet<String>>,
     fail_network_create: bool,
     empty_network_create: bool,
     network_owner: String,
@@ -134,7 +134,7 @@ impl PreparedNativeHost {
     fn new(id: &BoxId, names: &NetworkNames) -> Self {
         Self {
             commands: Mutex::new(Vec::new()),
-            deleted_chains: Mutex::new(std::collections::BTreeSet::new()),
+            chains: Mutex::new(std::collections::BTreeSet::new()),
             fail_network_create: false,
             empty_network_create: false,
             network_owner: id.to_string(),
@@ -225,13 +225,21 @@ impl Host for PreparedNativeHost {
             .iter()
             .any(|arg| arg == "iptables" || arg == "ip6tables")
         {
-            if let Some(index) = argv.iter().position(|arg| arg == "-X")
+            if let Some(index) = argv.iter().position(|arg| arg == "-N")
                 && let Some(chain) = argv.get(index + 1)
             {
-                self.deleted_chains
+                self.chains
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .insert(chain.clone());
+            }
+            if let Some(index) = argv.iter().position(|arg| arg == "-X")
+                && let Some(chain) = argv.get(index + 1)
+            {
+                self.chains
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(chain);
             }
             if argv.iter().any(|arg| arg == "FORWARD") {
                 return Ok(ExecOutput::new(
@@ -242,13 +250,13 @@ impl Host for PreparedNativeHost {
                 ));
             }
             if argv.iter().any(|arg| arg == "-S") {
-                let deleted = self
-                    .deleted_chains
+                let chains = self
+                    .chains
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let stdout = [&self.forward_chain, &self.input_chain]
                     .into_iter()
-                    .filter(|chain| !deleted.contains(*chain))
+                    .filter(|chain| chains.contains(*chain))
                     .map(|chain| {
                         format!(
                             "-N {chain}\n-A {chain} -s 0.0.0.0/32 -m comment --comment {} -j DROP\n-A {chain} -j DROP\n",
@@ -553,6 +561,10 @@ async fn cleanup_refuses_firewall_chains_with_another_owner_marker() -> Result<(
     let names = NetworkNames::for_box(namespace, &id);
     let mut host = PreparedNativeHost::new(&id, &names);
     host.chain_owner_token = "different-full-hash".to_owned();
+    host.chains
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .extend([names.forward_chain.clone(), names.input_chain.clone()]);
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
 
     assert!(controller.cleanup(&host, namespace, &id).await.is_err());
