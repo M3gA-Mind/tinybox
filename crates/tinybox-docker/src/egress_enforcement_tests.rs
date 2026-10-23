@@ -93,7 +93,10 @@ struct Resolver;
 
 impl EgressResolver for Resolver {
     fn resolve(&self, _hostname: &str) -> std::io::Result<Vec<IpAddr>> {
-        Ok(vec![IpAddr::from([203, 0, 113, 8])])
+        Ok(vec![
+            IpAddr::from([203, 0, 113, 8]),
+            IpAddr::from([203, 0, 113, 9]),
+        ])
     }
 }
 
@@ -279,7 +282,14 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
         host.commands()
     );
     let network = prepared?;
-    assert_eq!(network, names.network);
+    assert_eq!(network.network(), names.network);
+    assert_eq!(
+        network.host_mappings(),
+        [
+            ("service.test".to_owned(), IpAddr::from([203, 0, 113, 8])),
+            ("service.test".to_owned(), IpAddr::from([203, 0, 113, 9])),
+        ]
+    );
     controller.cleanup(&host, namespace, &id).await?;
 
     let commands = host.commands();

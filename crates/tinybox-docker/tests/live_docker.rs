@@ -443,7 +443,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
         IMAGE,
         "sh",
         "-c",
-        "(while true; do nc -l -p 18373 >/dev/null; echo hit >> /tmp/allowed; done) & (while true; do nc -l -p 18374 >/dev/null; echo hit >> /tmp/blocked; done) & wait",
+        "(while true; do nc -l -p 18373 >/dev/null; echo hit >> /tmp/allowed; done) & (while true; do nc -l -p 18374 >/dev/null; echo hit >> /tmp/blocked; done) & (while true; do nc -u -l -p 53 >/dev/null; echo hit >> /tmp/dns; done) & wait",
     ]);
     let _ = image?;
     let result = async {
@@ -474,7 +474,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 &ExecRequest::new([
                     "sh",
                     "-c",
-                    &format!("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -z -w 3 {ip} {ALLOWED_PORT}"),
+                    &format!("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -z -w 3 listener.test {ALLOWED_PORT}"),
                 ]),
             )
             .await;
@@ -498,6 +498,26 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 ]),
             )
             .await;
+        let dns_blocked = sandbox
+            .exec(
+                &info.id,
+                &ExecRequest::new([
+                    "sh",
+                    "-c",
+                    "unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nslookup unlisted-name.test >/dev/null 2>&1",
+                ]),
+            )
+            .await;
+        let direct_dns = sandbox
+            .exec(
+                &info.id,
+                &ExecRequest::new([
+                    "sh",
+                    "-c",
+                    &format!("printf probe | nc -u -w 1 {ip} 53 || true"),
+                ]),
+            )
+            .await;
         let host_listener_untouched = matches!(
             accept_before(&host_listener, Instant::now() + Duration::from_millis(250)),
             Err(error) if error.kind() == std::io::ErrorKind::TimedOut
@@ -508,30 +528,43 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
             .args(["exec", &target_name, "sh", "-c", "test ! -s /tmp/blocked"])
             .status()
             .map_err(|error| Error::io("check forbidden listener", &error));
+        let dns_hits = Command::new("docker")
+            .args(["exec", &target_name, "sh", "-c", "test ! -s /tmp/dns"])
+            .status()
+            .map_err(|error| Error::io("check forbidden DNS listener", &error));
 
         // Cleanup runs before any assertion is returned to the test harness.
         let destroy = sandbox.destroy(&info.id).await;
         let allowed = allowed?;
         let blocked = blocked?;
         let host_gateway = host_gateway?;
+        let dns_blocked = dns_blocked?;
+        let direct_dns = direct_dns?;
         destroy?;
         allowed_hits?;
         let blocked_hits = blocked_hits?;
+        let dns_hits = dns_hits?;
         if allowed.exit_code != 0
             || blocked.exit_code == 0
             || host_gateway.exit_code == 0
+            || dns_blocked.exit_code == 0
+            || direct_dns.exit_code != 0
             || !blocked_hits.success()
+            || !dns_hits.success()
             || !host_listener_untouched
         {
             return Err(Error::Backend {
                 sandbox: "docker".to_owned(),
                 operation: "verify native egress allowlist",
                 message: format!(
-                    "allowed exit={}, blocked exit={}, host-gateway exit={}, forbidden listener hit={}, host listener touched={}",
+                    "allowed exit={}, blocked exit={}, host-gateway exit={}, unlisted DNS lookup exit={}, direct DNS send exit={}, forbidden TCP hit={}, forbidden DNS hit={}, host listener touched={}",
                     allowed.exit_code,
                     blocked.exit_code,
                     host_gateway.exit_code,
+                    dns_blocked.exit_code,
+                    direct_dns.exit_code,
                     !blocked_hits.success(),
+                    !dns_hits.success(),
                     !host_listener_untouched
                 ),
             });

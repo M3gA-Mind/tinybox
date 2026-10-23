@@ -35,10 +35,16 @@ impl super::DockerEgressController for RecordingEgressController {
         _namespace: &str,
         _id: &BoxId,
         _allowlist: &tinybox_core::EgressAllowlist,
-    ) -> Result<String> {
+    ) -> Result<crate::PreparedEgressNetwork> {
         host.run(&ExecRequest::new(["controller", "prepare"]))
             .await?;
-        Ok("tinybox-allowlist-test".to_owned())
+        Ok(crate::PreparedEgressNetwork::new(
+            "tinybox-allowlist-test".to_owned(),
+            vec![(
+                "api.example.test".to_owned(),
+                std::net::IpAddr::from([203, 0, 113, 10]),
+            )],
+        ))
     }
 
     async fn cleanup(&self, host: &dyn Host, _namespace: &str, _id: &BoxId) -> Result<()> {
@@ -67,6 +73,10 @@ async fn allowlist_controller_prepares_before_start_and_cleans_after_destroy() -
     assert_eq!(commands[1][0], "docker");
     assert!(commands[1].contains(&"--network".to_owned()));
     assert!(commands[1].contains(&"tinybox-allowlist-test".to_owned()));
+    assert_eq!(flag_value(&commands[1], "--dns"), Some("127.0.0.1"));
+    assert!(commands[1].windows(2).any(|args| {
+        args[0] == "--add-host" && args[1] == "api.example.test:203.0.113.10"
+    }));
 
     sandbox.destroy(&info.id).await?;
     let commands = host.commands();
@@ -174,7 +184,7 @@ async fn controller_failure_rolls_back_before_dropping_the_box_record() -> Resul
             _namespace: &str,
             _id: &BoxId,
             _allowlist: &tinybox_core::EgressAllowlist,
-        ) -> Result<String> {
+        ) -> Result<crate::PreparedEgressNetwork> {
             host.run(&ExecRequest::new(["controller", "prepare"]))
                 .await?;
             Err(Error::ConstraintNotEnforced {
@@ -273,7 +283,7 @@ async fn failed_egress_rollback_retains_box_record_for_cleanup_retry() -> Result
             _namespace: &str,
             _id: &BoxId,
             _allowlist: &tinybox_core::EgressAllowlist,
-        ) -> Result<String> {
+        ) -> Result<crate::PreparedEgressNetwork> {
             Err(Error::ConstraintNotEnforced {
                 sandbox: NAME.to_owned(),
                 constraint: tinybox_core::Constraint::Network,
