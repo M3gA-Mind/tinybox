@@ -260,7 +260,9 @@ The host retains approval policy and chooses the credential paths; it sends them
 as `deny_read` (1.20). The module retains prospective paths and resolves them
 against current filesystem aliases both at preflight and immediately before
 spawn. It refuses a denial covering the root or a writable grant. Seatbelt can
-carve a nested denial out of a writable grant; allow-list backends refuse any
+carve a denial that is a direct child of a writable grant (or of the root or
+`/private/tmp`), and refuses a deeper one, which a rename of the directory in
+between would move out of its path-based rule; allow-list backends refuse any
 overlap they cannot subtract. Landlock reports its implicit system and device
 baseline grants so credential denials cannot be overridden by those grants;
 direct Landlock backend calls repeat this check at spawn. Paths outside every

@@ -22,7 +22,18 @@ least 19, which `tinybox_bus::is_compatible` already enforces.
 - Cloud metadata endpoints (`169.254.169.254`, `169.254.170.2`,
   `100.100.100.200`, `fd00:ec2::254`, `metadata.google.internal`) are refused
   when the spec is validated, and a backend must also block them when a name
-  resolves to one.
+  resolves to one. DNS names are matched case-insensitively with an optional
+  terminal root dot, so `Metadata.Google.Internal.` is refused as well.
+- Legacy numeric IPv4 spellings that represent a listed metadata address are
+  refused too, including `0251.0376.0251.0376` and `0xa9fea9fe` for
+  `169.254.169.254`.
+- Explicit loopback entries are refused during validation: IPv4/IPv6 loopback
+  literals (including IPv4-mapped IPv6 and scoped forms such as `::1%1`),
+  `localhost` and `.localhost` names, and legacy numeric IPv4 spellings
+  accepted by common resolvers, such as `127.1`, `2130706433`, `0x7f000001`,
+  and `0177.0.0.1`. This check applies to entries as written; an enforcing
+  backend must also block resolved loopback addresses. It does not by itself
+  provide DNS-rebinding protection.
 - A backend that cannot enforce the list refuses the box with
   `ConstraintNotEnforced { constraint: Network, enforcement: Unsupported }`.
   It never widens the list to `Egress`. A backend that enforces only part of it

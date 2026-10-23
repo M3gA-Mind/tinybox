@@ -15,8 +15,18 @@
 //! ```sh
 //! TINYBOX_LIVE_DOCKER=1 cargo test -p tinybox-docker --test live_docker
 //! ```
+//!
+//! CI also sets `TINYBOX_REQUIRE_LIVE_DOCKER=1`; in that mode the focused
+//! connectivity test fails if the opt-in gate was not enabled.
 
-use std::sync::Arc;
+use std::{
+    io::{Read, Write},
+    net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+    process::Command,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use tinybox_core::{
     BoxSpec, Error, ExecRequest, Host as _, HostRef, MemoryStore, NetworkPolicy, Placement, Result,
@@ -31,6 +41,101 @@ const IMAGE: &str = "alpine:3";
 /// Whether the live suite should run at all.
 fn enabled() -> bool {
     std::env::var_os("TINYBOX_LIVE_DOCKER").is_some()
+}
+
+/// Enforce the CI opt-in contract and report whether live Docker tests should run.
+fn live_docker_enabled() -> Result<bool> {
+    let enabled = enabled();
+    if std::env::var_os("TINYBOX_REQUIRE_LIVE_DOCKER").is_some() && !enabled {
+        return Err(Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "run required live network test",
+            message: "TINYBOX_REQUIRE_LIVE_DOCKER is set but TINYBOX_LIVE_DOCKER is not enabled"
+                .to_owned(),
+        });
+    }
+    Ok(enabled)
+}
+
+/// Return the default bridge gateway used as the controlled listener address.
+fn docker_bridge_gateway() -> Result<Ipv4Addr> {
+    let output = Command::new("docker")
+        .args([
+            "network",
+            "inspect",
+            "bridge",
+            "--format",
+            "{{(index .IPAM.Config 0).Gateway}}",
+        ])
+        .output()
+        .map_err(|error| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "inspect the default bridge gateway",
+            message: error.to_string(),
+        })?;
+    if !output.status.success() {
+        return Err(Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "inspect the default bridge gateway",
+            message: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .map_err(|error| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "parse the default bridge gateway",
+            message: format!(
+                "{}: {error}",
+                String::from_utf8_lossy(&output.stdout).trim()
+            ),
+        })
+}
+
+/// Accept one connection before `deadline`, polling a nonblocking listener.
+fn accept_before(listener: &TcpListener, deadline: Instant) -> std::io::Result<TcpStream> {
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => return Ok(stream),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "timed out waiting for the Docker network probe",
+                    ));
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Build the bounded HTTP request the container uses to probe the listener.
+fn http_probe_command(address: SocketAddr) -> String {
+    format!("wget -q -T 3 -O - http://{address}/probe")
+}
+
+/// Confirm the host can connect before using this listener to test container policy.
+fn prove_host_can_reach_listener(listener: &TcpListener, address: SocketAddr) -> Result<()> {
+    let host = TcpStream::connect_timeout(&address, Duration::from_secs(3)).map_err(|error| {
+        Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "connect the host positive control",
+            message: error.to_string(),
+        }
+    })?;
+    let _accepted_host =
+        accept_before(listener, Instant::now() + Duration::from_secs(3)).map_err(|error| {
+            Error::Backend {
+                sandbox: "docker".to_owned(),
+                operation: "accept the host positive control",
+                message: error.to_string(),
+            }
+        })?;
+    drop(host);
+    Ok(())
 }
 
 /// A sandbox in its own namespace.
@@ -168,6 +273,106 @@ async fn live_egress_is_available_when_the_policy_allows_it() -> Result<()> {
     sandbox.destroy(&info.id).await?;
     let interfaces: usize = result?.parse().unwrap_or(0);
     assert!(interfaces > 1, "expected more than loopback");
+    Ok(())
+}
+
+/// Checks host, Egress, and default-Denied connectivity to a controlled listener.
+#[tokio::test]
+async fn live_network_policy_controls_host_listener_connectivity() -> Result<()> {
+    if !live_docker_enabled()? {
+        return Ok(());
+    }
+
+    let gateway = docker_bridge_gateway()?;
+    let listener = TcpListener::bind((gateway, 0)).map_err(|error| Error::Backend {
+        sandbox: "docker".to_owned(),
+        operation: "bind the controlled bridge-gateway listener",
+        message: error.to_string(),
+    })?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "configure the controlled listener",
+            message: error.to_string(),
+        })?;
+    let address = listener.local_addr().map_err(|error| Error::Backend {
+        sandbox: "docker".to_owned(),
+        operation: "read the controlled listener address",
+        message: error.to_string(),
+    })?;
+
+    // Prove the local endpoint is reachable before it is used as a sandbox
+    // policy probe.
+    prove_host_can_reach_listener(&listener, address)?;
+
+    let egress_sandbox = sandbox("ns-docker-network-egress")?;
+    let egress_info = egress_sandbox
+        .create(&spec()?.with_network(NetworkPolicy::Egress))
+        .await?;
+    let egress_listener = listener.try_clone().map_err(|error| Error::Backend {
+        sandbox: "docker".to_owned(),
+        operation: "clone the controlled listener",
+        message: error.to_string(),
+    })?;
+    let egress_server = thread::spawn(move || -> std::io::Result<()> {
+        let mut stream = accept_before(&egress_listener, Instant::now() + Duration::from_secs(5))?;
+        let mut request = [0_u8; 1024];
+        let _ = stream.read(&mut request)?;
+        stream.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\ndocker-ok",
+        )
+    });
+    let egress_result = egress_sandbox
+        .exec(
+            &egress_info.id,
+            &ExecRequest::new(["sh", "-c", &http_probe_command(address)]),
+        )
+        .await;
+    let egress_server_result = egress_server.join().map_err(|_| Error::Backend {
+        sandbox: "docker".to_owned(),
+        operation: "join the Egress listener",
+        message: "listener thread panicked".to_owned(),
+    })?;
+    let egress_destroy = egress_sandbox.destroy(&egress_info.id).await;
+    let egress = egress_result?;
+    egress_destroy?;
+    assert_eq!(
+        egress.exit_code,
+        0,
+        "Egress container could not reach the listener: {}",
+        egress.stderr_lossy()
+    );
+    egress_server_result.map_err(|error| Error::Backend {
+        sandbox: "docker".to_owned(),
+        operation: "accept the Egress container connection",
+        message: error.to_string(),
+    })?;
+    assert_eq!(egress.stdout_lossy().trim(), "docker-ok");
+
+    let denied_sandbox = sandbox("ns-docker-network-denied")?;
+    let denied_info = denied_sandbox.create(&spec()?).await?;
+    let denied = denied_sandbox
+        .exec(
+            &denied_info.id,
+            &ExecRequest::new(["sh", "-c", &http_probe_command(address)]),
+        )
+        .await;
+    let no_denied_connection = matches!(
+        accept_before(&listener, Instant::now() + Duration::from_millis(250)),
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut
+    );
+    let denied_destroy = denied_sandbox.destroy(&denied_info.id).await;
+    let denied = denied?;
+    denied_destroy?;
+    assert_ne!(
+        denied.exit_code, 0,
+        "default-Denied container unexpectedly fetched the local response"
+    );
+    assert!(
+        no_denied_connection,
+        "default-Denied container established a connection to the controlled listener"
+    );
     Ok(())
 }
 
