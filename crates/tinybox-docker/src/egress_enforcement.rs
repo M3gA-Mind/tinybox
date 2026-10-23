@@ -725,8 +725,8 @@ async fn cleanup_native_with_attempt(
             .lines()
             .any(|line| line == format!("-N {chain}") || line.starts_with(&chain_prefix));
         if chain_exists {
-            let created_by_attempt = attempt_owned_chains
-                .contains(&(firewall.to_owned(), chain.to_owned()));
+            let created_by_attempt =
+                attempt_owned_chains.contains(&(firewall.to_owned(), chain.to_owned()));
             if !created_by_attempt && !chain_has_owner_marker(&rules, chain, &names.owner_token) {
                 return Err(unsupported(
                     "egress firewall chain ownership could not be verified",

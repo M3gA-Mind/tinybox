@@ -386,6 +386,7 @@ async fn existing_local_bridge_link_is_verified() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
 async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()> {
     let id = BoxId::new("box-0")?;
     let namespace = "test";
@@ -541,6 +542,7 @@ fn assert_input_return_rules(commands: &[Vec<String>], names: &NetworkNames) -> 
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
 async fn native_controller_maps_ipv4_mapped_answers_as_ipv4() -> Result<()> {
     let id = BoxId::new("box-mapped")?;
     let namespace = "test";
@@ -669,6 +671,7 @@ fn firewall_owner_token_uses_unambiguous_sha256_identity() {
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
 async fn network_name_conflict_does_not_clean_an_existing_owners_firewall() -> Result<()> {
     let id = BoxId::new("box-0")?;
     let namespace = "test";
@@ -694,6 +697,7 @@ async fn network_name_conflict_does_not_clean_an_existing_owners_firewall() -> R
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
 async fn empty_successful_network_create_rolls_back_the_owned_network() -> Result<()> {
     let id = BoxId::new("box-0")?;
     let namespace = "test";
@@ -717,6 +721,7 @@ async fn empty_successful_network_create_rolls_back_the_owned_network() -> Resul
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
 async fn marker_install_failure_rolls_back_only_the_created_chain_and_network() -> Result<()> {
     let id = BoxId::new("box-marker-failure")?;
     let namespace = "test";
@@ -736,11 +741,32 @@ async fn marker_install_failure_rolls_back_only_the_created_chain_and_network() 
     assert!(commands.iter().any(|argv| {
         argv.iter().any(|arg| arg == "rm") && argv.iter().any(|arg| arg == &names.network)
     }));
-    assert!(host
-        .chains
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .is_empty());
+    assert!(
+        host.chains
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tokio::test]
+async fn native_controller_refuses_non_linux_before_host_commands() -> Result<()> {
+    let id = BoxId::new("box-non-linux")?;
+    let names = NetworkNames::for_box("test", &id);
+    let host = PreparedNativeHost::new(&id, &names);
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+
+    assert!(matches!(
+        controller.validate_host(&host).await,
+        Err(Error::ConstraintNotEnforced {
+            constraint: tinybox_core::Constraint::Network,
+            enforcement: tinybox_core::Enforcement::Unsupported,
+            ..
+        })
+    ));
+    assert!(host.commands().is_empty());
     Ok(())
 }
 
