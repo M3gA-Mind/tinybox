@@ -373,6 +373,7 @@ async fn live_network_policy_controls_host_listener_connectivity() -> Result<()>
         no_denied_connection,
         "default-Denied container established a connection to the controlled listener"
     );
+    live_allowlist_pins_destinations_and_blocks_other_raw_tcp().await?;
     Ok(())
 }
 
@@ -409,7 +410,6 @@ fn docker_command(arguments: &[&str]) -> Result<String> {
 /// Both listeners run in a separate, test-owned bridge container, so this
 /// exercises raw TCP from the sandbox without opening a path to the Docker
 /// host or relying on a public service.
-#[tokio::test]
 async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<()> {
     if !live_docker_enabled()? {
         return Ok(());

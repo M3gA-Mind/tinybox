@@ -32,19 +32,11 @@ jobs:
           gateway="$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')"
           test -n "$gateway"
           echo "Docker bridge gateway: $gateway"
-      - name: Prove Egress, default-Denied, and pinned allowlist connectivity
+      - name: Prove Egress connectivity and default-Denied refusal
         env:
           TINYBOX_LIVE_DOCKER: "1"
           TINYBOX_REQUIRE_LIVE_DOCKER: "1"
         run: >-
           cargo test --locked -p tinybox-docker --test live_docker
           live_network_policy_controls_host_listener_connectivity --
-          --nocapture --test-threads=1
-      - name: Prove native allowlist blocks direct raw TCP outside pinned ports
-        env:
-          TINYBOX_LIVE_DOCKER: "1"
-          TINYBOX_REQUIRE_LIVE_DOCKER: "1"
-        run: >-
-          cargo test --locked -p tinybox-docker --test live_docker
-          live_allowlist_pins_destinations_and_blocks_other_raw_tcp --
           --nocapture --test-threads=1
