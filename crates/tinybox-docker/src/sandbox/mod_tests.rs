@@ -391,12 +391,11 @@ async fn failed_egress_rollback_retains_box_record_for_cleanup_retry() -> Result
             _allowlist: &tinybox_core::EgressAllowlist,
         ) -> Result<crate::PreparedEgressNetwork> {
             // The controller owns its partial setup rollback. If that rollback
-            // fails, it reports the distinct operation so the sandbox retains
+            // fails, it reports the typed error so the sandbox retains
             // the box record for a later destroy retry without issuing a
             // second, potentially unsafe cleanup.
-            Err(Error::Backend {
+            Err(Error::EgressRollbackFailed {
                 sandbox: NAME.to_owned(),
-                operation: "controller-specific rollback operation",
                 message: "cleanup failed: filter unavailable".to_owned(),
             })
         }
@@ -424,7 +423,7 @@ async fn failed_egress_rollback_retains_box_record_for_cleanup_retry() -> Result
         sandbox
             .create(&spec()?.with_network(NetworkPolicy::Allowlist(allowlist)))
             .await,
-        Err(Error::Backend { operation: "controller-specific rollback operation", message, .. }) if message.contains("cleanup failed")
+        Err(Error::EgressRollbackFailed { message, .. }) if message.contains("cleanup failed")
     ));
     assert_eq!(store.list()?.len(), 1);
     Ok(())
@@ -482,7 +481,7 @@ async fn failed_create_cleanup_retains_the_record_for_retry() -> Result<()> {
 
     assert!(matches!(
         error,
-        Error::Backend { operation: "roll back egress network setup", ref message, .. }
+        Error::EgressRollbackFailed { ref message, .. }
             if message.contains("start failed") && message.contains("filter unavailable")
     ));
     assert_eq!(store.list()?.len(), 1);
