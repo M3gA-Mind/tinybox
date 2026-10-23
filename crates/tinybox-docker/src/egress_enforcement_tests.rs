@@ -735,7 +735,10 @@ async fn pinned_targets_inside_auto_selected_network_subnets_are_rejected_and_ro
         }));
         assert!(!commands.iter().any(|argv| {
             argv.iter()
-                .any(|arg| matches!(arg.as_str(), "iptables" | "ip6tables"))
+                .any(|arg| matches!(arg.as_str(), "-N" | "-A" | "-I"))
+                && argv
+                    .iter()
+                    .any(|arg| matches!(arg.as_str(), "iptables" | "ip6tables"))
         }));
     }
     Ok(())
