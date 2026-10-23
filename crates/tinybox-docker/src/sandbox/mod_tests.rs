@@ -376,6 +376,69 @@ async fn failed_egress_rollback_retains_box_record_for_cleanup_retry() -> Result
     Ok(())
 }
 
+#[tokio::test]
+async fn failed_create_cleanup_retains_the_record_for_retry() -> Result<()> {
+    #[derive(Debug)]
+    struct CleanupFailureController;
+
+    #[async_trait]
+    impl super::DockerEgressController for CleanupFailureController {
+        async fn prepare(
+            &self,
+            _host: &dyn Host,
+            _namespace: &str,
+            _id: &BoxId,
+            _allowlist: &tinybox_core::EgressAllowlist,
+        ) -> Result<crate::PreparedEgressNetwork> {
+            unreachable!("this test enters the rollback path directly")
+        }
+
+        async fn cleanup(&self, _host: &dyn Host, _namespace: &str, _id: &BoxId) -> Result<()> {
+            Err(Error::Backend {
+                sandbox: NAME.to_owned(),
+                operation: "remove test egress filter",
+                message: "filter unavailable".to_owned(),
+            })
+        }
+
+        fn docker_argv(&self, argv: Vec<String>) -> Vec<String> {
+            argv
+        }
+    }
+
+    let host = ScriptedHost::silent();
+    let store = Arc::new(MemoryStore::new());
+    let sandbox = DockerSandbox::new(host, store.clone())
+        .with_egress_controller(Arc::new(CleanupFailureController));
+    let info = tinybox_core::insert_new(&store, BoxState::Ready, &spec()?, 0)?;
+    let original = Error::Backend {
+        sandbox: NAME.to_owned(),
+        operation: "start test container",
+        message: "start failed".to_owned(),
+    };
+
+    let error = sandbox
+        .rollback_failed_create(&info.id, "attempt", true, original)
+        .await;
+
+    assert!(matches!(
+        error,
+        Error::Backend { operation: "roll back egress network setup", ref message, .. }
+            if message.contains("start failed") && message.contains("filter unavailable")
+    ));
+    assert_eq!(store.list()?.len(), 1);
+    assert_eq!(
+        sandbox
+            .failed_create_attempts
+            .lock()
+            .unwrap()
+            .get(&info.id)
+            .map(String::as_str),
+        Some("attempt")
+    );
+    Ok(())
+}
+
 #[test]
 fn effective_published_ports_parse_dynamic_and_fixed_bindings() -> Result<()> {
     let ports = args::parse_published_ports(
