@@ -597,7 +597,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
             return Err(Error::Backend {
                 sandbox: "docker".to_owned(),
                 operation: "prepare the published-port response",
-                message: file_setup.stderr_lossy(),
+                message: file_setup.stderr_lossy().into_owned(),
             });
         }
         let container = format!("tinybox-{namespace}-{}", info.id);
