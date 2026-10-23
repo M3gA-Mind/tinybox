@@ -180,8 +180,7 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
         }
         .await;
         if let Err(error) = setup {
-            let cleanup =
-                cleanup_native_with_attempt(host, namespace, id, &attempt_owned_chains).await;
+            let cleanup = cleanup_native(host, namespace, id).await;
             return match cleanup {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(Error::Backend {
