@@ -319,6 +319,50 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
     assert!(commands.iter().any(|argv| {
         argv.iter().any(|arg| arg == "DROP") && argv.iter().any(|arg| arg == &names.input_chain)
     }));
+    let established_position = commands
+        .iter()
+        .position(|argv| argv.windows(2).any(|args| args == ["--ctstate", "ESTABLISHED,RELATED"]))
+        .ok_or_else(|| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "find established-flow firewall rule",
+            message: "rule was not installed".to_owned(),
+        })?;
+    let forward_drop_position = commands
+        .iter()
+        .position(|argv| {
+            argv.windows(4)
+                .any(|args| args == ["-A", &names.forward_chain, "-j", "DROP"])
+        })
+        .ok_or_else(|| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "find forward default-drop rule",
+            message: "rule was not installed".to_owned(),
+        })?;
+    assert!(established_position < forward_drop_position);
+    let neighbor_solicitation_position = commands
+        .iter()
+        .position(|argv| {
+            argv.iter().any(|arg| arg == "ip6tables")
+                && argv.iter().any(|arg| arg == "neighbor-solicitation")
+        })
+        .ok_or_else(|| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "find IPv6 neighbor-discovery rule",
+            message: "rule was not installed".to_owned(),
+        })?;
+    let input_drop_position = commands
+        .iter()
+        .position(|argv| {
+            argv.iter().any(|arg| arg == "ip6tables")
+                && argv.windows(4)
+                    .any(|args| args == ["-A", &names.input_chain, "-j", "DROP"])
+        })
+        .ok_or_else(|| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "find INPUT default-drop rule",
+            message: "rule was not installed".to_owned(),
+        })?;
+    assert!(neighbor_solicitation_position < input_drop_position);
     assert!(commands.iter().any(|argv| {
         argv.iter().any(|arg| arg == "-D") && argv.iter().any(|arg| arg == "DOCKER-USER")
     }));

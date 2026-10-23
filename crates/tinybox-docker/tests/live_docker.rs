@@ -30,7 +30,7 @@ use std::{
 
 use tinybox_core::{
     BoxSpec, EgressAllowlist, Error, ExecRequest, Host as _, HostRef, MemoryStore, NetworkPolicy,
-    Placement, Result, Sandbox, SandboxRef, WorkspaceSource,
+    Placement, PortMapping, Result, Sandbox, SandboxRef, WorkspaceSource,
 };
 use tinybox_docker::{DockerSandbox, EgressResolver, NativeLinuxDockerEgressController};
 use tinybox_host::LocalHost;
@@ -108,6 +108,42 @@ fn accept_before(listener: &TcpListener, deadline: Instant) -> std::io::Result<T
                 thread::sleep(Duration::from_millis(10));
             }
             Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Connect to a published guest port and collect its response before timeout.
+fn exchange_before(address: SocketAddr, deadline: Instant) -> Result<Vec<u8>> {
+    loop {
+        match TcpStream::connect_timeout(&address, Duration::from_millis(100)) {
+            Ok(mut stream) => {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .map_err(|error| Error::io("set published-port read timeout", &error))?;
+                let mut response = Vec::new();
+                stream
+                    .read_to_end(&mut response)
+                    .map_err(|error| Error::io("read published-port response", &error))?;
+                return Ok(response);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionRefused
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                if Instant::now() >= deadline {
+                    return Err(Error::Backend {
+                        sandbox: "docker".to_owned(),
+                        operation: "connect to published container port",
+                        message: error.to_string(),
+                    });
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return Err(Error::io("connect to published container port", &error)),
         }
     }
 }
@@ -465,8 +501,38 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
             .with_egress_controller(Arc::new(NativeLinuxDockerEgressController::new(resolver)));
         let allowlist = EgressAllowlist::new(["listener.test"], [18373]);
         let info = sandbox
-            .create(&spec()?.with_network(NetworkPolicy::Allowlist(allowlist)))
+            .create(
+                &spec()?
+                    .with_network(NetworkPolicy::Allowlist(allowlist))
+                    .with_port(PortMapping::dynamic(18375)),
+            )
             .await?;
+
+        sandbox
+            .exec(
+                &info.id,
+                &ExecRequest::new([
+                    "sh",
+                    "-c",
+                    "while true; do printf 'published-ok\\n' | nc -l -p 18375; done </dev/null >/dev/null 2>&1 &",
+                ]),
+            )
+            .await?;
+        let published_port = sandbox
+            .published_ports(&info.id)
+            .await?
+            .into_iter()
+            .find(|mapping| mapping.guest == 18375)
+            .and_then(|mapping| mapping.host)
+            .ok_or_else(|| Error::Backend {
+                sandbox: "docker".to_owned(),
+                operation: "inspect published container port",
+                message: "Docker did not assign a host port".to_owned(),
+            })?;
+        let published_response = exchange_before(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, published_port)),
+            Instant::now() + Duration::from_secs(5),
+        )?;
 
         let allowed = sandbox
             .exec(
@@ -548,6 +614,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
             || blocked.exit_code == 0
             || host_gateway.exit_code == 0
             || dns_blocked.exit_code == 0
+            || published_response != b"published-ok\n"
             || !blocked_hits.success()
             || !dns_hits.success()
             || !host_listener_untouched
@@ -556,7 +623,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 sandbox: "docker".to_owned(),
                 operation: "verify native egress allowlist",
                 message: format!(
-                    "allowed exit={}, blocked exit={}, host-gateway exit={}, unlisted DNS lookup exit={}, forbidden TCP hit={}, forbidden DNS hit={}, host listener touched={}",
+                    "allowed exit={}, blocked exit={}, host-gateway exit={}, unlisted DNS lookup exit={}, published response={published_response:?}, forbidden TCP hit={}, forbidden DNS hit={}, host listener touched={}",
                     allowed.exit_code,
                     blocked.exit_code,
                     host_gateway.exit_code,
