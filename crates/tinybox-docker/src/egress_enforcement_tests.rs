@@ -753,6 +753,38 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
 
 #[tokio::test]
 #[cfg(target_os = "linux")]
+async fn chain_creation_and_owner_marker_are_atomic_and_cleanup_survives_restart() -> Result<()> {
+    let id = BoxId::new("box-atomic-chain-owner")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let host = PreparedNativeHost::new(&id, &names);
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+    let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
+
+    controller.prepare(&host, namespace, &id, &allowlist).await?;
+
+    let scripts = host
+        .restore_scripts
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert_eq!(scripts.len(), 4, "each family/chain uses one restore transaction");
+    for script in scripts {
+        assert!(script.starts_with("*filter\n:"));
+        assert!(script.contains(&format!("--comment {} -j DROP\n", names.owner_token)));
+        assert!(script.ends_with("COMMIT\n"));
+    }
+
+    // A fresh controller has no in-memory ownership set; cleanup must recover
+    // solely from the transactionally installed marker.
+    NativeLinuxDockerEgressController::new(Arc::new(Resolver))
+        .cleanup(&host, namespace, &id)
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
 async fn pinned_targets_inside_auto_selected_network_subnets_are_rejected_and_rolled_back()
 -> Result<()> {
     for (id_text, address, subnet) in [
