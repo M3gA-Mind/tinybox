@@ -593,7 +593,7 @@ async fn ambiguous_create_retains_cleanup_error_when_owned_network_removal_fails
                 operation: "roll back egress network setup",
                 ref message,
                 ..
-            }) if message.contains("owned egress network rollback failed")
+        }) if message.contains("simulated lost command response")
         ),
         "{result:?}; commands={:?}",
         host.commands()
