@@ -468,7 +468,7 @@ async fn failed_create_cleanup_retains_the_record_for_retry() -> Result<()> {
         store.as_ref(),
         BoxState::Ready,
         &spec()?,
-        std::time::SystemTime::now(),
+        std::time::SystemTime::UNIX_EPOCH,
     )?;
     let original = Error::Backend {
         sandbox: NAME.to_owned(),

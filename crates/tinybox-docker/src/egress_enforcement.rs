@@ -587,9 +587,9 @@ async fn install_family(
         firewall_success(host, firewall, command.iter().map(String::as_str)).await?;
     }
     if ipv6 {
-        // IPv6 needs Neighbor Solicitation to resolve the bridge gateway's
-        // link-layer address. Permit this control message; established replies
-        // are added below, while new host-bound traffic remains dropped.
+        // Neighbor Discovery needs both Solicitation and Advertisement to
+        // resolve and refresh bridge peers. Permit these control messages;
+        // new host-bound traffic remains dropped.
         firewall_success(
             host,
             firewall,
@@ -599,7 +599,7 @@ async fn install_family(
                 "-p",
                 "ipv6-icmp",
                 "--icmpv6-type",
-                "neighbor-solicitation",
+                "neighbor-solicitation,neighbor-advertisement",
                 "-j",
                 "ACCEPT",
             ],
