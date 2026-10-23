@@ -5,6 +5,12 @@
 //! the host binds the scope from the authenticated caller, so nothing here
 //! names one. If the host does not serve storage, durable box operations fail
 //! closed; the module never substitutes private in-memory records.
+//!
+//! These ports are host-managed: the host declared the collections when it
+//! bound the scope and its grant is the allowlist, so the stores open with
+//! `open_host_managed`, which confirms the current declarations and runs no
+//! in-module migration (the v1 collections it reads lie outside the grant; the
+//! host's import owns that migration).
 
 use std::sync::Arc;
 
@@ -95,7 +101,7 @@ impl ModuleStorage {
         if let Some(store) = slot.as_ref() {
             return Ok(Arc::clone(store));
         }
-        let opened = tinybox_drivers::DocumentBoxStore::open(storage)
+        let opened = tinybox_drivers::DocumentBoxStore::open_host_managed(storage)
             .await
             .inspect_err(|error| {
                 log::warn!("[tinybox_module] box store on host storage unavailable: {error}");
@@ -114,7 +120,7 @@ impl ModuleStorage {
         name: String,
     ) -> Option<std::io::Result<tinybox_jail::JailRegistry>> {
         let storage = self.scoped().await?;
-        let index = tinybox_drivers::DocumentIndexStore::open(storage, name).await;
+        let index = tinybox_drivers::DocumentIndexStore::open_host_managed(storage, name).await;
         let opened = tokio::task::spawn_blocking(move || {
             let index = index?;
             tinybox_jail::JailRegistry::open_with_store(

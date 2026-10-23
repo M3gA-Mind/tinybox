@@ -255,3 +255,17 @@ async fn a_recording_view_finds_only_its_own_record() -> TestResult {
     assert!(first.first_inserted().is_none());
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bus_backed_store_leaves_the_schema_and_migrations_to_the_host() -> TestResult {
+    let rig = rig(true).await?;
+    let storage = ModuleStorage::connected(rig.module.clone());
+    storage.box_store().await?;
+
+    let receipts = host_docs(&rig, tinybox_drivers::MIGRATIONS_COLLECTION).await?;
+    assert!(
+        receipts.is_empty(),
+        "the module ran its own migrations on the host's ports: {receipts:?}"
+    );
+    Ok(())
+}
