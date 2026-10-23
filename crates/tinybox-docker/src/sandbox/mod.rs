@@ -2,6 +2,8 @@
 
 use std::{
     collections::HashMap,
+    net::SocketAddr,
+    path::Path,
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, Ordering},
@@ -12,8 +14,9 @@ use std::{
 use async_trait::async_trait;
 use tinybox_core::{
     BoxId, BoxInfo, BoxSpec, BoxState, Capability, Clock, Error, ExecOutput, ExecRequest,
-    ExecutionObserver, Host, IsolationLevel, NetworkPolicy, OutputStream, PortMapping, ProcessId,
-    Result, Sandbox, SandboxCapabilities, SnapshotId, SnapshotSupport, Store, SystemClock, detach,
+    ExecutionObserver, Forward, Host, HostExecutionLocation, IsolationLevel, NetworkPolicy,
+    OutputStream, PortMapping, ProcessId, Result, Sandbox, SandboxCapabilities, SnapshotId,
+    SnapshotSupport, Store, SystemClock, WorkspaceFileReader, WorkspaceFileWriter, detach,
 };
 
 use crate::DockerEgressController;
@@ -54,6 +57,78 @@ pub struct DockerSandbox {
     failed_create_attempts: Arc<std::sync::Mutex<HashMap<BoxId, String>>>,
     pending_observed_cleanup: Arc<Mutex<HashMap<String, CleanupHandle>>>,
     observed_boxes: Arc<Mutex<HashMap<BoxId, ObservedBoxState>>>,
+}
+
+#[derive(Debug)]
+struct ControllerHost {
+    inner: Arc<dyn Host>,
+    controller: Arc<dyn DockerEgressController>,
+}
+
+impl ControllerHost {
+    fn request(&self, request: &ExecRequest) -> ExecRequest {
+        let mut request = request.clone();
+        if request.argv.first().is_some_and(|program| program == "docker") {
+            request.argv = self.controller.docker_argv(request.argv);
+        }
+        request
+    }
+}
+
+#[async_trait]
+impl Host for ControllerHost {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn execution_location(&self) -> HostExecutionLocation {
+        self.inner.execution_location()
+    }
+
+    async fn run(&self, request: &ExecRequest) -> Result<ExecOutput> {
+        self.inner.run(&self.request(request)).await
+    }
+
+    async fn run_observed(
+        &self,
+        request: &ExecRequest,
+        observer: Arc<dyn ExecutionObserver>,
+    ) -> Result<ExecOutput> {
+        self.inner
+            .run_observed(&self.request(request), observer)
+            .await
+    }
+
+    fn has_pending_observed_cleanup(&self) -> bool {
+        self.inner.has_pending_observed_cleanup()
+    }
+
+    async fn retry_observed_cleanup(&self) -> Result<()> {
+        self.inner.retry_observed_cleanup().await
+    }
+
+    async fn open_workspace_file(
+        &self,
+        root: &Path,
+        relative: &Path,
+    ) -> Result<Box<dyn WorkspaceFileReader>> {
+        self.inner.open_workspace_file(root, relative).await
+    }
+
+    async fn begin_workspace_file_write(
+        &self,
+        root: &Path,
+        relative: &Path,
+        transfer_id: &str,
+    ) -> Result<Box<dyn WorkspaceFileWriter>> {
+        self.inner
+            .begin_workspace_file_write(root, relative, transfer_id)
+            .await
+    }
+
+    async fn forward(&self, remote: SocketAddr) -> Result<Forward> {
+        self.inner.forward(remote).await
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -220,6 +295,12 @@ impl DockerSandbox {
     /// different host.
     #[must_use]
     pub fn for_observed_host(&self, host: Arc<dyn Host>) -> Self {
+        let host = self.egress_controller.as_ref().map_or(host.clone(), |controller| {
+            Arc::new(ControllerHost {
+                inner: host,
+                controller: controller.clone(),
+            }) as Arc<dyn Host>
+        });
         Self {
             host,
             store: self.store.clone(),
@@ -249,6 +330,10 @@ impl DockerSandbox {
         mut self,
         controller: Arc<dyn DockerEgressController>,
     ) -> Self {
+        self.host = Arc::new(ControllerHost {
+            inner: self.host.clone(),
+            controller: controller.clone(),
+        });
         self.egress_controller = Some(controller);
         self
     }
