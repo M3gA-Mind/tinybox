@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use tinybox_core::{BoxId, Error, ExecOutput, ExecRequest, Host, HostExecutionLocation, Result};
 
 use super::{
-    deny_rules, scope_token, DockerEgressController, NativeLinuxDockerEgressController, NetworkNames,
-    verify_created_bridge_link,
+    DockerEgressController, NativeLinuxDockerEgressController, NetworkNames, deny_rules,
+    scope_token, verify_created_bridge_link,
 };
 use crate::EgressResolver;
 

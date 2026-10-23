@@ -639,9 +639,9 @@ fn deny_rules(ipv6: bool) -> Vec<Vec<String>> {
             "169.254.170.2/32",
             "100.100.100.200/32",
         ]
-            .into_iter()
-            .map(|prefix| vec!["-d".into(), prefix.into(), "-j".into(), "DROP".into()])
-            .collect()
+        .into_iter()
+        .map(|prefix| vec!["-d".into(), prefix.into(), "-j".into(), "DROP".into()])
+        .collect()
     }
 }
 
