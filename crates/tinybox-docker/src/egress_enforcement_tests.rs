@@ -151,6 +151,8 @@ struct PreparedNativeHost {
     no_matching_hooks: bool,
     #[cfg(target_os = "linux")]
     fail_chain_delete_once: Mutex<bool>,
+    #[cfg(target_os = "linux")]
+    fail_network_remove_once: Mutex<bool>,
     network_owner: String,
     network_scope: String,
     network_attempt: String,
@@ -176,6 +178,8 @@ impl PreparedNativeHost {
             no_matching_hooks: false,
             #[cfg(target_os = "linux")]
             fail_chain_delete_once: Mutex::new(false),
+            #[cfg(target_os = "linux")]
+            fail_network_remove_once: Mutex::new(false),
             network_owner: id.to_string(),
             network_scope: names.owner_token.clone(),
             network_attempt: names.attempt_token.clone(),
@@ -547,6 +551,40 @@ async fn uncertain_network_create_removes_only_the_verified_owned_network() -> R
         argv.iter()
             .any(|arg| matches!(arg.as_str(), "-A" | "-D" | "-F" | "-X"))
     }));
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn ambiguous_create_retains_cleanup_error_when_owned_network_removal_fails() -> Result<()> {
+    let id = BoxId::new("box-create-remove-fails")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.network_create_behavior = NetworkCreateBehavior::HostErrorAfterSideEffect;
+    *host
+        .fail_network_remove_once
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+    let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
+
+    assert!(matches!(
+        controller.prepare(&host, namespace, &id, &allowlist).await,
+        Err(Error::Backend {
+            operation: "roll back egress network setup",
+            ref message,
+            ..
+        }) if message.contains("owned egress network rollback failed")
+    ));
+    assert_eq!(
+        host.commands()
+            .iter()
+            .filter(|argv| argv.iter().any(|arg| arg == "inspect")
+                && argv.iter().any(|arg| arg.contains("{{.Id}}")))
+            .count(),
+        2
+    );
     Ok(())
 }
 
