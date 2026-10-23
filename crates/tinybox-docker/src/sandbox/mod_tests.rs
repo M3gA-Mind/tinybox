@@ -128,7 +128,7 @@ fn controller_preserves_requested_docker_variables_for_the_workload() -> Result<
         Resolver,
     )));
     let host = super::ControllerHost {
-        inner: ScriptedHost::silent(),
+        inner: ScriptedHost::local(),
         controller,
     };
     let mut request = ExecRequest::new([
@@ -226,6 +226,47 @@ fn controller_preserves_requested_docker_variables_for_the_workload() -> Result<
     drop(prepared);
     assert!(!std::path::Path::new(&env_file).exists());
     Ok(())
+}
+
+#[test]
+fn native_controller_leaves_nonlocal_docker_commands_and_environment_alone() -> Result<()> {
+    #[derive(Debug)]
+    struct Resolver;
+
+    impl crate::EgressResolver for Resolver {
+        fn resolve(&self, _hostname: &str) -> std::io::Result<Vec<std::net::IpAddr>> {
+            Ok(Vec::new())
+        }
+    }
+
+    let controller = Arc::new(crate::NativeLinuxDockerEgressController::new(Arc::new(
+        Resolver,
+    )));
+    let host = super::ControllerHost {
+        inner: ScriptedHost::silent(),
+        controller,
+    };
+    let mut request = ExecRequest::new(["docker", "run", "--env", "DOCKER_TLS_VERIFY"]);
+    request
+        .env
+        .insert("DOCKER_TLS_VERIFY".to_owned(), "1".to_owned());
+
+    let prepared = host.request(&request)?;
+    assert_eq!(prepared.request.argv, request.argv);
+    assert_eq!(prepared.request.env, request.env);
+    assert!(prepared._env_file.is_none());
+    Ok(())
+}
+
+#[test]
+fn docker_workload_env_files_reject_newline_values() {
+    let mut request = ExecRequest::new(["docker", "run"]);
+    request.env.insert(
+        "DOCKER_CERT_PATH".to_owned(),
+        "/certs\nINJECTED=value".to_owned(),
+    );
+
+    assert!(super::write_workload_docker_env_file(&mut request).is_err());
 }
 
 #[tokio::test]
