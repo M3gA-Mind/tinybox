@@ -14,6 +14,9 @@ firewall interface are also required. The controller resolves hostnames once thr
 resolver, rejects loopback and metadata answers, and retains every pinned
 address. Docker-assigned IPAM subnets are checked before the firewall is
 installed; any pinned address inside one causes the whole setup to roll back.
+Docker commands use the explicit local rootful socket through `--host`; the
+request environment stays intact so Docker can inherit explicitly requested
+workload variables through its bare `--env KEY` arguments.
 
 The controller installs a per-attempt bridge and default-drop input and forwarding
 chains before Docker starts the workload. A fresh random attempt token is stored

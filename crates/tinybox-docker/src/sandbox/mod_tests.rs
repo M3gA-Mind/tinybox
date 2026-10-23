@@ -154,18 +154,37 @@ fn controller_preserves_requested_docker_variables_for_the_workload() {
     request
         .env
         .insert("DOCKER_TLS_VERIFY".to_owned(), "1".to_owned());
-    request.env.insert(
-        "DOCKER_CERT_PATH".to_owned(),
-        "/workload/certs".to_owned(),
-    );
+    request
+        .env
+        .insert("DOCKER_CERT_PATH".to_owned(), "/workload/certs".to_owned());
     request.env.insert("APP_MODE".to_owned(), "test".to_owned());
 
     let rewritten = host.request(&request);
 
-    assert!(rewritten.argv.windows(2).any(|args| args == ["--env", "DOCKER_HOST"]));
-    assert!(rewritten.argv.windows(2).any(|args| args == ["--env", "DOCKER_CONTEXT"]));
-    assert!(rewritten.argv.windows(2).any(|args| args == ["--env", "DOCKER_TLS_VERIFY"]));
-    assert!(rewritten.argv.windows(2).any(|args| args == ["--env", "DOCKER_CERT_PATH"]));
+    assert!(
+        rewritten
+            .argv
+            .windows(2)
+            .any(|args| args == ["--env", "DOCKER_HOST"])
+    );
+    assert!(
+        rewritten
+            .argv
+            .windows(2)
+            .any(|args| args == ["--env", "DOCKER_CONTEXT"])
+    );
+    assert!(
+        rewritten
+            .argv
+            .windows(2)
+            .any(|args| args == ["--env", "DOCKER_TLS_VERIFY"])
+    );
+    assert!(
+        rewritten
+            .argv
+            .windows(2)
+            .any(|args| args == ["--env", "DOCKER_CERT_PATH"])
+    );
     let argv = rewritten.argv.join(" ");
     for value in [
         "tcp://workload-docker:2376",
@@ -182,7 +201,10 @@ fn controller_preserves_requested_docker_variables_for_the_workload() {
         rewritten.env.get("DOCKER_CONTEXT").map(String::as_str),
         Some("workload-context")
     );
-    assert_eq!(rewritten.env.get("DOCKER_TLS_VERIFY").map(String::as_str), Some("1"));
+    assert_eq!(
+        rewritten.env.get("DOCKER_TLS_VERIFY").map(String::as_str),
+        Some("1")
+    );
     assert_eq!(
         rewritten.env.get("DOCKER_CERT_PATH").map(String::as_str),
         Some("/workload/certs")
