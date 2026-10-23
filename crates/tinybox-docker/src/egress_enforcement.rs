@@ -467,8 +467,24 @@ async fn install_family(
     )
     .await?;
     firewall_success(host, firewall, ["-A", &names.forward_chain, "-j", "DROP"]).await?;
-    // Host-origin traffic from the managed bridge is categorically denied.
-    // Allowlist entries apply only to routed container egress.
+    // Permit only return traffic for host-initiated connections, such as
+    // responses to a published port. New bridge-to-host connections remain
+    // blocked regardless of the allowlist.
+    firewall_success(
+        host,
+        firewall,
+        [
+            "-A",
+            &names.input_chain,
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "ESTABLISHED,RELATED",
+            "-j",
+            "ACCEPT",
+        ],
+    )
+    .await?;
     firewall_success(host, firewall, ["-A", &names.input_chain, "-j", "DROP"]).await?;
 
     firewall_success(
