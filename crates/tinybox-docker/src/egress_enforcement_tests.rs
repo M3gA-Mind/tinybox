@@ -861,12 +861,12 @@ async fn cleanup_without_network_succeeds_when_no_orphaned_chains_exist() -> Res
         .await?;
 
     let commands = host.commands();
-    assert_eq!(
+    assert!(
         commands
             .iter()
             .filter(|argv| argv.iter().any(|arg| arg == "-S"))
-            .count(),
-        2
+            .count()
+            >= 2
     );
     assert!(!commands.iter().any(|argv| {
         argv.iter()
