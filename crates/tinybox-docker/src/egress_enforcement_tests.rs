@@ -332,11 +332,6 @@ impl Host for PreparedNativeHost {
                     .find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables"))
                     .cloned()
                     .unwrap_or_default();
-                let firewall = argv
-                    .iter()
-                    .find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables"))
-                    .cloned()
-                    .unwrap_or_default();
                 self.marked_chains
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -423,7 +418,7 @@ impl Host for PreparedNativeHost {
                 self.marked_chains
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert((firewall, chain.clone()));
+                    .insert((firewall.clone(), chain.clone()));
                 self.chains_with_rules
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
