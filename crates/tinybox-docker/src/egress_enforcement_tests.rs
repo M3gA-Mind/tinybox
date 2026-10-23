@@ -11,7 +11,7 @@ use tinybox_core::{BoxId, Error, ExecOutput, ExecRequest, Host, HostExecutionLoc
 
 use super::{
     DockerEgressController, NativeLinuxDockerEgressController, NetworkNames, deny_rules,
-    scope_token, verify_created_bridge_link,
+    scope_token, stable_hash, verify_created_bridge_link,
 };
 use crate::EgressResolver;
 
