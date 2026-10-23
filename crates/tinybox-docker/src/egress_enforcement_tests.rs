@@ -523,7 +523,7 @@ async fn ambiguous_network_create_retains_ownership_uncertainty_for_malformed_in
             operation: "roll back egress network setup",
             ref message,
             ..
-        }) if message.contains("ownership could not be verified")
+        }) if message.contains("missing or malformed network identity")
     ));
     assert!(
         !host
@@ -881,6 +881,7 @@ async fn network_name_conflict_does_not_clean_an_existing_owners_firewall() -> R
     let names = NetworkNames::for_box(namespace, &id);
     let mut host = PreparedNativeHost::new(&id, &names);
     host.network_create_behavior = NetworkCreateBehavior::CommandFailure;
+    host.network_inspect_behavior = NetworkInspectBehavior::Foreign;
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
     let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
 
@@ -896,8 +897,41 @@ async fn network_name_conflict_does_not_clean_an_existing_owners_firewall() -> R
             .iter()
             .any(|arg| matches!(arg.as_str(), "-D" | "-F" | "-X"))
     }));
+    assert!(host
+        .commands()
+        .iter()
+        .any(|argv| argv.iter().any(|arg| arg == "inspect")));
     assert!(!host.commands().iter().any(|argv| {
-        argv.iter().any(|arg| arg == "inspect") || argv.iter().any(|arg| arg == "rm")
+        argv.iter().any(|arg| arg == "rm")
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn network_create_conflict_reconciles_a_stale_network_with_matching_owner_labels() -> Result<()>
+{
+    let id = BoxId::new("box-stale-owned-network")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.network_create_behavior = NetworkCreateBehavior::CommandFailure;
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+    let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
+
+    assert!(matches!(
+        controller.prepare(&host, namespace, &id, &allowlist).await,
+        Err(Error::Backend {
+            operation: "configure egress filtering",
+            ref message,
+            ..
+        }) if message.contains("network name already exists")
+    ));
+    assert!(host.commands().iter().any(|argv| {
+        argv.iter().any(|arg| arg == "rm") && argv.iter().any(|arg| arg == "network-id")
+    }));
+    assert!(!host.commands().iter().any(|argv| {
+        argv.iter().any(|arg| matches!(arg.as_str(), "-A" | "-D" | "-F" | "-X"))
     }));
     Ok(())
 }

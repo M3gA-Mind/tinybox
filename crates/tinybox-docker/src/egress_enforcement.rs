@@ -163,21 +163,17 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
         let network = match create_network {
             Ok(output) if output.succeeded() => output.stdout_lossy().trim().to_owned(),
             Ok(output) => {
-                return Err(Error::Backend {
+                let error = Error::Backend {
                     sandbox: "docker".to_owned(),
                     operation: "configure egress filtering",
                     message: output.stderr_lossy().trim().to_owned(),
-                });
+                };
+                return Err(
+                    reconcile_failed_network_create(host, &names, id, error).await,
+                );
             }
             Err(error) => {
-                return match reconcile_ambiguous_network_create(host, &names, id).await {
-                    Ok(()) => Err(error),
-                    Err(cleanup_error) => Err(Error::Backend {
-                        sandbox: "docker".to_owned(),
-                        operation: "roll back egress network setup",
-                        message: format!("{error}; cleanup failed: {cleanup_error}"),
-                    }),
-                };
+                return Err(reconcile_failed_network_create(host, &names, id, error).await);
             }
         };
         if network.is_empty() {
@@ -729,15 +725,9 @@ async fn reconcile_ambiguous_network_create(
     }
 
     let inspect_stdout = inspect.stdout_lossy();
-    let mut fields = inspect_stdout.trim().splitn(3, '|');
-    let network_id = fields.next().unwrap_or_default();
-    let owner = fields.next().unwrap_or_default();
-    let scope = fields.next().unwrap_or_default();
+    let (network_id, owner, scope) = parse_network_ownership(&inspect_stdout)?;
     if owner != id.to_string() || scope != names.owner_token {
         return Ok(());
-    }
-    if network_id.is_empty() {
-        return Err(unsupported("owned egress network has no inspectable ID"));
     }
 
     let remove = docker_request(
@@ -778,14 +768,44 @@ async fn reconcile_ambiguous_network_create(
         return Err(unsupported("egress network cleanup could not be verified"));
     }
     let verify_stdout = verify.stdout_lossy();
-    let mut fields = verify_stdout.trim().splitn(3, '|');
-    let _network_id = fields.next().unwrap_or_default();
-    let owner = fields.next().unwrap_or_default();
-    let scope = fields.next().unwrap_or_default();
+    let (_network_id, owner, scope) = parse_network_ownership(&verify_stdout)?;
     if owner != id.to_string() || scope != names.owner_token {
         return Ok(());
     }
     Err(unsupported("owned egress network rollback failed"))
+}
+
+async fn reconcile_failed_network_create(
+    host: &dyn Host,
+    names: &NetworkNames,
+    id: &BoxId,
+    original_error: Error,
+) -> Error {
+    match reconcile_ambiguous_network_create(host, names, id).await {
+        Ok(()) => original_error,
+        Err(cleanup_error) => Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "roll back egress network setup",
+            message: format!("{original_error}; cleanup failed: {cleanup_error}"),
+        },
+    }
+}
+
+fn parse_network_ownership(output: &str) -> Result<(String, String, String)> {
+    let fields = output.trim().split('|').collect::<Vec<_>>();
+    if fields.len() != 3 || fields.iter().any(|field| field.is_empty()) {
+        return Err(Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "inspect egress network ownership",
+            message: "Docker returned missing or malformed network identity or owner labels"
+                .to_owned(),
+        });
+    }
+    Ok((
+        fields[0].to_owned(),
+        fields[1].to_owned(),
+        fields[2].to_owned(),
+    ))
 }
 
 #[allow(clippy::too_many_lines)] // Keep ownership preflight and cleanup order together.
