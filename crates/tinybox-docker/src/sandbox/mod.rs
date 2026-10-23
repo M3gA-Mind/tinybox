@@ -257,10 +257,7 @@ impl DockerSandbox {
             Err(error) => {
                 if matches!(
                     &error,
-                    Error::Backend {
-                        operation: "roll back egress network setup",
-                        ..
-                    }
+                    Error::EgressRollbackFailed { .. }
                 ) {
                     self.remember_failed_create_attempt(id, attempt);
                 } else {
@@ -1017,9 +1014,8 @@ impl DockerSandbox {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .insert(id.clone(), attempt.to_owned());
-                Error::Backend {
+                Error::EgressRollbackFailed {
                     sandbox: NAME.to_owned(),
-                    operation: "roll back egress network setup",
                     message: format!("{error}; cleanup failed: {cleanup_error}"),
                 }
             }

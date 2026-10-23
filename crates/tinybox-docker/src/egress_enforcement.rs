@@ -35,6 +35,11 @@ const HEX: &[u8; 16] = b"0123456789abcdef";
 #[async_trait]
 pub trait DockerEgressController: Debug + Send + Sync {
     /// Verify the execution location and required daemon/filter capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the host cannot be verified as safe for egress
+    /// enforcement.
     async fn validate_host(&self, _host: &dyn Host) -> Result<()> {
         Ok(())
     }
@@ -44,9 +49,14 @@ pub trait DockerEgressController: Debug + Send + Sync {
     /// Implementations must not start the workload. The returned network name
     /// is supplied to `docker run` only after this method succeeds. On error,
     /// the controller must roll back every resource it created. If rollback
-    /// fails, it must return `Error::Backend` with operation
-    /// `"roll back egress network setup"`, allowing the sandbox to retain the
-    /// box record for a later cleanup retry.
+    /// fails, it must return [`Error::EgressRollbackFailed`], allowing the
+    /// sandbox to retain the box record for a later cleanup retry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if planning, host verification, network creation, or
+    /// firewall setup fails. Returns [`Error::EgressRollbackFailed`] when
+    /// cleanup of partially-created resources also fails.
     async fn prepare(
         &self,
         host: &dyn Host,
@@ -56,6 +66,10 @@ pub trait DockerEgressController: Debug + Send + Sync {
     ) -> Result<PreparedEgressNetwork>;
 
     /// Remove this box's filter and network after its container has stopped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if ownership cannot be verified or cleanup fails.
     async fn cleanup(&self, host: &dyn Host, namespace: &str, id: &BoxId) -> Result<()>;
 
     /// Bind a Docker CLI command to the daemon this controller verifies.
@@ -189,9 +203,8 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
                 .await
             {
                 Ok(()) => Err(error),
-                Err(cleanup_error) => Err(Error::Backend {
+                Err(cleanup_error) => Err(Error::EgressRollbackFailed {
                     sandbox: "docker".to_owned(),
-                    operation: "roll back egress network setup",
                     message: format!("{error}; cleanup failed: {cleanup_error}"),
                 }),
             };
@@ -211,9 +224,8 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
                     .await;
             return match cleanup {
                 Ok(()) => Err(error),
-                Err(cleanup_error) => Err(Error::Backend {
+                Err(cleanup_error) => Err(Error::EgressRollbackFailed {
                     sandbox: "docker".to_owned(),
-                    operation: "roll back egress network setup",
                     message: format!("{error}; cleanup failed: {cleanup_error}"),
                 }),
             };
@@ -924,9 +936,8 @@ async fn reconcile_failed_network_create(
 ) -> Error {
     match reconcile_ambiguous_network_create(host, names, id).await {
         Ok(()) => original_error,
-        Err(cleanup_error) => Error::Backend {
+        Err(cleanup_error) => Error::EgressRollbackFailed {
             sandbox: "docker".to_owned(),
-            operation: "roll back egress network setup",
             message: format!("{original_error}; cleanup failed: {cleanup_error}"),
         },
     }
