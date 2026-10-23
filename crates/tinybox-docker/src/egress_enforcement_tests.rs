@@ -102,6 +102,114 @@ struct BridgeLinkHost {
     exists: bool,
 }
 
+#[derive(Debug)]
+struct PreparedNativeHost {
+    commands: Mutex<Vec<Vec<String>>>,
+    box_id: String,
+    network: String,
+    bridge: String,
+    forward_chain: String,
+    input_chain: String,
+}
+
+impl PreparedNativeHost {
+    fn new(id: &BoxId, names: &NetworkNames) -> Self {
+        Self {
+            commands: Mutex::new(Vec::new()),
+            box_id: id.to_string(),
+            network: names.network.clone(),
+            bridge: names.bridge.clone(),
+            forward_chain: names.forward_chain.clone(),
+            input_chain: names.input_chain.clone(),
+        }
+    }
+
+    fn commands(&self) -> Vec<Vec<String>> {
+        self.commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+#[async_trait]
+impl Host for PreparedNativeHost {
+    fn name(&self) -> &'static str {
+        "prepared-native"
+    }
+
+    fn execution_location(&self) -> HostExecutionLocation {
+        HostExecutionLocation::Local
+    }
+
+    async fn run(&self, request: &ExecRequest) -> Result<ExecOutput> {
+        let argv = &request.argv;
+        self.commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(argv.clone());
+
+        if let Some(docker_index) = argv.iter().position(|arg| arg == "docker") {
+            let args = &argv[docker_index + 1..];
+            if args.get(0).is_some_and(|arg| arg == "info") {
+                return Ok(ExecOutput::new(
+                    0,
+                    b"linux|Ubuntu 26.04|[]".to_vec(),
+                    Vec::new(),
+                ));
+            }
+            if args.get(0).is_some_and(|arg| arg == "network") {
+                if args.get(1).is_some_and(|arg| arg == "create") {
+                    return Ok(ExecOutput::new(0, b"network-id".to_vec(), Vec::new()));
+                }
+                if args.get(1).is_some_and(|arg| arg == "inspect") {
+                    let format = args.get(3).map_or("", String::as_str);
+                    let stdout = if format.contains(".Driver") {
+                        format!("bridge|true|{}|{}", self.bridge, self.box_id)
+                    } else {
+                        self.box_id.clone()
+                    };
+                    return Ok(ExecOutput::new(0, stdout.into_bytes(), Vec::new()));
+                }
+            }
+        }
+
+        if argv.first().is_some_and(|arg| arg == "ip") {
+            return Ok(ExecOutput::new(
+                0,
+                format!("17: {}: <BROADCAST,MULTICAST,UP>\n", self.bridge).into_bytes(),
+                Vec::new(),
+            ));
+        }
+
+        if argv
+            .iter()
+            .any(|arg| arg == "iptables" || arg == "ip6tables")
+        {
+            if argv.iter().any(|arg| arg == "FORWARD") {
+                return Ok(ExecOutput::new(
+                    0,
+                    b"-P FORWARD DROP\n-A FORWARD -j DOCKER-USER\n-A FORWARD -j DOCKER-FORWARD\n"
+                        .to_vec(),
+                    Vec::new(),
+                ));
+            }
+            if argv.last().is_some_and(|arg| arg == "-S") {
+                let chain = argv.last().map_or("", String::as_str);
+                let stdout = if chain == self.forward_chain || chain == self.input_chain {
+                    format!("-A {chain} -j DROP\n")
+                } else {
+                    String::new()
+                };
+                return Ok(ExecOutput::new(0, stdout.into_bytes(), Vec::new()));
+            }
+            return Ok(ExecOutput::new(0, Vec::new(), Vec::new()));
+        }
+
+        Ok(ExecOutput::new(0, Vec::new(), Vec::new()))
+    }
+}
+
 #[async_trait]
 impl Host for BridgeLinkHost {
     fn name(&self) -> &'static str {
@@ -153,6 +261,50 @@ async fn existing_local_bridge_link_is_verified() -> Result<()> {
     let host = BridgeLinkHost { exists: true };
 
     verify_created_bridge_link(&host, &names).await
+}
+
+#[tokio::test]
+async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()> {
+    let id = BoxId::new("box-0")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let host = PreparedNativeHost::new(&id, &names);
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+    let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
+
+    let network = controller
+        .prepare(&host, namespace, &id, &allowlist)
+        .await?;
+    assert_eq!(network, names.network);
+    controller.cleanup(&host, namespace, &id).await?;
+
+    let commands = host.commands();
+    assert!(commands.iter().any(|argv| {
+        argv.iter().any(|arg| arg == "-A")
+            && argv.iter().any(|arg| arg == "203.0.113.8")
+            && argv.iter().any(|arg| arg == "443")
+            && argv.iter().any(|arg| arg == "tcp")
+            && argv.iter().any(|arg| arg == "ACCEPT")
+    }));
+    assert!(commands.iter().any(|argv| {
+        argv.iter().any(|arg| arg == "DROP") && argv.iter().any(|arg| arg == &names.input_chain)
+    }));
+    assert!(commands.iter().any(|argv| {
+        argv.iter().any(|arg| arg == "-D") && argv.iter().any(|arg| arg == "DOCKER-USER")
+    }));
+    assert!(commands.iter().any(|argv| {
+        argv.iter().any(|arg| arg == "rm") && argv.iter().any(|arg| arg == &names.network)
+    }));
+    assert!(
+        commands
+            .iter()
+            .filter(|argv| argv.iter().any(|arg| arg == "docker"))
+            .all(|argv| {
+                argv.first().is_some_and(|arg| arg == "env")
+                    && argv.iter().any(|arg| arg == "unix:///var/run/docker.sock")
+            })
+    );
+    Ok(())
 }
 
 #[tokio::test]
