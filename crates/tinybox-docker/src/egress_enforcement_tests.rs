@@ -149,19 +149,19 @@ impl Host for PreparedNativeHost {
 
         if let Some(docker_index) = argv.iter().position(|arg| arg == "docker") {
             let args = &argv[docker_index + 1..];
-            if args.get(0).is_some_and(|arg| arg == "info") {
+            if args.iter().any(|arg| arg == "info") {
                 return Ok(ExecOutput::new(
                     0,
                     b"linux|Ubuntu 26.04|[]".to_vec(),
                     Vec::new(),
                 ));
             }
-            if args.get(0).is_some_and(|arg| arg == "network") {
-                if args.get(1).is_some_and(|arg| arg == "create") {
+            if args.iter().any(|arg| arg == "network") {
+                if args.iter().any(|arg| arg == "create") {
                     return Ok(ExecOutput::new(0, b"network-id".to_vec(), Vec::new()));
                 }
-                if args.get(1).is_some_and(|arg| arg == "inspect") {
-                    let format = args.get(3).map_or("", String::as_str);
+                if let Some(inspect_index) = args.iter().position(|arg| arg == "inspect") {
+                    let format = args.get(inspect_index + 2).map_or("", String::as_str);
                     let stdout = if format.contains(".Driver") {
                         format!("bridge|true|{}|{}", self.bridge, self.box_id)
                     } else {
@@ -271,7 +271,11 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
     let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
 
     let prepared = controller.prepare(&host, namespace, &id, &allowlist).await;
-    assert!(prepared.is_ok(), "{prepared:?}; commands={:?}", host.commands());
+    assert!(
+        prepared.is_ok(),
+        "{prepared:?}; commands={:?}",
+        host.commands()
+    );
     let network = prepared?;
     assert_eq!(network, names.network);
     controller.cleanup(&host, namespace, &id).await?;
