@@ -1168,10 +1168,12 @@ async fn network_name_conflict_does_not_clean_an_existing_owners_firewall() -> R
             .iter()
             .any(|arg| matches!(arg.as_str(), "-D" | "-F" | "-X"))
     }));
-    assert!(!host
-        .commands()
-        .iter()
-        .any(|argv| argv.iter().any(|arg| arg == "inspect")));
+    assert!(
+        !host
+            .commands()
+            .iter()
+            .any(|argv| argv.iter().any(|arg| arg == "inspect"))
+    );
     assert!(
         !host
             .commands()
