@@ -121,13 +121,27 @@ fn exchange_before(address: SocketAddr, deadline: Instant) -> Result<Vec<u8>> {
                     .set_read_timeout(Some(Duration::from_secs(1)))
                     .map_err(|error| Error::io("set published-port read timeout", &error))?;
                 stream
-                    .write_all(b"GET /index.html HTTP/1.0\r\nHost: localhost\r\n\r\n")
+                    .write_all(
+                        b"GET /index.html HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+                    )
                     .map_err(|error| Error::io("request published-port response", &error))?;
                 let mut response = Vec::new();
-                stream
-                    .read_to_end(&mut response)
-                    .map_err(|error| Error::io("read published-port response", &error))?;
-                return Ok(response);
+                let mut chunk = [0; 1024];
+                loop {
+                    let read = stream
+                        .read(&mut chunk)
+                        .map_err(|error| Error::io("read published-port response", &error))?;
+                    if read == 0 {
+                        return Ok(response);
+                    }
+                    response.extend_from_slice(&chunk[..read]);
+                    if response
+                        .windows(b"published-ok\n".len())
+                        .any(|window| window == b"published-ok\n")
+                    {
+                        return Ok(response);
+                    }
+                }
             }
             Err(error)
                 if matches!(
