@@ -147,6 +147,7 @@ struct PreparedNativeHost {
     fail_chain_marker: bool,
     network_owner: String,
     network_scope: String,
+    network_subnets: String,
     chain_owner_token: String,
     bridge: String,
     forward_chain: String,
@@ -166,6 +167,8 @@ impl PreparedNativeHost {
             fail_chain_marker: false,
             network_owner: id.to_string(),
             network_scope: names.owner_token.clone(),
+            network_subnets:
+                r#"[{"Subnet":"172.18.0.0/16"},{"Subnet":"fd00:dead:beef::/64"}]"#.to_owned(),
             chain_owner_token: names.owner_token.clone(),
             bridge: names.bridge.clone(),
             forward_chain: names.forward_chain.clone(),
@@ -280,6 +283,8 @@ impl Host for PreparedNativeHost {
                             "bridge|true|{}|{}|{}",
                             self.bridge, owner, self.network_scope
                         )
+                    } else if format.contains(".IPAM.Config") {
+                        self.network_subnets.clone()
                     } else {
                         format!("{owner}|{}", self.network_scope)
                     };
@@ -693,6 +698,46 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
                     && argv.iter().any(|arg| arg == "unix:///var/run/docker.sock")
             })
     );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn pinned_targets_inside_auto_selected_network_subnets_are_rejected_and_rolled_back() -> Result<()>
+{
+    for (id_text, address, subnet) in [
+        ("box-v4-overlap", "172.28.1.5", "172.28.0.0/16"),
+        ("box-v6-overlap", "fd00:1234::42", "fd00:1234::/64"),
+    ] {
+        let id = BoxId::new(id_text)?;
+        let namespace = "test";
+        let names = NetworkNames::for_box(namespace, &id);
+        let mut host = PreparedNativeHost::new(&id, &names);
+        host.network_subnets = format!(r#"[{{"Subnet":"{subnet}"}}]"#);
+        let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+        let allowlist = tinybox_core::EgressAllowlist::new([address], [443]);
+
+        assert!(matches!(
+            controller.prepare(&host, namespace, &id, &allowlist).await,
+            Err(Error::ConstraintNotEnforced {
+                constraint: tinybox_core::Constraint::Network,
+                enforcement: tinybox_core::Enforcement::Unsupported,
+                ..
+            })
+        ));
+        let commands = host.commands();
+        assert!(commands.iter().any(|argv| {
+            argv.iter().any(|arg| arg == "inspect")
+                && argv.iter().any(|arg| arg.contains(".IPAM.Config"))
+        }));
+        assert!(commands.iter().any(|argv| {
+            argv.iter().any(|arg| arg == "rm") && argv.iter().any(|arg| arg == &names.network)
+        }));
+        assert!(!commands.iter().any(|argv| {
+            argv.iter()
+                .any(|arg| matches!(arg.as_str(), "iptables" | "ip6tables"))
+        }));
+    }
     Ok(())
 }
 
