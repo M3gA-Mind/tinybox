@@ -148,20 +148,22 @@ impl Host for PreparedNativeHost {
             .push(argv.clone());
 
         if let Some(docker_index) = argv.iter().position(|arg| arg == "docker") {
-            let args = &argv[docker_index + 1..];
-            if args.iter().any(|arg| arg == "info") {
+            let docker_args = &argv[docker_index + 1..];
+            if docker_args.iter().any(|arg| arg == "info") {
                 return Ok(ExecOutput::new(
                     0,
                     b"linux|Ubuntu 26.04|[]".to_vec(),
                     Vec::new(),
                 ));
             }
-            if args.iter().any(|arg| arg == "network") {
-                if args.iter().any(|arg| arg == "create") {
+            if docker_args.iter().any(|arg| arg == "network") {
+                if docker_args.iter().any(|arg| arg == "create") {
                     return Ok(ExecOutput::new(0, b"network-id".to_vec(), Vec::new()));
                 }
-                if let Some(inspect_index) = args.iter().position(|arg| arg == "inspect") {
-                    let format = args.get(inspect_index + 2).map_or("", String::as_str);
+                if let Some(inspect_index) = docker_args.iter().position(|arg| arg == "inspect") {
+                    let format = docker_args
+                        .get(inspect_index + 2)
+                        .map_or("", String::as_str);
                     let stdout = if format.contains(".Driver") {
                         format!("bridge|true|{}|{}", self.bridge, self.box_id)
                     } else {
