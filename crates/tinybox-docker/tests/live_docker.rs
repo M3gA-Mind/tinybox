@@ -414,11 +414,11 @@ async fn live_network_policy_controls_host_listener_connectivity() -> Result<()>
 }
 
 #[derive(Debug)]
-struct FixedResolver(std::net::IpAddr);
+struct FixedResolver(Vec<std::net::IpAddr>);
 
 impl EgressResolver for FixedResolver {
     fn resolve(&self, _hostname: &str) -> std::io::Result<Vec<std::net::IpAddr>> {
-        Ok(vec![self.0])
+        Ok(self.0.clone())
     }
 }
 
@@ -459,6 +459,8 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
 
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let target_name = format!("tinybox-egress-target-{}", &suffix[..12]);
+    let target_network = format!("tinybox-egress-v6-{}", &suffix[..12]);
+    let target_subnet = format!("fd42:{}:5678::/64", &suffix[..4]);
     let gateway = docker_bridge_gateway()?;
     let host_listener = TcpListener::bind((gateway, 0)).map_err(|error| Error::Backend {
         sandbox: "docker".to_owned(),
@@ -479,14 +481,30 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
         IMAGE,
         "sh",
         "-c",
-        "(while true; do nc -l -p 18373 >/dev/null; echo hit >> /tmp/allowed; done) & (while true; do nc -l -p 18374 >/dev/null; echo hit >> /tmp/blocked; done) & (while true; do nc -u -l -p 53 >/dev/null; echo hit >> /tmp/dns; done) & wait",
+        "(while true; do nc -l -p 18373 >/dev/null; echo hit >> /tmp/allowed; done) & (while true; do nc -l -p 18374 >/dev/null; echo hit >> /tmp/blocked; done) & (while true; do nc -6 -l -p 18376 >/dev/null; echo hit >> /tmp/allowed-v6; done) & (while true; do nc -u -l -p 53 >/dev/null; echo hit >> /tmp/dns; done) & wait",
     ]);
     let _ = image?;
+    if let Err(error) = docker_command(&[
+        "network",
+        "create",
+        "--driver",
+        "bridge",
+        "--ipv6",
+        "--subnet",
+        &target_subnet,
+        &target_network,
+    ]) {
+        let _ = Command::new("docker")
+            .args(["rm", "-f", &target_name])
+            .status();
+        return Err(error);
+    }
     let result = async {
-        let ip = docker_command(&[
+        docker_command(&["network", "connect", &target_network, &target_name])?;
+        let ipv4 = docker_command(&[
             "inspect",
             "--format",
-            "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+            "{{(index .NetworkSettings.Networks \"bridge\").IPAddress}}",
             &target_name,
         ])?
         .parse::<std::net::IpAddr>()
@@ -495,8 +513,22 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
             operation: "read the controlled listener address",
             message: error.to_string(),
         })?;
+        let ipv6 = docker_command(&[
+            "inspect",
+            "--format",
+            &format!(
+                "{{{{(index .NetworkSettings.Networks \\\"{target_network}\\\").GlobalIPv6Address}}}}"
+            ),
+            &target_name,
+        ])?
+        .parse::<std::net::IpAddr>()
+        .map_err(|error| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "read the controlled IPv6 listener address",
+            message: error.to_string(),
+        })?;
 
-        let resolver: Arc<dyn EgressResolver> = Arc::new(FixedResolver(ip));
+        let resolver: Arc<dyn EgressResolver> = Arc::new(FixedResolver(vec![ipv4, ipv6]));
         let sandbox = sandbox(&format!("ns-egress-{}", &suffix[..8]))?
             .with_egress_controller(Arc::new(NativeLinuxDockerEgressController::new(resolver)));
         let allowlist = EgressAllowlist::new(["listener.test"], [18373]);
@@ -541,6 +573,16 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                     "sh",
                     "-c",
                     &format!("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -z -w 3 listener.test {ALLOWED_PORT}"),
+                ]),
+            )
+            .await;
+        let allowed_v6 = sandbox
+            .exec(
+                &info.id,
+                &ExecRequest::new([
+                    "sh",
+                    "-c",
+                    "unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -6 -z -w 3 listener.test 18376",
                 ]),
             )
             .await;
@@ -590,6 +632,13 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
         );
         let allowed_hits =
             docker_command(&["exec", &target_name, "sh", "-c", "test -s /tmp/allowed"]);
+        let allowed_v6_hits = docker_command(&[
+            "exec",
+            &target_name,
+            "sh",
+            "-c",
+            "test -s /tmp/allowed-v6",
+        ]);
         let blocked_hits = Command::new("docker")
             .args(["exec", &target_name, "sh", "-c", "test ! -s /tmp/blocked"])
             .status()
@@ -602,20 +651,24 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
         // Cleanup runs before any assertion is returned to the test harness.
         let destroy = sandbox.destroy(&info.id).await;
         let allowed = allowed?;
+        let allowed_v6 = allowed_v6?;
         let blocked = blocked?;
         let host_gateway = host_gateway?;
         let dns_blocked = dns_blocked?;
         direct_dns?;
         destroy?;
         allowed_hits?;
+        let allowed_v6_hits = allowed_v6_hits?;
         let blocked_hits = blocked_hits?;
         let dns_hits = dns_hits?;
         if allowed.exit_code != 0
+            || allowed_v6.exit_code != 0
             || blocked.exit_code == 0
             || host_gateway.exit_code == 0
             || dns_blocked.exit_code == 0
             || published_response != b"published-ok\n"
             || !blocked_hits.success()
+            || !allowed_v6_hits.success()
             || !dns_hits.success()
             || !host_listener_untouched
         {
@@ -623,13 +676,15 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 sandbox: "docker".to_owned(),
                 operation: "verify native egress allowlist",
                 message: format!(
-                    "allowed exit={}, blocked exit={}, host-gateway exit={}, unlisted DNS lookup exit={}, published response={published_response:?}, forbidden TCP hit={}, forbidden DNS hit={}, host listener touched={}",
+                    "allowed v4 exit={}, allowed v6 exit={}, blocked exit={}, host-gateway exit={}, unlisted DNS lookup exit={}, published response={published_response:?}, forbidden TCP hit={}, forbidden DNS hit={}, allowed v6 hit={}, host listener touched={}",
                     allowed.exit_code,
+                    allowed_v6.exit_code,
                     blocked.exit_code,
                     host_gateway.exit_code,
                     dns_blocked.exit_code,
                     !blocked_hits.success(),
                     !dns_hits.success(),
+                    !allowed_v6_hits.success(),
                     !host_listener_untouched
                 ),
             });
