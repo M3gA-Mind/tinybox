@@ -76,6 +76,32 @@ async fn allowlist_controller_prepares_before_start_and_cleans_after_destroy() -
 }
 
 #[tokio::test]
+async fn destroying_persisted_allowlist_without_controller_refuses_before_removal() -> Result<()> {
+    let host = ScriptedHost::silent();
+    let store = Arc::new(MemoryStore::new());
+    let sandbox = DockerSandbox::new(host.clone(), store.clone())
+        .with_egress_controller(Arc::new(RecordingEgressController));
+    let allowlist = tinybox_core::EgressAllowlist::new(["api.example.test"], [443]);
+    let info = sandbox
+        .create(&spec()?.with_network(NetworkPolicy::Allowlist(allowlist)))
+        .await?;
+    let commands_before_destroy = host.commands();
+    let reconstructed = DockerSandbox::new(host.clone(), store.clone());
+
+    assert!(matches!(
+        reconstructed.destroy(&info.id).await,
+        Err(Error::ConstraintNotEnforced {
+            constraint: tinybox_core::Constraint::Network,
+            enforcement: tinybox_core::Enforcement::Unsupported,
+            ..
+        })
+    ));
+    assert_eq!(host.commands(), commands_before_destroy);
+    assert_eq!(store.list()?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn controller_failure_rolls_back_before_dropping_the_box_record() -> Result<()> {
     #[derive(Debug)]
     struct FailingController;
