@@ -66,6 +66,21 @@ impl Host for FakeNativeHost {
         if is_missing_hook {
             return Ok(ExecOutput::new(1, Vec::new(), b"rule not found".to_vec()));
         }
+        if request.argv.iter().any(|part| part == "FORWARD")
+            && request.argv.iter().any(|part| part == "-S")
+        {
+            let firewall = if request.argv.iter().any(|part| part == "ip6tables") {
+                "ip6tables"
+            } else {
+                "iptables"
+            };
+            let rules = if firewall == self.missing_forward_hook {
+                "-P FORWARD DROP\n-A FORWARD -j DOCKER-FORWARD\n"
+            } else {
+                "-P FORWARD DROP\n-A FORWARD -j DOCKER-USER\n-A FORWARD -j DOCKER-FORWARD\n"
+            };
+            return Ok(ExecOutput::new(0, rules.as_bytes().to_vec(), Vec::new()));
+        }
         Ok(ExecOutput::new(0, b"chain exists\n".to_vec(), Vec::new()))
     }
 }

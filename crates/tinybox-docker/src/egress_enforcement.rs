@@ -250,6 +250,13 @@ async fn verify_engine_and_firewall(host: &dyn Host) -> Result<()> {
                 return Err(unsupported("required root firewall chains are unavailable"));
             }
         }
+        let forward = firewall_output(host, firewall, ["-S", "FORWARD"]).await?;
+        let first_rule = forward.lines().find(|line| line.starts_with("-A FORWARD "));
+        if first_rule != Some("-A FORWARD -j DOCKER-USER") {
+            return Err(unsupported(
+                "Docker egress firewall hook is missing or ordered after another FORWARD rule",
+            ));
+        }
     }
     Ok(())
 }
