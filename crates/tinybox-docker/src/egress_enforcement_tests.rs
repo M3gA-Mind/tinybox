@@ -102,8 +102,10 @@ impl EgressResolver for Resolver {
 }
 
 #[derive(Debug)]
+#[cfg(target_os = "linux")]
 struct MappedIpv4Resolver;
 
+#[cfg(target_os = "linux")]
 impl EgressResolver for MappedIpv4Resolver {
     fn resolve(&self, _hostname: &str) -> std::io::Result<Vec<IpAddr>> {
         Ok(vec!["::ffff:203.0.113.11".parse().map_err(|error| {
@@ -465,6 +467,7 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn assert_input_return_rules(commands: &[Vec<String>], names: &NetworkNames) -> Result<()> {
     let input_established_position = commands
         .iter()
