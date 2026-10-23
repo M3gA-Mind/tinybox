@@ -109,6 +109,30 @@ fn local_docker_daemon_pinning_is_idempotent() {
     assert_eq!(force_local_rootful_docker(pinned.clone()), pinned);
 }
 
+#[test]
+fn workload_docker_host_arguments_do_not_bypass_daemon_pinning() {
+    let command = vec![
+        "docker".to_owned(),
+        "run".to_owned(),
+        "image".to_owned(),
+        "echo".to_owned(),
+        "--host".to_owned(),
+        "unix:///var/run/docker.sock".to_owned(),
+    ];
+
+    let pinned = force_local_rootful_docker(command);
+    let run = pinned.iter().position(|part| part == "run").unwrap();
+    assert_eq!(&pinned[..run], ["docker", "--host", "unix:///var/run/docker.sock"]);
+}
+
+#[test]
+fn local_docker_daemon_pinning_disables_client_tls_from_workload_environment() {
+    let pinned = force_local_rootful_docker(vec!["docker".into(), "info".into()]);
+    let info = pinned.iter().position(|part| part == "info").unwrap();
+
+    assert!(pinned[..info].windows(2).any(|pair| pair == ["--tlsverify", "false"]));
+}
+
 #[derive(Debug)]
 #[cfg(target_os = "linux")]
 struct MappedIpv4Resolver;
