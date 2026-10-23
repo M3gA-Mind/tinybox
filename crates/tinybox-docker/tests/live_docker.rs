@@ -138,6 +138,12 @@ fn exchange_before(address: SocketAddr, deadline: Instant) -> Result<Vec<u8>> {
                         {
                             continue;
                         }
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::ConnectionReset
+                                && Instant::now() < deadline =>
+                        {
+                            break;
+                        }
                         Err(error) => {
                             return Err(Error::io("read published-port response", &error));
                         }
@@ -153,6 +159,7 @@ fn exchange_before(address: SocketAddr, deadline: Instant) -> Result<Vec<u8>> {
                         return Ok(response);
                     }
                 }
+                thread::sleep(Duration::from_millis(20));
             }
             Err(error)
                 if matches!(
