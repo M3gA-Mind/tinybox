@@ -27,9 +27,13 @@ fn async_pipe(file: std::fs::File) -> Result<AsyncPipe> {
         use nix::fcntl::fcntl;
 
         set_nonblocking_with(&file, |descriptor, argument| fcntl(descriptor, argument))?;
-        tokio::io::unix::AsyncFd::new(file)
-            .map(AsyncPipe)
-            .map_err(|error| Error::io("register native pipe", &error))
+        // The deprecated constructor is retained because this workspace forbids
+        // unsafe code. `file` is an owned `std::fs::File` moved directly into
+        // AsyncFd, so its descriptor stays valid until AsyncFd is dropped.
+        #[allow(deprecated)]
+        let async_fd = tokio::io::unix::AsyncFd::new(file)
+            .map_err(|error| Error::io("register native pipe", &error))?;
+        Ok(AsyncPipe(async_fd))
     }
     #[cfg(not(unix))]
     {
