@@ -1280,7 +1280,7 @@ async fn empty_successful_network_create_rolls_back_the_owned_network() -> Resul
 
 #[tokio::test]
 #[cfg(target_os = "linux")]
-async fn atomic_chain_marker_failure_leaves_no_chain_and_removes_network() -> Result<()> {
+async fn owner_marker_install_failure_rolls_back_created_chain_and_network() -> Result<()> {
     let id = BoxId::new("box-marker-failure")?;
     let namespace = "test";
     let names = NetworkNames::for_box(namespace, &id);
