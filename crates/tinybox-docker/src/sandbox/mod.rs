@@ -79,11 +79,12 @@ impl ControllerHost {
         if should_rewrite {
             request.argv = self.controller.docker_argv(request.argv);
         }
-        let env_file = if should_rewrite {
-            write_workload_docker_env_file(&mut request)?
-        } else {
-            None
-        };
+        let env_file =
+            if should_rewrite && self.inner.execution_location() == HostExecutionLocation::Local {
+                write_workload_docker_env_file(&mut request)?
+            } else {
+                None
+            };
         Ok(PreparedDockerRequest {
             request,
             _env_file: env_file,

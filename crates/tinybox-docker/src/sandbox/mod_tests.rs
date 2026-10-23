@@ -325,14 +325,8 @@ fn remote_docker_client_keeps_tls_environment_without_a_local_env_file() -> Resu
         inner: ScriptedHost::remote(),
         controller: Arc::new(RecordingEgressController),
     };
-    let mut request = ExecRequest::new([
-        "docker",
-        "run",
-        "--env",
-        "DOCKER_TLS_VERIFY",
-        "--",
-        "image",
-    ]);
+    let mut request =
+        ExecRequest::new(["docker", "run", "--env", "DOCKER_TLS_VERIFY", "--", "image"]);
     request
         .env
         .insert("DOCKER_TLS_VERIFY".to_owned(), "1".to_owned());
