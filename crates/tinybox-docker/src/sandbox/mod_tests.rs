@@ -58,9 +58,7 @@ async fn allowlist_controller_prepares_before_start_and_cleans_after_destroy() -
         .with_egress_controller(Arc::new(RecordingEgressController));
     let allowlist = tinybox_core::EgressAllowlist::new(["api.example.test"], [443]);
     let info = sandbox
-        .create(
-            &spec()?.with_network(NetworkPolicy::Allowlist(allowlist)),
-        )
+        .create(&spec()?.with_network(NetworkPolicy::Allowlist(allowlist)))
         .await?;
 
     let commands = host.commands();
@@ -127,7 +125,10 @@ async fn controller_failure_rolls_back_before_dropping_the_box_record() -> Resul
         })
     ));
     assert_eq!(store.list()?.len(), 0);
-    assert_eq!(host.commands(), [["controller", "prepare"], ["controller", "cleanup"]]);
+    assert_eq!(
+        host.commands(),
+        [["controller", "prepare"], ["controller", "cleanup"]]
+    );
     Ok(())
 }
 

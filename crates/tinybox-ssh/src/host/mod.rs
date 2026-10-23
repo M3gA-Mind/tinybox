@@ -3,9 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tinybox_core::{
-    Error, ExecOutput, ExecRequest, Forward, Host, HostExecutionLocation, Result,
-};
+use tinybox_core::{Error, ExecOutput, ExecRequest, Forward, Host, HostExecutionLocation, Result};
 
 mod forward;
 mod observed;

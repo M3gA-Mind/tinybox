@@ -68,7 +68,11 @@ struct ControllerHost {
 impl ControllerHost {
     fn request(&self, request: &ExecRequest) -> ExecRequest {
         let mut request = request.clone();
-        if request.argv.first().is_some_and(|program| program == "docker") {
+        if request
+            .argv
+            .first()
+            .is_some_and(|program| program == "docker")
+        {
             request.argv = self.controller.docker_argv(request.argv);
         }
         request
@@ -295,12 +299,15 @@ impl DockerSandbox {
     /// different host.
     #[must_use]
     pub fn for_observed_host(&self, host: Arc<dyn Host>) -> Self {
-        let host = self.egress_controller.as_ref().map_or(host.clone(), |controller| {
-            Arc::new(ControllerHost {
-                inner: host,
-                controller: controller.clone(),
-            }) as Arc<dyn Host>
-        });
+        let host = self
+            .egress_controller
+            .as_ref()
+            .map_or(host.clone(), |controller| {
+                Arc::new(ControllerHost {
+                    inner: host,
+                    controller: controller.clone(),
+                }) as Arc<dyn Host>
+            });
         Self {
             host,
             store: self.store.clone(),
@@ -326,10 +333,7 @@ impl DockerSandbox {
     /// host and Docker daemon, and install its default-drop filter before the
     /// workload starts.
     #[must_use]
-    pub fn with_egress_controller(
-        mut self,
-        controller: Arc<dyn DockerEgressController>,
-    ) -> Self {
+    pub fn with_egress_controller(mut self, controller: Arc<dyn DockerEgressController>) -> Self {
         self.host = Arc::new(ControllerHost {
             inner: self.host.clone(),
             controller: controller.clone(),
@@ -581,7 +585,13 @@ impl Sandbox for DockerSandbox {
 
         // Build the command before running anything, so a source this backend
         // cannot handle leaves no container behind.
-        let argv = match args::run(&self.namespace, &info.id, &attempt, spec, network.as_deref()) {
+        let argv = match args::run(
+            &self.namespace,
+            &info.id,
+            &attempt,
+            spec,
+            network.as_deref(),
+        ) {
             Ok(argv) => argv,
             Err(error) => {
                 if network.is_some() {
@@ -948,7 +958,9 @@ impl Sandbox for DockerSandbox {
 impl DockerSandbox {
     async fn cleanup_egress(&self, id: &BoxId) -> Result<()> {
         if let Some(controller) = &self.egress_controller {
-            controller.cleanup(self.host.as_ref(), &self.namespace, id).await?;
+            controller
+                .cleanup(self.host.as_ref(), &self.namespace, id)
+                .await?;
         }
         Ok(())
     }

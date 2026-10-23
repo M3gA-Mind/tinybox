@@ -4,11 +4,7 @@
 //! consumes pinned resolver answers and does not use proxy environment
 //! variables as an enforcement boundary.
 
-use std::{
-    fmt::Debug,
-    net::IpAddr,
-    sync::Arc,
-};
+use std::{fmt::Debug, net::IpAddr, sync::Arc};
 
 use async_trait::async_trait;
 use tinybox_core::{
@@ -234,20 +230,16 @@ async fn verify_engine_and_firewall(host: &dyn Host) -> Result<()> {
         || operating_system.to_ascii_lowercase().contains("desktop")
         || security.contains("rootless")
     {
-        return Err(unsupported("Docker daemon is not a native rootful Linux Engine"));
+        return Err(unsupported(
+            "Docker daemon is not a native rootful Linux Engine",
+        ));
     }
 
     for firewall in ["iptables", "ip6tables"] {
         for chain in ["DOCKER-USER", "INPUT"] {
             let output = host
                 .run(&ExecRequest::new([
-                    "sudo",
-                    "-n",
-                    firewall,
-                    "-w",
-                    "5",
-                    "-S",
-                    chain,
+                    "sudo", "-n", firewall, "-w", "5", "-S", chain,
                 ]))
                 .await?;
             if !output.succeeded() {
@@ -273,7 +265,9 @@ async fn verify_created_network(host: &dyn Host, names: &NetworkNames, id: &BoxI
     .await?;
     let expected = format!("bridge|true|{}|{id}", names.bridge);
     if output != expected {
-        return Err(unsupported("Docker egress network did not match its verified configuration"));
+        return Err(unsupported(
+            "Docker egress network did not match its verified configuration",
+        ));
     }
     Ok(())
 }
@@ -285,12 +279,31 @@ async fn install_firewall(
 ) -> Result<()> {
     install_family(host, "iptables", names, plan, false).await?;
     install_family(host, "ip6tables", names, plan, true).await?;
-    verify_hook(host, "iptables", "DOCKER-USER", &names.bridge, &names.forward_chain)
-        .await?;
+    verify_hook(
+        host,
+        "iptables",
+        "DOCKER-USER",
+        &names.bridge,
+        &names.forward_chain,
+    )
+    .await?;
     verify_hook(host, "iptables", "INPUT", &names.bridge, &names.input_chain).await?;
-    verify_hook(host, "ip6tables", "DOCKER-USER", &names.bridge, &names.forward_chain)
-        .await?;
-    verify_hook(host, "ip6tables", "INPUT", &names.bridge, &names.input_chain).await?;
+    verify_hook(
+        host,
+        "ip6tables",
+        "DOCKER-USER",
+        &names.bridge,
+        &names.forward_chain,
+    )
+    .await?;
+    verify_hook(
+        host,
+        "ip6tables",
+        "INPUT",
+        &names.bridge,
+        &names.input_chain,
+    )
+    .await?;
     Ok(())
 }
 
@@ -406,12 +419,7 @@ async fn verify_hook(
     bridge: &str,
     chain: &str,
 ) -> Result<()> {
-    firewall_success(
-        host,
-        firewall,
-        ["-C", parent, "-i", bridge, "-j", chain],
-    )
-    .await
+    firewall_success(host, firewall, ["-C", parent, "-i", bridge, "-j", chain]).await
 }
 
 async fn cleanup_native(
@@ -456,7 +464,9 @@ async fn cleanup_native(
             }
             let remaining = firewall_output(host, firewall, ["-S"]).await?;
             if remaining.lines().any(|line| line.contains(chain)) {
-                return Err(unsupported("egress firewall chain cleanup was not verified"));
+                return Err(unsupported(
+                    "egress firewall chain cleanup was not verified",
+                ));
             }
         }
     }
@@ -476,7 +486,9 @@ async fn cleanup_native(
     if inspect.succeeded() {
         let owner = inspect.stdout_lossy().trim().to_owned();
         if !network_known_owned && owner != id.as_str() {
-            return Err(unsupported("egress network ownership could not be verified"));
+            return Err(unsupported(
+                "egress network ownership could not be verified",
+            ));
         }
         docker_success(
             host,
@@ -515,8 +527,18 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    let mut argv = vec!["sudo".to_owned(), "-n".to_owned(), firewall.to_owned(), "-w".to_owned(), "5".to_owned()];
-    argv.extend(arguments.into_iter().map(|argument| argument.as_ref().to_owned()));
+    let mut argv = vec![
+        "sudo".to_owned(),
+        "-n".to_owned(),
+        firewall.to_owned(),
+        "-w".to_owned(),
+        "5".to_owned(),
+    ];
+    argv.extend(
+        arguments
+            .into_iter()
+            .map(|argument| argument.as_ref().to_owned()),
+    );
     let output = host.run(&ExecRequest::new(argv)).await?;
     if !output.succeeded() {
         return Err(unsupported("required firewall command failed"));
@@ -527,7 +549,9 @@ where
 async fn docker_output(host: &dyn Host, argv: Vec<String>) -> Result<String> {
     let output = docker_request(host, force_local_rootful_docker(argv)).await?;
     if !output.succeeded() {
-        return Err(unsupported("Docker daemon identity or configuration could not be verified"));
+        return Err(unsupported(
+            "Docker daemon identity or configuration could not be verified",
+        ));
     }
     Ok(output.stdout_lossy().trim().to_owned())
 }
