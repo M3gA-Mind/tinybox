@@ -598,15 +598,15 @@ fn exchange_before_retries_a_connection_closed_before_the_response() {
         };
         let mut request = [0; 64];
         let _ = second.read(&mut request).unwrap();
-        second.write_all(b"published-ok\\n").unwrap();
+        second.write_all(b"published-ok\n").unwrap();
     });
 
     let response = exchange_before(address, Instant::now() + Duration::from_secs(2)).unwrap();
     server.join().unwrap();
     assert!(
         response
-            .windows(b"published-ok\\n".len())
-            .any(|window| window == b"published-ok\\n")
+            .windows(b"published-ok\n".len())
+            .any(|window| window == b"published-ok\n")
     );
 }
 
