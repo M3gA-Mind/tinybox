@@ -575,8 +575,9 @@ impl Sandbox for DockerSandbox {
             {
                 Ok(network) => Some(network),
                 Err(error) => {
-                    self.discard_failed_create_record(&info.id, &attempt);
-                    return Err(error);
+                    return Err(self
+                        .rollback_failed_egress_create(&info.id, &attempt, error)
+                        .await);
                 }
             }
         } else {
@@ -595,7 +596,9 @@ impl Sandbox for DockerSandbox {
             Ok(argv) => argv,
             Err(error) => {
                 if network.is_some() {
-                    let _ = self.cleanup_egress(&info.id).await;
+                    return Err(self
+                        .rollback_failed_egress_create(&info.id, &attempt, error)
+                        .await);
                 }
                 self.discard_failed_create_record(&info.id, &attempt);
                 return Err(error);
@@ -609,7 +612,9 @@ impl Sandbox for DockerSandbox {
             // Never remove that name: it belongs to the pre-existing owner.
             if is_name_conflict(&error) {
                 if network.is_some() {
-                    let _ = self.cleanup_egress(&info.id).await;
+                    return Err(self
+                        .rollback_failed_egress_create(&info.id, &attempt, error)
+                        .await);
                 }
                 self.discard_failed_create_record(&info.id, &attempt);
                 return Err(error);
@@ -632,8 +637,17 @@ impl Sandbox for DockerSandbox {
                         .await
                         .is_ok()
                     {
-                        if network.is_some() {
-                            let _ = self.cleanup_egress(&info.id).await;
+                        let cleanup = if network.is_some() {
+                            self.cleanup_egress(&info.id).await
+                        } else {
+                            Ok(())
+                        };
+                        if cleanup.is_err() {
+                            self.failed_create_attempts
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .insert(info.id.clone(), attempt);
+                            return Err(error);
                         }
                         self.discard_failed_create_record(&info.id, &attempt);
                     } else {
@@ -645,13 +659,25 @@ impl Sandbox for DockerSandbox {
                 }
                 Ok(_) => {
                     if network.is_some() {
-                        let _ = self.cleanup_egress(&info.id).await;
+                        if self.cleanup_egress(&info.id).await.is_err() {
+                            self.failed_create_attempts
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .insert(info.id.clone(), attempt);
+                            return Err(error);
+                        }
                     }
                     self.discard_failed_create_record(&info.id, &attempt);
                 }
                 Err(Error::Backend { message, .. }) if message.contains("No such container") => {
                     if network.is_some() {
-                        let _ = self.cleanup_egress(&info.id).await;
+                        if self.cleanup_egress(&info.id).await.is_err() {
+                            self.failed_create_attempts
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .insert(info.id.clone(), attempt);
+                            return Err(error);
+                        }
                     }
                     self.discard_failed_create_record(&info.id, &attempt);
                 }
@@ -956,6 +982,31 @@ impl Sandbox for DockerSandbox {
 }
 
 impl DockerSandbox {
+    async fn rollback_failed_egress_create(
+        &self,
+        id: &BoxId,
+        attempt: &str,
+        error: Error,
+    ) -> Error {
+        match self.cleanup_egress(id).await {
+            Ok(()) => {
+                self.discard_failed_create_record(id, attempt);
+                error
+            }
+            Err(cleanup_error) => {
+                self.failed_create_attempts
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(id.clone(), attempt.to_owned());
+                Error::Backend {
+                    sandbox: NAME.to_owned(),
+                    operation: "roll back egress network setup",
+                    message: format!("{error}; cleanup failed: {cleanup_error}"),
+                }
+            }
+        }
+    }
+
     async fn cleanup_egress(&self, id: &BoxId) -> Result<()> {
         if let Some(controller) = &self.egress_controller {
             controller

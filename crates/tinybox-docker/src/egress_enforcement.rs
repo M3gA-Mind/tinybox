@@ -321,38 +321,41 @@ async fn install_family(
 
     for chain in [&names.forward_chain, &names.input_chain] {
         firewall_success(host, firewall, ["-N", chain]).await?;
-        for rule in deny_rules(ipv6) {
-            let mut command = vec!["-A".to_owned(), (*chain).clone()];
-            command.extend(rule);
-            firewall_success(host, firewall, command.iter().map(String::as_str)).await?;
-        }
-        for target in plan.targets() {
-            let address = target.address();
-            if is_ipv6(&address) != ipv6 {
-                continue;
-            }
-            for protocol in ["tcp", "udp"] {
-                firewall_success(
-                    host,
-                    firewall,
-                    [
-                        "-A",
-                        chain,
-                        "-d",
-                        &address.to_string(),
-                        "-p",
-                        protocol,
-                        "--dport",
-                        &target.port().to_string(),
-                        "-j",
-                        "ACCEPT",
-                    ],
-                )
-                .await?;
-            }
-        }
-        firewall_success(host, firewall, ["-A", chain, "-j", "DROP"]).await?;
     }
+    for rule in deny_rules(ipv6) {
+        let mut command = vec!["-A".to_owned(), names.forward_chain.clone()];
+        command.extend(rule);
+        firewall_success(host, firewall, command.iter().map(String::as_str)).await?;
+    }
+    for target in plan.targets() {
+        let address = target.address();
+        if is_ipv6(&address) != ipv6 {
+            continue;
+        }
+        for protocol in ["tcp", "udp"] {
+            firewall_success(
+                host,
+                firewall,
+                [
+                    "-A",
+                    &names.forward_chain,
+                    "-d",
+                    &address.to_string(),
+                    "-p",
+                    protocol,
+                    "--dport",
+                    &target.port().to_string(),
+                    "-j",
+                    "ACCEPT",
+                ],
+            )
+            .await?;
+        }
+    }
+    firewall_success(host, firewall, ["-A", &names.forward_chain, "-j", "DROP"]).await?;
+    // Host-origin traffic from the managed bridge is categorically denied.
+    // Allowlist entries apply only to routed container egress.
+    firewall_success(host, firewall, ["-A", &names.input_chain, "-j", "DROP"]).await?;
 
     firewall_success(
         host,
