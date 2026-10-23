@@ -16,9 +16,10 @@ use std::sync::{
 
 use async_trait::async_trait;
 use tinybox_core::{
-    BoxId, BoxSpec, BoxState, Capability, Error, ExecOutput, ExecRequest, Host, HostRef,
-    HostExecutionLocation, IsolationLevel, MemoryStore, NetworkPolicy, Placement, PortMapping,
-    Resources, Result, Sandbox, SandboxRef, SnapshotId, SnapshotSupport, Store, WorkspaceSource,
+    BoxId, BoxSpec, BoxState, Capability, Error, ExecOutput, ExecRequest, Host,
+    HostExecutionLocation, HostRef, IsolationLevel, MemoryStore, NetworkPolicy, Placement,
+    PortMapping, Resources, Result, Sandbox, SandboxRef, SnapshotId, SnapshotSupport, Store,
+    WorkspaceSource,
 };
 
 use super::{DockerSandbox, NAME, args, cleanup_timeout_error, state};
@@ -143,7 +144,10 @@ async fn native_controller_refuses_hosts_without_explicit_local_identity() -> Re
     }
 
     let allowlist = tinybox_core::EgressAllowlist::new(["api.example.test"], [443]);
-    for location in [HostExecutionLocation::Unknown, HostExecutionLocation::Remote] {
+    for location in [
+        HostExecutionLocation::Unknown,
+        HostExecutionLocation::Remote,
+    ] {
         let host = Arc::new(ScriptedHost {
             location: Some(location),
             ..ScriptedHost::default()
