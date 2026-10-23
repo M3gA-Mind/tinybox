@@ -323,6 +323,10 @@ impl Host for PreparedNativeHost {
             .any(|arg| arg == "iptables" || arg == "ip6tables")
         {
             #[cfg(target_os = "linux")]
+            if self.no_matching_hooks && argv.iter().any(|arg| arg == "-C") {
+                return Ok(ExecOutput::new(1, Vec::new(), b"rule not found".to_vec()));
+            }
+            #[cfg(target_os = "linux")]
             if let Some(index) = argv.iter().position(|arg| arg == "-F")
                 && let Some(chain) = argv.get(index + 1)
             {
@@ -335,6 +339,10 @@ impl Host for PreparedNativeHost {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .remove(&(firewall, chain.clone()));
+                self.chains_with_rules
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&(argv.iter().find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables")).cloned().unwrap_or_default(), chain.clone()));
             }
             #[cfg(target_os = "linux")]
             if *self
@@ -410,6 +418,18 @@ impl Host for PreparedNativeHost {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .insert((firewall, chain.clone()));
+                self.chains_with_rules
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert((argv.iter().find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables")).cloned().unwrap_or_default(), chain.clone()));
+            } else if let Some(index) = argv.iter().position(|arg| arg == "-A")
+                && let Some(chain) = argv.get(index + 1)
+            {
+                let firewall = argv.iter().find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables")).cloned().unwrap_or_default();
+                self.chains_with_rules
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert((firewall, chain.clone()));
             }
             if argv.iter().any(|arg| arg == "FORWARD") {
                 return Ok(ExecOutput::new(
@@ -433,6 +453,10 @@ impl Host for PreparedNativeHost {
                     .marked_chains
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let chains_with_rules = self
+                    .chains_with_rules
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let stdout = [&self.forward_chain, &self.input_chain]
                     .into_iter()
                     .filter(|chain| chains.contains(&(firewall.clone(), (*chain).clone())))
@@ -445,7 +469,9 @@ impl Host for PreparedNativeHost {
                                 self.chain_owner_token
                             );
                         }
-                        if self.missing_final_drop.as_deref() != Some(chain) {
+                        if chains_with_rules.contains(&(firewall.clone(), chain.clone()))
+                            && self.missing_final_drop.as_deref() != Some(chain)
+                        {
                             let _ = writeln!(stdout, "-A {chain} -j DROP");
                         }
                         stdout
