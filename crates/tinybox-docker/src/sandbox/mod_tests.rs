@@ -665,6 +665,13 @@ impl ScriptedHost {
         Arc::new(Self::default())
     }
 
+    fn local() -> Arc<Self> {
+        Arc::new(Self {
+            location: Some(HostExecutionLocation::Local),
+            ..Self::default()
+        })
+    }
+
     fn replies(&self) -> MutexGuard<'_, VecDeque<ExecOutput>> {
         self.replies.lock().unwrap_or_else(PoisonError::into_inner)
     }
