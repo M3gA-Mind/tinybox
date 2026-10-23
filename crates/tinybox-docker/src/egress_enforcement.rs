@@ -12,12 +12,14 @@ use sha2::{Digest, Sha256};
 use tinybox_core::{
     BoxId, EgressAllowlist, Error, ExecOutput, ExecRequest, Host, HostExecutionLocation, Result,
 };
+use uuid::Uuid;
 
 use crate::{EgressResolver, PinnedEgressPlan, plan_egress_allowlist};
 
 const DOCKER_SOCKET: &str = "unix:///var/run/docker.sock";
 const OWNER_LABEL: &str = "ai.tinyhumans.tinybox.egress.owner";
 const SCOPE_LABEL: &str = "ai.tinyhumans.tinybox.egress.scope";
+const ATTEMPT_LABEL: &str = "ai.tinyhumans.tinybox.egress.attempt";
 const ALLOWLIST_PROTOCOLS: [&str; 1] = ["tcp"];
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -251,21 +253,66 @@ struct NetworkNames {
     forward_chain: String,
     input_chain: String,
     owner_token: String,
+    attempt_token: String,
+    chain_prefix: String,
+    chain_owner_token: String,
 }
 
 impl NetworkNames {
     fn for_box(namespace: &str, id: &BoxId) -> Self {
+        let attempt_token = fresh_attempt_token(namespace, id);
+        Self::for_attempt(namespace, id, &attempt_token)
+    }
+
+    fn for_attempt(namespace: &str, id: &BoxId, attempt_token: &str) -> Self {
         let hash = stable_hash(namespace.as_bytes(), id.as_str().as_bytes());
         let short = format!("{hash:016x}");
+        let chain_prefix = format!("TBX{}", &short[..4]);
+        let chain_token = &attempt_token[..20];
         Self {
             network: format!("tinybox-egress-{}", &short[..12]),
             // Linux interface names are limited to IFNAMSIZ - 1 (15 bytes).
             bridge: format!("tbx{}", &short[..12]),
-            forward_chain: format!("TBX{}F", &short[..10]),
-            input_chain: format!("TBX{}I", &short[..10]),
+            forward_chain: format!("{chain_prefix}{chain_token}F"),
+            input_chain: format!("{chain_prefix}{chain_token}I"),
             owner_token: scope_token(namespace, id.as_str()),
+            attempt_token: attempt_token.to_owned(),
+            chain_prefix,
+            chain_owner_token: chain_owner_token(namespace, id.as_str(), attempt_token),
         }
     }
+}
+
+fn fresh_attempt_token(namespace: &str, id: &BoxId) -> String {
+    #[cfg(test)]
+    {
+        scope_token(namespace, id.as_str())[..32].to_owned()
+    }
+    #[cfg(not(test))]
+    {
+        let _ = (namespace, id);
+        Uuid::new_v4().simple().to_string()
+    }
+}
+
+fn chain_owner_token(namespace: &str, id: &str, attempt: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"tinybox-egress-chain-owner-v1\0");
+    for value in [namespace, id, attempt] {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let mut token = String::with_capacity(64);
+    for byte in digest {
+        token.push(char::from(HEX[usize::from(byte >> 4)]));
+        token.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    token
+}
+
+fn valid_attempt_token(attempt: &str) -> bool {
+    attempt.len() == 32 && attempt.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn scope_token(namespace: &str, id: &str) -> String {
@@ -349,19 +396,6 @@ async fn verify_engine_and_firewall(host: &dyn Host) -> Result<()> {
     }
 
     for firewall in ["iptables", "ip6tables"] {
-        let restore = host
-            .run(&ExecRequest::new([
-                "sudo",
-                "-n",
-                firewall_restore(firewall),
-                "--version",
-            ]))
-            .await?;
-        if !restore.succeeded() {
-            return Err(unsupported(
-                "required atomic firewall restore tool is unavailable",
-            ));
-        }
         for chain in ["DOCKER-USER", "INPUT"] {
             let output = host
                 .run(&ExecRequest::new([
@@ -530,8 +564,9 @@ async fn install_family(
     }
 
     for chain in [&names.forward_chain, &names.input_chain] {
-        create_chain_with_owner_marker(host, firewall, chain, &names.owner_token, ipv6).await?;
+        firewall_success(host, firewall, ["-N", chain]).await?;
         attempt_owned_chains.insert((firewall.to_owned(), chain.clone()));
+        append_chain_owner_marker(host, firewall, chain, &names.chain_owner_token, ipv6).await?;
     }
     for rule in deny_rules(ipv6) {
         let mut command = vec!["-A".to_owned(), names.forward_chain.clone()];
@@ -671,48 +706,6 @@ async fn install_pinned_destinations(
         }
     }
     Ok(())
-}
-
-async fn create_chain_with_owner_marker(
-    host: &dyn Host,
-    firewall: &str,
-    chain: &str,
-    owner_token: &str,
-    ipv6: bool,
-) -> Result<()> {
-    let impossible_source = if ipv6 { "::/128" } else { "0.0.0.0/32" };
-    // iptables-restore applies one table update as a transaction. Creating
-    // the chain and its owner marker together prevents a process crash from
-    // leaving an unmarked chain that cannot be safely reclaimed later.
-    let script = format!(
-        "*filter\n:{chain} - [0:0]\n-A {chain} -s {impossible_source} -m comment --comment {owner_token} -j DROP\nCOMMIT\n"
-    );
-    let output = host
-        .run(
-            &ExecRequest::new([
-                "sudo",
-                "-n",
-                firewall_restore(firewall),
-                "--noflush",
-                "-w",
-                "5",
-            ])
-            .with_stdin(script.into_bytes()),
-        )
-        .await?;
-    if output.succeeded() {
-        Ok(())
-    } else {
-        Err(unsupported("atomic firewall chain creation failed"))
-    }
-}
-
-fn firewall_restore(firewall: &str) -> &'static str {
-    if firewall == "ip6tables" {
-        "ip6tables-restore"
-    } else {
-        "iptables-restore"
-    }
 }
 
 async fn append_chain_owner_marker(
@@ -1016,7 +1009,13 @@ async fn cleanup_native_with_attempt(
         firewall_success(host, firewall, ["-F", chain]).await?;
         if let Err(delete_error) = firewall_success(host, firewall, ["-X", chain]).await {
             let ipv6 = firewall == "ip6tables";
-            return match append_chain_owner_marker(host, firewall, chain, &names.owner_token, ipv6)
+            return match append_chain_owner_marker(
+                host,
+                firewall,
+                chain,
+                &names.chain_owner_token,
+                ipv6,
+            )
                 .await
             {
                 Ok(()) => Err(delete_error),
