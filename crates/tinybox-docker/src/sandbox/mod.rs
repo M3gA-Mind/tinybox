@@ -147,7 +147,7 @@ fn add_docker_env_file_flag(
     path: &Path,
     values: &[(&str, String)],
 ) -> Vec<String> {
-    if !argv.first().is_some_and(|program| program == "docker") {
+    if argv.first().is_none_or(|program| program != "docker") {
         return argv;
     }
     let mut index = 1;
@@ -159,10 +159,8 @@ fn add_docker_env_file_flag(
         }
     }
     if let Some(subcommand) = argv.iter().position(|part| part == "run" || part == "exec") {
-        argv.splice(
-            subcommand + 1..subcommand + 1,
-            ["--env-file".to_owned(), path.display().to_string()],
-        );
+        argv.insert(subcommand + 1, "--env-file".to_owned());
+        argv.insert(subcommand + 2, path.display().to_string());
     }
     argv
 }
