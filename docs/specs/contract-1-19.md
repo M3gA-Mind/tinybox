@@ -24,11 +24,12 @@ least 19, which `tinybox_bus::is_compatible` already enforces.
   when the spec is validated, and a backend must also block them when a name
   resolves to one.
 - Explicit loopback entries are refused during validation: IPv4/IPv6 loopback
-  literals (including IPv4-mapped IPv6), `localhost` and `.localhost` names,
-  and legacy numeric IPv4 spellings accepted by common resolvers, such as
-  `127.1`, `2130706433`, `0x7f000001`, and `0177.0.0.1`. This check applies to
-  entries as written; an enforcing backend must also block resolved loopback
-  addresses. It does not by itself provide DNS-rebinding protection.
+  literals (including IPv4-mapped IPv6 and scoped forms such as `::1%1`),
+  `localhost` and `.localhost` names, and legacy numeric IPv4 spellings
+  accepted by common resolvers, such as `127.1`, `2130706433`, `0x7f000001`,
+  and `0177.0.0.1`. This check applies to entries as written; an enforcing
+  backend must also block resolved loopback addresses. It does not by itself
+  provide DNS-rebinding protection.
 - A backend that cannot enforce the list refuses the box with
   `ConstraintNotEnforced { constraint: Network, enforcement: Unsupported }`.
   It never widens the list to `Egress`. A backend that enforces only part of it

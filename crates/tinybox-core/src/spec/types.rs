@@ -1,6 +1,6 @@
 //! The parts a [`BoxSpec`](crate::spec::BoxSpec) is assembled from.
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -257,11 +257,11 @@ pub enum NetworkPolicy {
 /// when a hostname resolves to one of them.
 ///
 /// Explicit loopback addresses and aliases are also invalid. This includes
-/// IPv4/IPv6 loopback literals, IPv4-mapped loopback literals, `localhost`
-/// names, and legacy numeric IPv4 spellings accepted by common resolvers (for
-/// example `127.1`, `2130706433`, `0x7f000001`, and `0177.0.0.1`). These are
-/// checked as explicit allowlist entries; enforcing backends must also reject
-/// resolved loopback addresses.
+/// IPv4/IPv6 loopback literals, IPv4-mapped loopback literals, scoped IPv6
+/// literals such as `::1%1`, `localhost` names, and legacy numeric IPv4
+/// spellings accepted by common resolvers (for example `127.1`, `2130706433`,
+/// `0x7f000001`, and `0177.0.0.1`). These are checked as explicit allowlist
+/// entries; enforcing backends must also reject resolved loopback addresses.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct EgressAllowlist {
     /// Host names or IP literals the box may connect to.
@@ -312,14 +312,29 @@ impl EgressAllowlist {
 
         match host.parse::<IpAddr>() {
             Ok(IpAddr::V4(address)) => address.is_loopback(),
-            Ok(IpAddr::V6(address)) => {
-                address.is_loopback()
-                    || address
-                        .to_ipv4_mapped()
-                        .is_some_and(|mapped| mapped.is_loopback())
+            Ok(IpAddr::V6(address)) => Self::is_loopback_ipv6(address),
+            Err(_) => {
+                Self::parse_scoped_ipv6(&host).is_some_and(Self::is_loopback_ipv6)
+                    || Self::parse_legacy_ipv4(&host)
+                        .is_some_and(|address| address.is_loopback())
             }
-            Err(_) => Self::parse_legacy_ipv4(&host).is_some_and(|address| address.is_loopback()),
         }
+    }
+
+    fn is_loopback_ipv6(address: Ipv6Addr) -> bool {
+        address.is_loopback()
+            || address
+                .to_ipv4_mapped()
+                .is_some_and(|mapped| mapped.is_loopback())
+    }
+
+    /// Parse an IPv6 address with a non-empty zone identifier, if present.
+    fn parse_scoped_ipv6(host: &str) -> Option<Ipv6Addr> {
+        let (address, scope_id) = host.split_once('%')?;
+        if scope_id.is_empty() || scope_id.contains('%') {
+            return None;
+        }
+        address.parse().ok()
     }
 
     /// Parse the legacy numeric IPv4 formats accepted by common resolvers.
