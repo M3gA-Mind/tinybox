@@ -29,12 +29,10 @@ use std::{
 };
 
 use tinybox_core::{
-    BoxId, BoxSpec, EgressAllowlist, Error, ExecRequest, Host as _, HostRef, MemoryStore,
-    NetworkPolicy, Placement, Result, Sandbox, SandboxRef, WorkspaceSource,
+    BoxSpec, EgressAllowlist, Error, ExecRequest, Host as _, HostRef, MemoryStore, NetworkPolicy,
+    Placement, Result, Sandbox, SandboxRef, WorkspaceSource,
 };
-use tinybox_docker::{
-    DockerEgressController, DockerSandbox, EgressResolver, NativeLinuxDockerEgressController,
-};
+use tinybox_docker::{DockerSandbox, EgressResolver, NativeLinuxDockerEgressController};
 use tinybox_host::LocalHost;
 
 /// The image every live test uses. Small, and it ships a shell.
@@ -375,6 +373,139 @@ async fn live_network_policy_controls_host_listener_connectivity() -> Result<()>
         no_denied_connection,
         "default-Denied container established a connection to the controlled listener"
     );
+    Ok(())
+}
+
+#[derive(Debug)]
+struct FixedResolver(std::net::IpAddr);
+
+impl EgressResolver for FixedResolver {
+    fn resolve(&self, _hostname: &str) -> std::io::Result<Vec<std::net::IpAddr>> {
+        Ok(vec![self.0])
+    }
+}
+
+fn docker_command(arguments: &[&str]) -> Result<String> {
+    let output = Command::new("docker")
+        .args(arguments)
+        .output()
+        .map_err(|error| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "run the controlled egress listener",
+            message: error.to_string(),
+        })?;
+    if !output.status.success() {
+        return Err(Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "run the controlled egress listener",
+            message: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+/// A disposable Linux Engine proof for the native firewall controller.
+///
+/// Both listeners run in a separate, test-owned bridge container, so this
+/// exercises raw TCP from the sandbox without opening a path to the Docker
+/// host or relying on a public service.
+#[tokio::test]
+async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<()> {
+    if !live_docker_enabled()? {
+        return Ok(());
+    }
+
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let target_name = format!("tinybox-egress-target-{}", &suffix[..12]);
+    const ALLOWED_PORT: &str = "18373";
+    const BLOCKED_PORT: &str = "18374";
+    let image = docker_command(&[
+        "run",
+        "-d",
+        "--name",
+        &target_name,
+        IMAGE,
+        "sh",
+        "-c",
+        "(while true; do nc -l -p 18373 >/dev/null; echo hit >> /tmp/allowed; done) & (while true; do nc -l -p 18374 >/dev/null; echo hit >> /tmp/blocked; done) & wait",
+    ]);
+    let _ = image?;
+    let result = async {
+        let ip = docker_command(&[
+            "inspect",
+            "--format",
+            "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+            &target_name,
+        ])?
+        .parse::<std::net::IpAddr>()
+        .map_err(|error| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "read the controlled listener address",
+            message: error.to_string(),
+        })?;
+
+        let resolver: Arc<dyn EgressResolver> = Arc::new(FixedResolver(ip));
+        let sandbox = sandbox(&format!("ns-egress-{}", &suffix[..8]))?
+            .with_egress_controller(Arc::new(NativeLinuxDockerEgressController::new(resolver)));
+        let allowlist = EgressAllowlist::new(["listener.test"], [18373]);
+        let info = sandbox
+            .create(&spec()?.with_network(NetworkPolicy::Allowlist(allowlist)))
+            .await?;
+
+        let allowed = sandbox
+            .exec(
+                &info.id,
+                &ExecRequest::new(["sh", "-c", &format!("nc -z -w 3 {ip} {ALLOWED_PORT}")]),
+            )
+            .await;
+        let blocked = sandbox
+            .exec(
+                &info.id,
+                &ExecRequest::new(["sh", "-c", &format!("nc -z -w 2 {ip} {BLOCKED_PORT}")]),
+            )
+            .await;
+        let allowed_hits =
+            docker_command(&["exec", &target_name, "sh", "-c", "test -s /tmp/allowed"]);
+        let blocked_hits = Command::new("docker")
+            .args(["exec", &target_name, "sh", "-c", "test ! -s /tmp/blocked"])
+            .status()
+            .map_err(|error| Error::io("check forbidden listener", &error));
+
+        // Cleanup runs before any assertion is returned to the test harness.
+        let destroy = sandbox.destroy(&info.id).await;
+        let allowed = allowed?;
+        let blocked = blocked?;
+        destroy?;
+        allowed_hits?;
+        let blocked_hits = blocked_hits?;
+        if allowed.exit_code != 0 || blocked.exit_code == 0 || !blocked_hits.success() {
+            return Err(Error::Backend {
+                sandbox: "docker".to_owned(),
+                operation: "verify native egress allowlist",
+                message: format!(
+                    "allowed exit={}, blocked exit={}, forbidden listener hit={}",
+                    allowed.exit_code,
+                    blocked.exit_code,
+                    !blocked_hits.success()
+                ),
+            });
+        }
+        Ok(())
+    }
+    .await;
+    let cleanup = Command::new("docker")
+        .args(["rm", "-f", &target_name])
+        .status()
+        .map_err(|error| Error::io("remove controlled listener", &error));
+    result?;
+    let cleanup = cleanup?;
+    if !cleanup.success() {
+        return Err(Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "remove controlled listener",
+            message: "docker rm returned a failure status".to_owned(),
+        });
+    }
     Ok(())
 }
 
