@@ -30,6 +30,11 @@ const OWNER_LABEL: &str = "ai.tinyhumans.tinybox.egress.owner";
 /// controller is installed, so lifecycle operations address the same daemon.
 #[async_trait]
 pub trait DockerEgressController: Debug + Send + Sync {
+    /// Verify the execution location and required daemon/filter capability.
+    async fn validate_host(&self, _host: &dyn Host) -> Result<()> {
+        Ok(())
+    }
+
     /// Resolve, pin, and prepare a filtered network for this box.
     ///
     /// Implementations must not start the workload. The returned network name
@@ -72,6 +77,12 @@ impl NativeLinuxDockerEgressController {
 
 #[async_trait]
 impl DockerEgressController for NativeLinuxDockerEgressController {
+    async fn validate_host(&self, host: &dyn Host) -> Result<()> {
+        ensure_supported_host(host)?;
+        ensure_linux_target()?;
+        verify_engine_and_firewall(host).await
+    }
+
     async fn prepare(
         &self,
         host: &dyn Host,
@@ -538,6 +549,9 @@ async fn docker_request(host: &dyn Host, argv: Vec<String>) -> Result<ExecOutput
 }
 
 fn force_local_rootful_docker(argv: Vec<String>) -> Vec<String> {
+    if argv.first().is_some_and(|program| program == "env") {
+        return argv;
+    }
     let mut forced = vec![
         "env".into(),
         "-u".into(),
