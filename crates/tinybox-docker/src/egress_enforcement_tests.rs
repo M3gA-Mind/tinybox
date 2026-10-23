@@ -585,14 +585,19 @@ async fn ambiguous_create_retains_cleanup_error_when_owned_network_removal_fails
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
     let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
 
-    assert!(matches!(
-        controller.prepare(&host, namespace, &id, &allowlist).await,
-        Err(Error::Backend {
-            operation: "roll back egress network setup",
-            ref message,
-            ..
-        }) if message.contains("owned egress network rollback failed")
-    ));
+    let result = controller.prepare(&host, namespace, &id, &allowlist).await;
+    assert!(
+        matches!(
+            result,
+            Err(Error::Backend {
+                operation: "roll back egress network setup",
+                ref message,
+                ..
+            }) if message.contains("owned egress network rollback failed")
+        ),
+        "{result:?}; commands={:?}",
+        host.commands()
+    );
     assert_eq!(
         host.commands()
             .iter()
