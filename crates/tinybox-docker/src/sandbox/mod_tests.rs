@@ -337,6 +337,26 @@ fn remote_docker_client_keeps_tls_environment_without_a_local_env_file() -> Resu
     Ok(())
 }
 
+#[test]
+fn custom_local_docker_controller_preserves_daemon_tls_environment() -> Result<()> {
+    let host = super::ControllerHost {
+        inner: ScriptedHost::local(),
+        controller: Arc::new(RecordingEgressController),
+    };
+    let mut request = ExecRequest::new(["docker", "info"]);
+    request
+        .env
+        .insert("DOCKER_TLS_VERIFY".to_owned(), "1".to_owned());
+    request
+        .env
+        .insert("DOCKER_CERT_PATH".to_owned(), "/daemon/certs".to_owned());
+
+    let prepared = host.request(&request)?;
+    assert_eq!(prepared.request.argv, request.argv);
+    assert_eq!(prepared.request.env, request.env);
+    Ok(())
+}
+
 #[tokio::test]
 async fn allowlist_controller_prepares_before_start_and_cleans_after_destroy() -> Result<()> {
     let host = ScriptedHost::silent();
