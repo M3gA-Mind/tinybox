@@ -196,7 +196,10 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
                     operation: "configure egress filtering",
                     message: output.stderr_lossy().trim().to_owned(),
                 };
-                return Err(error);
+                if output.stderr_lossy().contains("already exists") {
+                    return Err(error);
+                }
+                return Err(reconcile_failed_network_create(host, &names, id, error).await);
             }
             Err(error) => {
                 return Err(reconcile_failed_network_create(host, &names, id, error).await);

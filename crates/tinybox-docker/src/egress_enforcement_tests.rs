@@ -1462,7 +1462,11 @@ async fn nonzero_network_create_reconciles_a_current_attempt_side_effect() -> Re
     assert!(commands.iter().any(|argv| {
         argv.iter().any(|arg| arg == "inspect") && argv.iter().any(|arg| arg.contains("{{.Id}}"))
     }));
-    assert!(commands.iter().any(|argv| argv.iter().any(|arg| arg == "rm")));
+    assert!(
+        commands
+            .iter()
+            .any(|argv| argv.iter().any(|arg| arg == "rm"))
+    );
     assert!(!commands.iter().any(|argv| {
         argv.iter()
             .any(|arg| matches!(arg.as_str(), "-A" | "-D" | "-F" | "-X"))
