@@ -120,6 +120,7 @@ struct BridgeLinkHost {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 enum NetworkCreateBehavior {
     Succeed,
     CommandFailure,
@@ -127,6 +128,7 @@ enum NetworkCreateBehavior {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 enum NetworkInspectBehavior {
     Owned,
     Absent,
