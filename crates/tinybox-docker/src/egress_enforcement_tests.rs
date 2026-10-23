@@ -321,7 +321,10 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
     }));
     let established_position = commands
         .iter()
-        .position(|argv| argv.windows(2).any(|args| args == ["--ctstate", "ESTABLISHED,RELATED"]))
+        .position(|argv| {
+            argv.windows(2)
+                .any(|args| args == ["--ctstate", "ESTABLISHED,RELATED"])
+        })
         .ok_or_else(|| Error::Backend {
             sandbox: "docker".to_owned(),
             operation: "find established-flow firewall rule",
@@ -354,7 +357,8 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
         .iter()
         .position(|argv| {
             argv.iter().any(|arg| arg == "ip6tables")
-                && argv.windows(4)
+                && argv
+                    .windows(4)
                     .any(|args| args == ["-A", &names.input_chain, "-j", "DROP"])
         })
         .ok_or_else(|| Error::Backend {

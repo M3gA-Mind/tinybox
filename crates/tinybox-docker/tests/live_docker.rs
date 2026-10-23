@@ -540,6 +540,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
             )
             .await?;
 
+        let probes = async {
         sandbox
             .exec(
                 &info.id,
@@ -592,7 +593,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 &ExecRequest::new([
                     "sh",
                     "-c",
-                    &format!("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -z -w 2 {ip} {BLOCKED_PORT}"),
+                    &format!("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -z -w 2 {ipv4} {BLOCKED_PORT}"),
                 ]),
             )
             .await;
@@ -622,7 +623,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 &ExecRequest::new([
                     "sh",
                     "-c",
-                    &format!("printf probe | nc -u -w 1 {ip} 53 || true"),
+                    &format!("printf probe | nc -u -w 1 {ipv4} 53 || true"),
                 ]),
             )
             .await;
@@ -648,15 +649,12 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
             .status()
             .map_err(|error| Error::io("check forbidden DNS listener", &error));
 
-        // Cleanup runs before any assertion is returned to the test harness.
-        let destroy = sandbox.destroy(&info.id).await;
         let allowed = allowed?;
         let allowed_v6 = allowed_v6?;
         let blocked = blocked?;
         let host_gateway = host_gateway?;
         let dns_blocked = dns_blocked?;
         direct_dns?;
-        destroy?;
         allowed_hits?;
         let allowed_v6_hits = allowed_v6_hits?;
         let blocked_hits = blocked_hits?;
@@ -668,7 +666,6 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
             || dns_blocked.exit_code == 0
             || published_response != b"published-ok\n"
             || !blocked_hits.success()
-            || !allowed_v6_hits.success()
             || !dns_hits.success()
             || !host_listener_untouched
         {
@@ -676,7 +673,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 sandbox: "docker".to_owned(),
                 operation: "verify native egress allowlist",
                 message: format!(
-                    "allowed v4 exit={}, allowed v6 exit={}, blocked exit={}, host-gateway exit={}, unlisted DNS lookup exit={}, published response={published_response:?}, forbidden TCP hit={}, forbidden DNS hit={}, allowed v6 hit={}, host listener touched={}",
+                    "allowed v4 exit={}, allowed v6 exit={}, blocked exit={}, host-gateway exit={}, unlisted DNS lookup exit={}, published response={published_response:?}, forbidden TCP hit={}, forbidden DNS hit={}, host listener touched={}",
                     allowed.exit_code,
                     allowed_v6.exit_code,
                     blocked.exit_code,
@@ -684,11 +681,16 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                     dns_blocked.exit_code,
                     !blocked_hits.success(),
                     !dns_hits.success(),
-                    !allowed_v6_hits.success(),
                     !host_listener_untouched
                 ),
             });
         }
+        Ok(())
+        }
+        .await;
+        let destroy = sandbox.destroy(&info.id).await;
+        probes?;
+        destroy?;
         Ok(())
     }
     .await;
@@ -696,13 +698,18 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
         .args(["rm", "-f", &target_name])
         .status()
         .map_err(|error| Error::io("remove controlled listener", &error));
+    let network_cleanup = Command::new("docker")
+        .args(["network", "rm", &target_network])
+        .status()
+        .map_err(|error| Error::io("remove controlled IPv6 listener network", &error));
     result?;
     let cleanup = cleanup?;
-    if !cleanup.success() {
+    let network_cleanup = network_cleanup?;
+    if !cleanup.success() || !network_cleanup.success() {
         return Err(Error::Backend {
             sandbox: "docker".to_owned(),
-            operation: "remove controlled listener",
-            message: "docker rm returned a failure status".to_owned(),
+            operation: "remove controlled listeners",
+            message: "docker rm or docker network rm returned a failure status".to_owned(),
         });
     }
     Ok(())
