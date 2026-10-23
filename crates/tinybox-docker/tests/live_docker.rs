@@ -20,7 +20,7 @@
 //! connectivity test fails if the opt-in gate was not enabled.
 
 use std::{
-    io::{BufRead, BufReader, Read, Write},
+    io::{Read, Write},
     net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     process::Command,
     sync::Arc,
@@ -120,9 +120,12 @@ fn exchange_before(address: SocketAddr, deadline: Instant) -> Result<Vec<u8>> {
                 stream
                     .set_read_timeout(Some(Duration::from_secs(1)))
                     .map_err(|error| Error::io("set published-port read timeout", &error))?;
+                stream
+                    .write_all(b"GET /index.html HTTP/1.0\r\nHost: localhost\r\n\r\n")
+                    .map_err(|error| Error::io("request published-port response", &error))?;
                 let mut response = Vec::new();
-                BufReader::new(stream)
-                    .read_until(b'\n', &mut response)
+                stream
+                    .read_to_end(&mut response)
                     .map_err(|error| Error::io("read published-port response", &error))?;
                 return Ok(response);
             }
@@ -557,7 +560,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 &ExecRequest::new([
                     "sh",
                     "-c",
-                    "while true; do printf 'published-ok\\n' | nc -l -p 18375 -q 1; done </dev/null >/dev/null 2>&1 &",
+                    "printf 'published-ok\\n' >/tmp/index.html; httpd -f -p 18375 -h /tmp >/dev/null 2>&1 &",
                 ]),
             )
             .await?;
@@ -674,7 +677,9 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
             || blocked.exit_code == 0
             || host_gateway.exit_code == 0
             || dns_blocked.exit_code == 0
-            || published_response != b"published-ok\n"
+            || !published_response
+                .windows(b"published-ok\n".len())
+                .any(|window| window == b"published-ok\n")
             || !blocked_hits.success()
             || !dns_hits.success()
             || !host_listener_untouched
