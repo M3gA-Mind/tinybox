@@ -41,6 +41,21 @@ mod types;
 pub use forward::{Forward, ForwardGuard};
 pub use types::{BoxInfo, BoxState, ExecOutput, ExecRequest};
 
+/// Where a host executes commands relative to the tinybox process.
+///
+/// Security-sensitive controllers use this explicit capability instead of
+/// guessing from a host's registration name. Custom hosts default to
+/// [`Unknown`](Self::Unknown) until they can state their location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostExecutionLocation {
+    /// Commands execute in this process's operating-system environment.
+    Local,
+    /// Commands execute on another machine.
+    Remote,
+    /// The host cannot make a trustworthy locality claim.
+    Unknown,
+}
+
 /// A readable file opened beneath a host- or sandbox-mounted workspace.
 #[async_trait]
 pub trait WorkspaceFileReader: std::fmt::Debug + Send + Sync {
@@ -89,6 +104,15 @@ pub trait Host: std::fmt::Debug + Send + Sync + 'static {
     /// The name this host is registered under, matching
     /// [`HostRef`](crate::identity::HostRef).
     fn name(&self) -> &str;
+
+    /// The machine on which commands run.
+    ///
+    /// This defaults to [`HostExecutionLocation::Unknown`]; a controller that
+    /// requires local machine access must refuse hosts that do not explicitly
+    /// attest to it.
+    fn execution_location(&self) -> HostExecutionLocation {
+        HostExecutionLocation::Unknown
+    }
 
     /// Run a command to completion and collect its output.
     ///

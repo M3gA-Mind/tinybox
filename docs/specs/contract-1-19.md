@@ -16,9 +16,9 @@ least 19, which `tinybox_bus::is_compatible` already enforces.
 
 ## Allowlist semantics
 
-- Names are resolved outside the box, once, and pinned. The box gets those
-  addresses (or a proxy that connects only to them) and no resolver of its own,
-  so a later DNS answer cannot widen the list.
+- Names are resolved before filter installation, once, and the resulting
+  addresses are pinned into the firewall rules. A later DNS answer cannot widen
+  the set of destinations the box can reach.
 - Cloud metadata endpoints (`169.254.169.254`, `169.254.170.2`,
   `100.100.100.200`, `fd00:ec2::254`, `metadata.google.internal`) are refused
   when the spec is validated, and a backend must also block them when a name
@@ -44,10 +44,29 @@ least 19, which `tinybox_bus::is_compatible` already enforces.
 
 ## Status per backend
 
-No shipped backend enforces `Allowlist` yet: `passthrough`, `docker`,
-`namespace` and `microvm` all refuse it. Enforcement (netns + nftables or an
-egress proxy, Seatbelt or proxy, AppContainer or WFP) is tracked under
-tinybox#27 phase 3.
+`docker` can enforce `Allowlist` only when explicitly configured with
+`NativeLinuxDockerEgressController` and a local, rootful Linux Docker Engine
+whose firewall chains can be verified. It resolves names before creating the
+per-box bridge, installs default-drop IPv4 and IPv6 filters before `docker run`,
+and permits only pinned destination IP/port pairs. It writes the pinned
+hostname/address pairs into the container's `/etc/hosts` and configures its
+only DNS upstream as container-local `127.0.0.1`, so Docker's embedded resolver
+cannot forward arbitrary queries to host DNS. Unlisted names therefore fail to
+resolve unless the workload provides a resolver in its own loopback namespace.
+Docker documents `--dns` as a per-container resolver setting, and its [embedded
+DNS security advisory](https://github.com/moby/moby/security/advisories/GHSA-mq39-4gv4-mvpx)
+explains that a custom upstream forces external lookups to originate from the
+container network namespace.
+New traffic from that bridge to the Docker host is dropped, except IPv6
+Neighbor Solicitation for bridge-gateway address resolution. Existing
+`ESTABLISHED` or `RELATED` traffic is allowed so host-initiated connections,
+including published-port requests, can receive replies. The ordinary Docker
+sandbox continues to refuse allowlists unless this controller is installed.
+
+Docker Desktop, Windows, remote or unknown Hosts, rootless daemons, and daemons
+without the required firewall support refuse `Allowlist` as Unsupported.
+`passthrough`, `namespace` and `microvm` continue to refuse it. The workload
+cannot fall back to host DNS.
 
 ## Deprecated
 

@@ -112,6 +112,24 @@ fn pins_ip_literals_without_resolving_and_rejects_forbidden_literals() -> tinybo
 }
 
 #[test]
+fn rejects_ipv6_link_local_targets_without_scope_ids() {
+    let resolver = StaticResolver(BTreeMap::new());
+    let allowlist = EgressAllowlist::new(["fe80::1"], [443]);
+
+    assert!(matches!(
+        plan_egress_allowlist(&allowlist, &resolver),
+        Err(Error::ConstraintNotEnforced {
+            constraint: tinybox_core::Constraint::Network,
+            enforcement: tinybox_core::Enforcement::Unsupported,
+            ..
+        })
+    ));
+
+    let ipv4_link_local = EgressAllowlist::new(["169.254.1.1"], [443]);
+    assert!(plan_egress_allowlist(&ipv4_link_local, &resolver).is_ok());
+}
+
+#[test]
 fn returns_resolver_errors_as_backend_errors() {
     let resolver = StaticResolver(BTreeMap::new());
     let allowlist = EgressAllowlist::new(["unavailable.example"], [443]);
@@ -228,6 +246,22 @@ fn allows_private_addresses_when_the_policy_does_not_forbid_them()
 
     assert_eq!(plan.targets().len(), 1);
     assert_eq!(plan.targets()[0].address(), "10.2.3.4".parse::<IpAddr>()?);
+    Ok(())
+}
+
+#[test]
+fn normalizes_ipv4_mapped_ipv6_answers_to_ipv4_targets()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let resolver = addresses("mapped.example", &["::ffff:203.0.113.11"])?;
+    let allowlist = EgressAllowlist::new(["mapped.example"], [443]);
+
+    let plan = plan_egress_allowlist(&allowlist, &resolver)?;
+
+    assert_eq!(plan.targets().len(), 1);
+    assert_eq!(
+        plan.targets()[0].address(),
+        "203.0.113.11".parse::<IpAddr>()?
+    );
     Ok(())
 }
 
