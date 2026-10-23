@@ -349,6 +349,12 @@ async fn verify_engine_and_firewall(host: &dyn Host) -> Result<()> {
     }
 
     for firewall in ["iptables", "ip6tables"] {
+        let restore = host
+            .run(&ExecRequest::new(["sudo", "-n", firewall_restore(firewall), "--version"]))
+            .await?;
+        if !restore.succeeded() {
+            return Err(unsupported("required atomic firewall restore tool is unavailable"));
+        }
         for chain in ["DOCKER-USER", "INPUT"] {
             let output = host
                 .run(&ExecRequest::new([
@@ -517,9 +523,8 @@ async fn install_family(
     }
 
     for chain in [&names.forward_chain, &names.input_chain] {
-        firewall_success(host, firewall, ["-N", chain]).await?;
+        create_chain_with_owner_marker(host, firewall, chain, &names.owner_token, ipv6).await?;
         attempt_owned_chains.insert((firewall.to_owned(), chain.clone()));
-        install_chain_owner_marker(host, firewall, chain, &names.owner_token, ipv6).await?;
     }
     for rule in deny_rules(ipv6) {
         let mut command = vec!["-A".to_owned(), names.forward_chain.clone()];
@@ -661,7 +666,7 @@ async fn install_pinned_destinations(
     Ok(())
 }
 
-async fn install_chain_owner_marker(
+async fn create_chain_with_owner_marker(
     host: &dyn Host,
     firewall: &str,
     chain: &str,
@@ -669,23 +674,31 @@ async fn install_chain_owner_marker(
     ipv6: bool,
 ) -> Result<()> {
     let impossible_source = if ipv6 { "::/128" } else { "0.0.0.0/32" };
-    firewall_success(
-        host,
-        firewall,
-        [
-            "-A",
-            chain,
-            "-s",
-            impossible_source,
-            "-m",
-            "comment",
-            "--comment",
-            owner_token,
-            "-j",
-            "DROP",
-        ],
-    )
-    .await
+    // iptables-restore applies one table update as a transaction. Creating
+    // the chain and its owner marker together prevents a process crash from
+    // leaving an unmarked chain that cannot be safely reclaimed later.
+    let script = format!(
+        "*filter\n:{chain} - [0:0]\n-A {chain} -s {impossible_source} -m comment --comment {owner_token} -j DROP\nCOMMIT\n"
+    );
+    let output = host
+        .run(
+            &ExecRequest::new(["sudo", "-n", firewall_restore(firewall), "--noflush", "-w", "5"])
+                .with_stdin(script.into_bytes()),
+        )
+        .await?;
+    if output.succeeded() {
+        Ok(())
+    } else {
+        Err(unsupported("atomic firewall chain creation failed"))
+    }
+}
+
+fn firewall_restore(firewall: &str) -> &'static str {
+    if firewall == "ip6tables" {
+        "ip6tables-restore"
+    } else {
+        "iptables-restore"
+    }
 }
 
 fn chain_has_owner_marker(rules: &str, chain: &str, owner_token: &str) -> bool {
