@@ -122,6 +122,7 @@ struct PreparedNativeHost {
     fail_network_create: bool,
     empty_network_create: bool,
     box_id: String,
+    network_owner: String,
     bridge: String,
     forward_chain: String,
     input_chain: String,
@@ -134,6 +135,7 @@ impl PreparedNativeHost {
             fail_network_create: false,
             empty_network_create: false,
             box_id: id.to_string(),
+            network_owner: id.to_string(),
             bridge: names.bridge.clone(),
             forward_chain: names.forward_chain.clone(),
             input_chain: names.input_chain.clone(),
@@ -195,9 +197,9 @@ impl Host for PreparedNativeHost {
                         .get(inspect_index + 2)
                         .map_or("", String::as_str);
                     let stdout = if format.contains(".Driver") {
-                        format!("bridge|true|{}|{}", self.bridge, self.box_id)
+                        format!("bridge|true|{}|{}", self.bridge, self.network_owner)
                     } else {
-                        self.box_id.clone()
+                        self.network_owner.clone()
                     };
                     return Ok(ExecOutput::new(0, stdout.into_bytes(), Vec::new()));
                 }
@@ -476,6 +478,27 @@ async fn native_controller_maps_ipv4_mapped_answers_as_ipv4() -> Result<()> {
             && argv.iter().any(|part| part.contains("203.0.113.11"))
     }));
     controller.cleanup(&host, namespace, &id).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cleanup_refuses_a_different_network_owner_before_firewall_mutation() -> Result<()> {
+    let id = BoxId::new("box-foreign-owner")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.network_owner = "another-box".to_owned();
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+
+    assert!(controller.cleanup(&host, namespace, &id).await.is_err());
+
+    assert!(!host.commands().iter().any(|argv| {
+        argv.iter()
+            .any(|part| part == "iptables" || part == "ip6tables")
+            && argv
+                .iter()
+                .any(|part| part == "-D" || part == "-F" || part == "-X")
+    }));
     Ok(())
 }
 
