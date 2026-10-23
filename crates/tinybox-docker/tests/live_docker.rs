@@ -478,6 +478,17 @@ fn ipv6_address_inspect_template(network: &str) -> String {
     format!("{{{{(index .NetworkSettings.Networks \"{network}\").GlobalIPv6Address}}}}")
 }
 
+fn allowlist_probe_ports() -> tinybox_core::EgressAllowlist {
+    tinybox_core::EgressAllowlist::new(["listener.test"], [18373])
+}
+
+#[test]
+fn live_allowlist_covers_both_listener_probe_ports() {
+    let allowlist = allowlist_probe_ports();
+    assert!(allowlist.ports.contains(&18373));
+    assert!(allowlist.ports.contains(&18376));
+}
+
 #[test]
 fn ipv6_address_inspect_template_quotes_the_network_name() {
     assert_eq!(
@@ -575,7 +586,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
         let namespace = format!("ns-egress-{}", &suffix[..8]);
         let sandbox = sandbox(&namespace)?
             .with_egress_controller(Arc::new(NativeLinuxDockerEgressController::new(resolver)));
-        let allowlist = EgressAllowlist::new(["listener.test"], [18373]);
+        let allowlist = allowlist_probe_ports();
         let info = sandbox
             .create(
                 &spec()?
