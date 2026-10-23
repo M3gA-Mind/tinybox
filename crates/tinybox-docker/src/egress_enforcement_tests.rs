@@ -255,7 +255,7 @@ impl Host for PreparedNativeHost {
                 self.chains
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .remove(&(firewall, chain.clone()));
+                    .remove(&(firewall.clone(), chain.clone()));
                 self.marked_chains
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
