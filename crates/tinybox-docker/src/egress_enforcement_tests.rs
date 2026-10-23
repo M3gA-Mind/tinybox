@@ -939,6 +939,37 @@ async fn cleanup_without_network_succeeds_when_no_orphaned_chains_exist() -> Res
 
 #[tokio::test]
 #[cfg(target_os = "linux")]
+async fn cleanup_ignores_another_boxes_chain_after_its_network_is_absent() -> Result<()> {
+    let namespace = "default";
+    let removed_box = BoxId::new("box-0")?;
+    let remaining_box = BoxId::new("box-1")?;
+    let removed_names = NetworkNames::for_box(namespace, &removed_box);
+    let remaining_names = NetworkNames::for_box(namespace, &remaining_box);
+    let removed_hash = stable_hash(namespace.as_bytes(), removed_box.as_str().as_bytes());
+    let remaining_hash = stable_hash(namespace.as_bytes(), remaining_box.as_str().as_bytes());
+    assert_eq!(
+        format!("{removed_hash:016x}").get(..4),
+        format!("{remaining_hash:016x}").get(..4),
+        "fixture IDs must collide on the previous four-hex chain prefix"
+    );
+
+    let mut host = PreparedNativeHost::new(&removed_box, &removed_names);
+    host.network_inspect_behavior = NetworkInspectBehavior::Absent;
+    host.no_matching_hooks = true;
+    host.forward_chain = remaining_names.forward_chain.clone();
+    host.chains
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(("iptables".to_owned(), remaining_names.forward_chain));
+
+    NativeLinuxDockerEgressController::new(Arc::new(Resolver))
+        .cleanup(&host, namespace, &removed_box)
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
 async fn cleanup_refuses_a_nonempty_unmarked_attempt_chain_after_restart() -> Result<()> {
     let id = BoxId::new("box-nonempty-orphan")?;
     let namespace = "test";
