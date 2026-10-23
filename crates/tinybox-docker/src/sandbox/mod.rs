@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    io::Write as _,
     net::SocketAddr,
     path::Path,
     sync::{
@@ -66,7 +67,7 @@ struct ControllerHost {
 }
 
 impl ControllerHost {
-    fn request(&self, request: &ExecRequest) -> ExecRequest {
+    fn request(&self, request: &ExecRequest) -> Result<PreparedDockerRequest> {
         let mut request = request.clone();
         if request
             .argv
@@ -75,8 +76,77 @@ impl ControllerHost {
         {
             request.argv = self.controller.docker_argv(request.argv);
         }
-        request
+        let env_file = write_workload_docker_env_file(&mut request)?;
+        Ok(PreparedDockerRequest { request, env_file })
     }
+}
+
+struct PreparedDockerRequest {
+    request: ExecRequest,
+    // Keep the mode-0600 file alive until Docker has read it. Drop removes it
+    // after success, error, or cancellation of the host operation.
+    _env_file: Option<tempfile::NamedTempFile>,
+}
+
+fn write_workload_docker_env_file(
+    request: &mut ExecRequest,
+) -> Result<Option<tempfile::NamedTempFile>> {
+    const KEYS: [&str; 2] = ["DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"];
+    let values = KEYS
+        .iter()
+        .filter_map(|key| request.env.get(*key).map(|value| (*key, value.clone())))
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        return Ok(None);
+    }
+    if values.iter().any(|(_, value)| value.contains(['\n', '\r'])) {
+        return Err(Error::Backend {
+            sandbox: NAME.to_owned(),
+            operation: "preserve Docker workload environment",
+            message: "DOCKER_TLS_VERIFY and DOCKER_CERT_PATH cannot contain newlines".to_owned(),
+        });
+    }
+
+    let mut file = tempfile::Builder::new()
+        .prefix("tinybox-docker-env-")
+        .tempfile()
+        .map_err(|error| Error::io("create Docker workload environment file", &error))?;
+    for (key, value) in &values {
+        writeln!(file, "{key}={value}")
+            .map_err(|error| Error::io("write Docker workload environment file", &error))?;
+    }
+
+    for (key, _) in &values {
+        request.env.insert((*key).to_owned(), String::new());
+    }
+    request.argv =
+        add_docker_env_file_flag(std::mem::take(&mut request.argv), file.path(), &values);
+    Ok(Some(file))
+}
+
+fn add_docker_env_file_flag(
+    mut argv: Vec<String>,
+    path: &Path,
+    values: &[(&str, String)],
+) -> Vec<String> {
+    if !argv.first().is_some_and(|program| program == "docker") {
+        return argv;
+    }
+    let mut index = 1;
+    while index + 1 < argv.len() {
+        if argv[index] == "--env" && values.iter().any(|(key, _)| argv[index + 1] == *key) {
+            argv.drain(index..=index + 1);
+        } else {
+            index += 1;
+        }
+    }
+    if let Some(subcommand) = argv.iter().position(|part| part == "run" || part == "exec") {
+        argv.splice(
+            subcommand + 1..subcommand + 1,
+            ["--env-file".to_owned(), path.display().to_string()],
+        );
+    }
+    argv
 }
 
 #[async_trait]
@@ -90,7 +160,8 @@ impl Host for ControllerHost {
     }
 
     async fn run(&self, request: &ExecRequest) -> Result<ExecOutput> {
-        self.inner.run(&self.request(request)).await
+        let PreparedDockerRequest { request, _env_file } = self.request(request)?;
+        self.inner.run(&request).await
     }
 
     async fn run_observed(
@@ -98,9 +169,8 @@ impl Host for ControllerHost {
         request: &ExecRequest,
         observer: Arc<dyn ExecutionObserver>,
     ) -> Result<ExecOutput> {
-        self.inner
-            .run_observed(&self.request(request), observer)
-            .await
+        let PreparedDockerRequest { request, _env_file } = self.request(request)?;
+        self.inner.run_observed(&request, observer).await
     }
 
     fn has_pending_observed_cleanup(&self) -> bool {

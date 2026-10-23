@@ -113,7 +113,7 @@ async fn docker_argv_controller_rewrites_each_command_once() -> Result<()> {
 }
 
 #[test]
-fn controller_preserves_requested_docker_variables_for_the_workload() {
+fn controller_preserves_requested_docker_variables_for_the_workload() -> Result<()> {
     #[derive(Debug)]
     struct Resolver;
 
@@ -159,7 +159,8 @@ fn controller_preserves_requested_docker_variables_for_the_workload() {
         .insert("DOCKER_CERT_PATH".to_owned(), "/workload/certs".to_owned());
     request.env.insert("APP_MODE".to_owned(), "test".to_owned());
 
-    let rewritten = host.request(&request);
+    let prepared = host.request(&request)?;
+    let rewritten = &prepared.request;
 
     assert!(
         rewritten
@@ -173,18 +174,24 @@ fn controller_preserves_requested_docker_variables_for_the_workload() {
             .windows(2)
             .any(|args| args == ["--env", "DOCKER_CONTEXT"])
     );
-    assert!(
-        rewritten
-            .argv
-            .windows(2)
-            .any(|args| args == ["--env", "DOCKER_TLS_VERIFY"])
-    );
-    assert!(
-        rewritten
-            .argv
-            .windows(2)
-            .any(|args| args == ["--env", "DOCKER_CERT_PATH"])
-    );
+    assert!(!rewritten.argv.windows(2).any(|args| {
+        args == ["--env", "DOCKER_TLS_VERIFY"] || args == ["--env", "DOCKER_CERT_PATH"]
+    }));
+    let env_file = rewritten
+        .argv
+        .windows(2)
+        .find(|args| args[0] == "--env-file")
+        .map(|args| args[1].as_str())
+        .ok_or_else(|| Error::Backend {
+            sandbox: NAME.to_owned(),
+            operation: "test Docker workload environment file",
+            message: "missing env file argument".to_owned(),
+        })?;
+    let env_file_contents = std::fs::read_to_string(env_file)
+        .map_err(|error| Error::io("read Docker workload environment file in test", &error))?;
+    assert!(env_file_contents.contains("DOCKER_TLS_VERIFY=1\n"));
+    assert!(env_file_contents.contains("DOCKER_CERT_PATH=/workload/certs\n"));
+    assert!(!rewritten.argv.join(" ").contains("/workload/certs"));
     let argv = rewritten.argv.join(" ");
     for value in [
         "tcp://workload-docker:2376",
@@ -203,16 +210,21 @@ fn controller_preserves_requested_docker_variables_for_the_workload() {
     );
     assert_eq!(
         rewritten.env.get("DOCKER_TLS_VERIFY").map(String::as_str),
-        Some("1")
+        Some("")
     );
     assert_eq!(
         rewritten.env.get("DOCKER_CERT_PATH").map(String::as_str),
-        Some("/workload/certs")
+        Some("")
     );
     assert_eq!(
         rewritten.env.get("APP_MODE").map(String::as_str),
         Some("test")
     );
+
+    let env_file = env_file.to_owned();
+    drop(prepared);
+    assert!(!std::path::Path::new(&env_file).exists());
+    Ok(())
 }
 
 #[tokio::test]
