@@ -526,23 +526,7 @@ impl Sandbox for DockerSandbox {
 
     async fn create(&self, spec: &BoxSpec) -> Result<BoxInfo> {
         spec.validate()?;
-        let allowlist = match &spec.network {
-            NetworkPolicy::Allowlist(allowlist) => {
-                let controller = self.egress_controller.as_ref().ok_or_else(|| {
-                    Error::ConstraintNotEnforced {
-                        sandbox: NAME.to_owned(),
-                        constraint: tinybox_core::Constraint::Network,
-                        enforcement: tinybox_core::Enforcement::Unsupported,
-                    }
-                })?;
-                controller.validate_host(self.host.as_ref()).await?;
-                Some(allowlist)
-            }
-            _ => {
-                spec.network.refuse_allowlist(self.name())?;
-                None
-            }
-        };
+        self.validate_network_policy(spec).await?;
         // The workspace is bind-mounted read-write, so it gets the one-shot
         // mount policy before any record or container exists.
         // ponytail: through an SSH host the daemon's filesystem is remote, so
@@ -565,23 +549,9 @@ impl Sandbox for DockerSandbox {
         // Resolve and install the default-drop filter before Docker starts the
         // image entrypoint. The controller is the only path that can make an
         // allowlist runnable.
-        let network = if let Some(allowlist) = allowlist {
-            match self
-                .egress_controller
-                .as_ref()
-                .expect("allowlist requires a controller")
-                .prepare(self.host.as_ref(), &self.namespace, &info.id, allowlist)
-                .await
-            {
-                Ok(network) => Some(network),
-                Err(error) => {
-                    return Err(self
-                        .rollback_failed_egress_create(&info.id, &attempt, error)
-                        .await);
-                }
-            }
-        } else {
-            None
+        let network = match self.prepare_egress_network(spec, &info.id, &attempt).await {
+            Ok(network) => network,
+            Err(error) => return Err(error),
         };
 
         // Build the command before running anything, so a source this backend
@@ -595,100 +565,18 @@ impl Sandbox for DockerSandbox {
         ) {
             Ok(argv) => argv,
             Err(error) => {
-                if network.is_some() {
-                    return Err(self
-                        .rollback_failed_egress_create(&info.id, &attempt, error)
-                        .await);
-                }
-                self.discard_failed_create_record(&info.id, &attempt);
-                return Err(error);
+                return Err(self
+                    .rollback_failed_create(&info.id, &attempt, network.is_some(), error)
+                    .await);
             }
         };
 
         let mut create = ExecRequest::new(argv);
         create.env.clone_from(&spec.env);
         if let Err(error) = self.docker_request("create the container", create).await {
-            // Docker reports a name collision before creating a container.
-            // Never remove that name: it belongs to the pre-existing owner.
-            if is_name_conflict(&error) {
-                if network.is_some() {
-                    return Err(self
-                        .rollback_failed_egress_create(&info.id, &attempt, error)
-                        .await);
-                }
-                self.discard_failed_create_record(&info.id, &attempt);
-                return Err(error);
-            }
-
-            // A lost response can hide a successful create. Reconcile only
-            // after the daemon confirms this exact attempt token; otherwise a
-            // deterministic name may refer to another store's container with
-            // the same box id.
-            match self
-                .docker(
-                    "inspect the failed create",
-                    args::inspect_attempt(&self.namespace, &info.id),
-                )
-                .await
-            {
-                Ok(owner) if owner == attempt => {
-                    if self
-                        .remove_container(args::remove(&self.namespace, &info.id))
-                        .await
-                        .is_ok()
-                    {
-                        let cleanup = if network.is_some() {
-                            self.cleanup_egress(&info.id).await
-                        } else {
-                            Ok(())
-                        };
-                        if cleanup.is_err() {
-                            self.failed_create_attempts
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                .insert(info.id.clone(), attempt);
-                            return Err(error);
-                        }
-                        self.discard_failed_create_record(&info.id, &attempt);
-                    } else {
-                        self.failed_create_attempts
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .insert(info.id.clone(), attempt);
-                    }
-                }
-                Ok(_) => {
-                    if network.is_some() {
-                        if self.cleanup_egress(&info.id).await.is_err() {
-                            self.failed_create_attempts
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                .insert(info.id.clone(), attempt);
-                            return Err(error);
-                        }
-                    }
-                    self.discard_failed_create_record(&info.id, &attempt);
-                }
-                Err(Error::Backend { message, .. }) if message.contains("No such container") => {
-                    if network.is_some() {
-                        if self.cleanup_egress(&info.id).await.is_err() {
-                            self.failed_create_attempts
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                .insert(info.id.clone(), attempt);
-                            return Err(error);
-                        }
-                    }
-                    self.discard_failed_create_record(&info.id, &attempt);
-                }
-                Err(_) => {
-                    self.failed_create_attempts
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .insert(info.id.clone(), attempt);
-                }
-            }
-            return Err(error);
+            return Err(self
+                .reconcile_failed_create(&info.id, &attempt, network.is_some(), error)
+                .await);
         }
         self.failed_create_attempts
             .lock()

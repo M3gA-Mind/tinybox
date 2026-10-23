@@ -21,7 +21,7 @@ const OWNER_LABEL: &str = "ai.tinyhumans.tinybox.egress.owner";
 /// Implementations are trusted security components. A controller must verify
 /// that it acts on the same daemon and host that run the box, install a
 /// default-drop filter before returning from [`prepare`](Self::prepare), and
-/// make [`cleanup`](Self::cleanup) idempotent. DockerSandbox uses
+/// make [`cleanup`](Self::cleanup) idempotent. `DockerSandbox` uses
 /// [`docker_argv`](Self::docker_argv) for every Docker command while the
 /// controller is installed, so lifecycle operations address the same daemon.
 #[async_trait]
