@@ -230,6 +230,9 @@ fn allowlist_validation_rejects_malformed_and_metadata_hosts() {
         "169.254.169.254",
         "[fd00:ec2::254]",
         "Metadata.Google.Internal",
+        "metadata.google.internal.",
+        "Metadata.Google.Internal.",
+        "metadata.",
     ] {
         assert!(
             EgressAllowlist::new([host], [80]).validate().is_err(),
