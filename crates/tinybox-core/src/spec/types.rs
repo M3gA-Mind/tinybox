@@ -333,16 +333,19 @@ impl EgressAllowlist {
             return None;
         }
 
-        let numbers: Vec<u64> = components
+        let numbers: Vec<u32> = components
             .iter()
             .map(|part| {
-                if let Some(hex) = part.strip_prefix("0x").or_else(|| part.strip_prefix("0X")) {
+                let number = if let Some(hex) =
+                    part.strip_prefix("0x").or_else(|| part.strip_prefix("0X"))
+                {
                     u64::from_str_radix(hex, 16).ok()
                 } else if part.len() > 1 && part.starts_with('0') {
                     u64::from_str_radix(&part[1..], 8).ok()
                 } else {
                     part.parse().ok()
-                }
+                }?;
+                u32::try_from(number).ok()
             })
             .collect::<Option<_>>()?;
 
@@ -354,7 +357,7 @@ impl EgressAllowlist {
         }
         let last = *numbers.last()?;
         let last_max = match numbers.len() {
-            1 => u32::MAX.into(),
+            1 => u32::MAX,
             2 => 0x00ff_ffff,
             3 => 0x0000_ffff,
             4 => u8::MAX.into(),
@@ -365,16 +368,13 @@ impl EgressAllowlist {
         }
 
         let address = match numbers.as_slice() {
-            [whole] => *whole as u32,
-            [first, last] => ((*first as u32) << 24) | *last as u32,
+            [whole] => *whole,
+            [first, last] => (*first << 24) | *last,
             [first, second, last] => {
-                ((*first as u32) << 24) | ((*second as u32) << 16) | *last as u32
+                (*first << 24) | (*second << 16) | *last
             }
             [first, second, third, last] => {
-                ((*first as u32) << 24)
-                    | ((*second as u32) << 16)
-                    | ((*third as u32) << 8)
-                    | *last as u32
+                (*first << 24) | (*second << 16) | (*third << 8) | *last
             }
             _ => return None,
         };
