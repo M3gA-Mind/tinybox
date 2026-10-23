@@ -450,31 +450,7 @@ async fn install_family(
         )
         .await?;
     }
-    for target in plan.targets() {
-        let address = target.address();
-        if is_ipv6(&address) != ipv6 {
-            continue;
-        }
-        for protocol in ALLOWLIST_PROTOCOLS {
-            firewall_success(
-                host,
-                firewall,
-                [
-                    "-A",
-                    &names.forward_chain,
-                    "-d",
-                    &address.to_string(),
-                    "-p",
-                    protocol,
-                    "--dport",
-                    &target.port().to_string(),
-                    "-j",
-                    "ACCEPT",
-                ],
-            )
-            .await?;
-        }
-    }
+    install_pinned_destinations(host, firewall, names, plan, ipv6).await?;
     firewall_success(
         host,
         firewall,
@@ -530,6 +506,41 @@ async fn install_family(
         let rules = firewall_output(host, firewall, ["-S", chain]).await?;
         if !rules.lines().any(|line| line.ends_with("-j DROP")) {
             return Err(unsupported("default-drop egress rules were not verified"));
+        }
+    }
+    Ok(())
+}
+
+async fn install_pinned_destinations(
+    host: &dyn Host,
+    firewall: &str,
+    names: &NetworkNames,
+    plan: &PinnedEgressPlan,
+    ipv6: bool,
+) -> Result<()> {
+    for target in plan.targets() {
+        let address = target.address();
+        if is_ipv6(&address) != ipv6 {
+            continue;
+        }
+        for protocol in ALLOWLIST_PROTOCOLS {
+            firewall_success(
+                host,
+                firewall,
+                [
+                    "-A",
+                    &names.forward_chain,
+                    "-d",
+                    &address.to_string(),
+                    "-p",
+                    protocol,
+                    "--dport",
+                    &target.port().to_string(),
+                    "-j",
+                    "ACCEPT",
+                ],
+            )
+            .await?;
         }
     }
     Ok(())
