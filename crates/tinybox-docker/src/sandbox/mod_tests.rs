@@ -132,6 +132,37 @@ async fn controller_failure_rolls_back_before_dropping_the_box_record() -> Resul
     Ok(())
 }
 
+#[tokio::test]
+async fn native_controller_refuses_hosts_without_explicit_local_identity() -> Result<()> {
+    #[derive(Debug)]
+    struct Resolver;
+    impl crate::EgressResolver for Resolver {
+        fn resolve(&self, _hostname: &str) -> Result<Vec<std::net::IpAddr>> {
+            Ok(vec!["203.0.113.7".parse().expect("valid test address")])
+        }
+    }
+
+    let host = ScriptedHost::silent();
+    let sandbox = DockerSandbox::new(host.clone(), Arc::new(MemoryStore::new()))
+        .with_egress_controller(Arc::new(crate::NativeLinuxDockerEgressController::new(
+            Arc::new(Resolver),
+        )));
+    let allowlist = tinybox_core::EgressAllowlist::new(["api.example.test"], [443]);
+
+    assert!(matches!(
+        sandbox
+            .create(&spec()?.with_network(NetworkPolicy::Allowlist(allowlist)))
+            .await,
+        Err(Error::ConstraintNotEnforced {
+            constraint: tinybox_core::Constraint::Network,
+            enforcement: tinybox_core::Enforcement::Unsupported,
+            ..
+        })
+    ));
+    assert!(host.commands().is_empty());
+    Ok(())
+}
+
 #[test]
 fn effective_published_ports_parse_dynamic_and_fixed_bindings() -> Result<()> {
     let ports = args::parse_published_ports(
