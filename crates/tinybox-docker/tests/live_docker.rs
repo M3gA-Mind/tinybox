@@ -20,7 +20,7 @@
 //! connectivity test fails if the opt-in gate was not enabled.
 
 use std::{
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     process::Command,
     sync::Arc,
@@ -121,8 +121,8 @@ fn exchange_before(address: SocketAddr, deadline: Instant) -> Result<Vec<u8>> {
                     .set_read_timeout(Some(Duration::from_secs(1)))
                     .map_err(|error| Error::io("set published-port read timeout", &error))?;
                 let mut response = Vec::new();
-                stream
-                    .read_to_end(&mut response)
+                BufReader::new(stream)
+                    .read_until(b'\n', &mut response)
                     .map_err(|error| Error::io("read published-port response", &error))?;
                 return Ok(response);
             }
@@ -557,7 +557,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 &ExecRequest::new([
                     "sh",
                     "-c",
-                    "while true; do printf 'published-ok\\n' | nc -l -p 18375; done </dev/null >/dev/null 2>&1 &",
+                    "while true; do printf 'published-ok\\n' | nc -l -p 18375 -q 1; done </dev/null >/dev/null 2>&1 &",
                 ]),
             )
             .await?;
