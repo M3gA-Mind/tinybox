@@ -121,8 +121,9 @@ struct PreparedNativeHost {
     commands: Mutex<Vec<Vec<String>>>,
     fail_network_create: bool,
     empty_network_create: bool,
-    box_id: String,
     network_owner: String,
+    network_scope: String,
+    chain_owner_token: String,
     bridge: String,
     forward_chain: String,
     input_chain: String,
@@ -134,8 +135,9 @@ impl PreparedNativeHost {
             commands: Mutex::new(Vec::new()),
             fail_network_create: false,
             empty_network_create: false,
-            box_id: id.to_string(),
             network_owner: id.to_string(),
+            network_scope: names.owner_token.clone(),
+            chain_owner_token: names.owner_token.clone(),
             bridge: names.bridge.clone(),
             forward_chain: names.forward_chain.clone(),
             input_chain: names.input_chain.clone(),
@@ -197,9 +199,12 @@ impl Host for PreparedNativeHost {
                         .get(inspect_index + 2)
                         .map_or("", String::as_str);
                     let stdout = if format.contains(".Driver") {
-                        format!("bridge|true|{}|{}", self.bridge, self.network_owner)
+                        format!(
+                            "bridge|true|{}|{}|{}",
+                            self.bridge, self.network_owner, self.network_scope
+                        )
                     } else {
-                        self.network_owner.clone()
+                        format!("{}|{}", self.network_owner, self.network_scope)
                     };
                     return Ok(ExecOutput::new(0, stdout.into_bytes(), Vec::new()));
                 }
@@ -229,7 +234,10 @@ impl Host for PreparedNativeHost {
             if argv.iter().any(|arg| arg == "-S") {
                 let chain = argv.last().map_or("", String::as_str);
                 let stdout = if chain == self.forward_chain || chain == self.input_chain {
-                    format!("-A {chain} -j DROP\n")
+                    format!(
+                        "-A {chain} -s 0.0.0.0/32 -m comment --comment {} -j DROP\n-A {chain} -j DROP\n",
+                        self.chain_owner_token
+                    )
                 } else {
                     String::new()
                 };
