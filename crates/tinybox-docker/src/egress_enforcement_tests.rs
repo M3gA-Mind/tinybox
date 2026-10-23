@@ -1069,7 +1069,7 @@ async fn network_name_conflict_does_not_clean_an_existing_owners_firewall() -> R
 
 #[tokio::test]
 #[cfg(target_os = "linux")]
-async fn network_create_conflict_reconciles_a_stale_network_with_matching_owner_labels()
+async fn network_create_conflict_does_not_remove_an_existing_same_owner_network()
 -> Result<()> {
     let id = BoxId::new("box-stale-owned-network")?;
     let namespace = "test";
@@ -1087,8 +1087,10 @@ async fn network_create_conflict_reconciles_a_stale_network_with_matching_owner_
             ..
         }) if message.contains("network name already exists")
     ));
-    assert!(host.commands().iter().any(|argv| {
-        argv.iter().any(|arg| arg == "rm") && argv.iter().any(|arg| arg == "network-id")
+    assert!(!host.commands().iter().any(|argv| {
+        argv.iter().any(|arg| arg == "rm") ||
+            (argv.iter().any(|arg| arg == "inspect")
+                && argv.iter().any(|arg| arg.contains("{{.Id}}")))
     }));
     assert!(!host.commands().iter().any(|argv| {
         argv.iter()
