@@ -8,7 +8,7 @@
 //!
 //! Behavior that genuinely needs a daemon lives in `tests/live_docker.rs`.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{
     Arc, Mutex, MutexGuard, PoisonError,
     atomic::{AtomicBool, Ordering},
@@ -56,6 +56,7 @@ const COMMIT_OUTPUT: &str =
 struct ScriptedHost {
     replies: Mutex<VecDeque<ExecOutput>>,
     seen: Mutex<Vec<Vec<String>>>,
+    seen_env: Mutex<Vec<BTreeMap<String, String>>>,
     cancel_observed: AtomicBool,
     refuse_observed: AtomicBool,
     block_observed: AtomicBool,
@@ -105,6 +106,16 @@ impl ScriptedHost {
     fn command(&self, index: usize) -> Option<Vec<String>> {
         self.seen().get(index).cloned()
     }
+
+    /// The environment the nth command's client ran with.
+    fn command_env(&self, index: usize) -> BTreeMap<String, String> {
+        self.seen_env
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(index)
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
 #[async_trait]
@@ -115,6 +126,10 @@ impl Host for ScriptedHost {
 
     async fn run(&self, request: &ExecRequest) -> Result<ExecOutput> {
         self.seen().push(request.argv.clone());
+        self.seen_env
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request.env.clone());
         if request
             .argv
             .iter()
@@ -196,6 +211,10 @@ impl Host for ScriptedHost {
         observer: Arc<dyn tinybox_core::ExecutionObserver>,
     ) -> Result<ExecOutput> {
         self.seen().push(request.argv.clone());
+        self.seen_env
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request.env.clone());
         if self.refuse_observed.load(Ordering::Acquire) {
             return Err(Error::UnsupportedStreaming {
                 provider: self.name().to_owned(),
@@ -523,7 +542,12 @@ async fn box_environment_reaches_the_container() -> Result<()> {
     sandbox.create(&spec()?.with_env("CI", "true")).await?;
 
     let argv = host.command(0).unwrap_or_default();
-    assert_eq!(flag_value(&argv, "--env"), Some("CI=true"));
+    assert_eq!(flag_value(&argv, "--env"), Some("CI"));
+    assert!(!argv.iter().any(|arg| arg == "CI=true"), "{argv:?}");
+    assert_eq!(
+        host.command_env(0).get("CI").map(String::as_str),
+        Some("true")
+    );
     Ok(())
 }
 
@@ -727,7 +751,9 @@ async fn a_command_carries_its_working_directory_and_environment() -> Result<()>
 
     let argv = host.command(2).unwrap_or_default();
     assert_eq!(flag_value(&argv, "--workdir"), Some("/tmp"));
-    assert_eq!(flag_value(&argv, "--env"), Some("K=v"));
+    assert_eq!(flag_value(&argv, "--env"), Some("K"));
+    assert!(!argv.iter().any(|arg| arg == "K=v"), "{argv:?}");
+    assert_eq!(host.command_env(2).get("K").map(String::as_str), Some("v"));
     Ok(())
 }
 
