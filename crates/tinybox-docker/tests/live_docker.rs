@@ -118,7 +118,7 @@ fn exchange_before(address: SocketAddr, deadline: Instant) -> Result<Vec<u8>> {
         match TcpStream::connect_timeout(&address, Duration::from_millis(100)) {
             Ok(mut stream) => {
                 stream
-                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .set_read_timeout(Some(Duration::from_millis(100)))
                     .map_err(|error| Error::io("set published-port read timeout", &error))?;
                 stream
                     .write_all(
@@ -128,9 +128,21 @@ fn exchange_before(address: SocketAddr, deadline: Instant) -> Result<Vec<u8>> {
                 let mut response = Vec::new();
                 let mut chunk = [0; 1024];
                 loop {
-                    let read = stream
-                        .read(&mut chunk)
-                        .map_err(|error| Error::io("read published-port response", &error))?;
+                    let read = match stream.read(&mut chunk) {
+                        Ok(read) => read,
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::WouldBlock
+                                    | std::io::ErrorKind::TimedOut
+                            ) && Instant::now() < deadline =>
+                        {
+                            continue;
+                        }
+                        Err(error) => {
+                            return Err(Error::io("read published-port response", &error));
+                        }
+                    };
                     if read == 0 {
                         return Ok(response);
                     }
