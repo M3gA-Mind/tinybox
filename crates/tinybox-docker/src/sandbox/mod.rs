@@ -12,9 +12,11 @@ use std::{
 use async_trait::async_trait;
 use tinybox_core::{
     BoxId, BoxInfo, BoxSpec, BoxState, Capability, Clock, Error, ExecOutput, ExecRequest,
-    ExecutionObserver, Host, IsolationLevel, OutputStream, PortMapping, ProcessId, Result, Sandbox,
-    SandboxCapabilities, SnapshotId, SnapshotSupport, Store, SystemClock, detach,
+    ExecutionObserver, Host, IsolationLevel, NetworkPolicy, OutputStream, PortMapping, ProcessId,
+    Result, Sandbox, SandboxCapabilities, SnapshotId, SnapshotSupport, Store, SystemClock, detach,
 };
+
+use crate::DockerEgressController;
 
 mod args;
 mod observed;
@@ -46,6 +48,7 @@ pub const NAME: &str = "docker";
 pub struct DockerSandbox {
     host: Arc<dyn Host>,
     store: Arc<dyn Store>,
+    egress_controller: Option<Arc<dyn DockerEgressController>>,
     clock: Arc<dyn Clock>,
     namespace: String,
     failed_create_attempts: Arc<std::sync::Mutex<HashMap<BoxId, String>>>,
@@ -153,6 +156,7 @@ impl DockerSandbox {
         Self {
             host,
             store,
+            egress_controller: None,
             clock: Arc::new(SystemClock::new()),
             namespace: DEFAULT_NAMESPACE.to_owned(),
             failed_create_attempts: Arc::default(),
@@ -195,6 +199,7 @@ impl DockerSandbox {
         Ok(Self {
             host,
             store,
+            egress_controller: None,
             clock: Arc::new(SystemClock::new()),
             namespace,
             failed_create_attempts: Arc::default(),
@@ -218,6 +223,7 @@ impl DockerSandbox {
         Self {
             host,
             store: self.store.clone(),
+            egress_controller: self.egress_controller.clone(),
             clock: self.clock.clone(),
             namespace: self.namespace.clone(),
             failed_create_attempts: self.failed_create_attempts.clone(),
@@ -230,6 +236,35 @@ impl DockerSandbox {
     #[must_use]
     pub fn namespace(&self) -> &str {
         &self.namespace
+    }
+
+    /// Install a controller for per-box egress allowlists.
+    ///
+    /// The default sandbox has no controller and continues to refuse
+    /// [`NetworkPolicy::Allowlist`]. The controller must verify the execution
+    /// host and Docker daemon, and install its default-drop filter before the
+    /// workload starts.
+    #[must_use]
+    pub fn with_egress_controller(
+        mut self,
+        controller: Arc<dyn DockerEgressController>,
+    ) -> Self {
+        self.egress_controller = Some(controller);
+        self
+    }
+
+    fn docker_argv(&self, argv: Vec<String>) -> Vec<String> {
+        if let Some(controller) = &self.egress_controller {
+            controller.docker_argv(argv)
+        } else {
+            argv
+        }
+    }
+
+    async fn run_docker(&self, request: &ExecRequest) -> Result<ExecOutput> {
+        let mut request = request.clone();
+        request.argv = self.docker_argv(request.argv);
+        self.host.run(&request).await
     }
 
     /// What this sandbox declares.
@@ -272,7 +307,7 @@ impl DockerSandbox {
         operation: &'static str,
         request: ExecRequest,
     ) -> Result<String> {
-        let output = self.host.run(&request).await?;
+        let output = self.run_docker(&request).await?;
         if !output.succeeded() {
             return Err(Error::Backend {
                 sandbox: NAME.to_owned(),
@@ -286,7 +321,9 @@ impl DockerSandbox {
     /// Remove a named container, treating Docker's explicit missing-container
     /// response as an already-completed cleanup.
     async fn remove_container(&self, argv: Vec<String>) -> Result<()> {
-        let output = self.host.run(&ExecRequest::new(argv)).await?;
+        let output = self
+            .run_docker(&ExecRequest::new(self.docker_argv(argv)))
+            .await?;
         if output.succeeded() || output.stderr_lossy().contains("No such container") {
             return Ok(());
         }
