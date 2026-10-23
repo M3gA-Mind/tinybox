@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use tinybox_core::{
     BoxId, EgressAllowlist, Error, ExecOutput, ExecRequest, Host, HostExecutionLocation, Result,
 };
+#[cfg(not(test))]
 use uuid::Uuid;
 
 use crate::{EgressResolver, PinnedEgressPlan, plan_egress_allowlist};
@@ -1112,18 +1113,16 @@ async fn cleanup_native_with_attempt(
         }
     }
 
-    if network_exists {
-        docker_success(
-            host,
-            vec![
-                "docker".into(),
-                "network".into(),
-                "rm".into(),
-                names.network,
-            ],
-        )
-        .await?;
-    }
+    docker_success(
+        host,
+        vec![
+            "docker".into(),
+            "network".into(),
+            "rm".into(),
+            names.network,
+        ],
+    )
+    .await?;
     Ok(())
 }
 
