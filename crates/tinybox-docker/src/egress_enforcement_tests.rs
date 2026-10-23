@@ -119,7 +119,7 @@ struct BridgeLinkHost {
 #[derive(Debug)]
 struct PreparedNativeHost {
     commands: Mutex<Vec<Vec<String>>>,
-    chains: Mutex<std::collections::BTreeSet<String>>,
+    chains: Mutex<std::collections::BTreeSet<(String, String)>>,
     fail_network_create: bool,
     empty_network_create: bool,
     network_owner: String,
@@ -228,18 +228,28 @@ impl Host for PreparedNativeHost {
             if let Some(index) = argv.iter().position(|arg| arg == "-N")
                 && let Some(chain) = argv.get(index + 1)
             {
+                let firewall = argv
+                    .iter()
+                    .find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables"))
+                    .cloned()
+                    .unwrap_or_default();
                 self.chains
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(chain.clone());
+                    .insert((firewall, chain.clone()));
             }
             if let Some(index) = argv.iter().position(|arg| arg == "-X")
                 && let Some(chain) = argv.get(index + 1)
             {
+                let firewall = argv
+                    .iter()
+                    .find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables"))
+                    .cloned()
+                    .unwrap_or_default();
                 self.chains
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .remove(chain);
+                    .remove(&(firewall, chain.clone()));
             }
             if argv.iter().any(|arg| arg == "FORWARD") {
                 return Ok(ExecOutput::new(
@@ -250,13 +260,18 @@ impl Host for PreparedNativeHost {
                 ));
             }
             if argv.iter().any(|arg| arg == "-S") {
+                let firewall = argv
+                    .iter()
+                    .find(|arg| matches!(arg.as_str(), "iptables" | "ip6tables"))
+                    .cloned()
+                    .unwrap_or_default();
                 let chains = self
                     .chains
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let stdout = [&self.forward_chain, &self.input_chain]
                     .into_iter()
-                    .filter(|chain| chains.contains(*chain))
+                    .filter(|chain| chains.contains(&(firewall.clone(), (*chain).clone())))
                     .map(|chain| {
                         format!(
                             "-N {chain}\n-A {chain} -s 0.0.0.0/32 -m comment --comment {} -j DROP\n-A {chain} -j DROP\n",
@@ -564,7 +579,10 @@ async fn cleanup_refuses_firewall_chains_with_another_owner_marker() -> Result<(
     host.chains
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .extend([names.forward_chain.clone(), names.input_chain.clone()]);
+        .extend([
+            ("iptables".to_owned(), names.forward_chain.clone()),
+            ("iptables".to_owned(), names.input_chain.clone()),
+        ]);
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
 
     assert!(controller.cleanup(&host, namespace, &id).await.is_err());
@@ -577,6 +595,28 @@ async fn cleanup_refuses_firewall_chains_with_another_owner_marker() -> Result<(
                 .any(|part| part == "-D" || part == "-F" || part == "-X")
     }));
     Ok(())
+}
+
+#[test]
+fn deny_rules_block_metadata_without_disabling_other_link_local_destinations() {
+    let ipv4 = deny_rules(false);
+    let ipv6 = deny_rules(true);
+    let destinations = |rules: &[Vec<String>]| {
+        rules
+            .iter()
+            .filter_map(|rule| rule.windows(2).find(|pair| pair[0] == "-d"))
+            .map(|pair| pair[1].as_str())
+            .collect::<Vec<_>>()
+    };
+
+    let ipv4_destinations = destinations(&ipv4);
+    assert!(ipv4_destinations.contains(&"169.254.169.254/32"));
+    assert!(ipv4_destinations.contains(&"169.254.170.2/32"));
+    assert!(!ipv4_destinations.contains(&"169.254.0.0/16"));
+
+    let ipv6_destinations = destinations(&ipv6);
+    assert!(ipv6_destinations.contains(&"fd00:ec2::254/128"));
+    assert!(!ipv6_destinations.contains(&"fe80::/10"));
 }
 
 #[tokio::test]
