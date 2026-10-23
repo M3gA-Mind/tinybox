@@ -133,10 +133,7 @@ pub(super) fn run(
                 std::net::IpAddr::V4(address) => address.to_string(),
                 std::net::IpAddr::V6(address) => format!("[{address}]"),
             };
-            argv.extend([
-                "--add-host".to_owned(),
-                format!("{hostname}:{address}"),
-            ]);
+            argv.extend(["--add-host".to_owned(), format!("{hostname}:{address}")]);
         }
     } else {
         argv.extend(network_flags(&spec.network));

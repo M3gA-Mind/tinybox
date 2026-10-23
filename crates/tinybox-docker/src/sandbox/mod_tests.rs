@@ -74,9 +74,11 @@ async fn allowlist_controller_prepares_before_start_and_cleans_after_destroy() -
     assert!(commands[1].contains(&"--network".to_owned()));
     assert!(commands[1].contains(&"tinybox-allowlist-test".to_owned()));
     assert_eq!(flag_value(&commands[1], "--dns"), Some("127.0.0.1"));
-    assert!(commands[1].windows(2).any(|args| {
-        args[0] == "--add-host" && args[1] == "api.example.test:203.0.113.10"
-    }));
+    assert!(
+        commands[1]
+            .windows(2)
+            .any(|args| { args[0] == "--add-host" && args[1] == "api.example.test:203.0.113.10" })
+    );
 
     sandbox.destroy(&info.id).await?;
     let commands = host.commands();
@@ -94,10 +96,12 @@ async fn destroy_skips_egress_cleanup_for_non_allowlist_boxes() -> Result<()> {
 
     sandbox.destroy(&info.id).await?;
 
-    assert!(!host
-        .commands()
-        .iter()
-        .any(|command| command.first().is_some_and(|word| word == "controller")));
+    assert!(
+        !host
+            .commands()
+            .iter()
+            .any(|command| command.first().is_some_and(|word| word == "controller"))
+    );
     Ok(())
 }
 
@@ -257,21 +261,21 @@ fn allowlist_run_args_pin_every_resolved_address_and_disable_upstream_dns() -> R
             ),
             (
                 "service.test".to_owned(),
-                std::net::IpAddr::V6(std::net::Ipv6Addr::new(
-                    0x2001, 0x0db8, 0, 0, 0, 0, 0, 8,
-                )),
+                std::net::IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 8)),
             ),
         ],
     );
 
     let argv = args::run("test", &id, "attempt", &spec()?, Some(&prepared))?;
     assert_eq!(flag_value(&argv, "--dns"), Some("127.0.0.1"));
-    assert!(argv.windows(2).any(|args| {
-        args[0] == "--add-host" && args[1] == "service.test:203.0.113.8"
-    }));
-    assert!(argv.windows(2).any(|args| {
-        args[0] == "--add-host" && args[1] == "service.test:[2001:db8::8]"
-    }));
+    assert!(
+        argv.windows(2)
+            .any(|args| { args[0] == "--add-host" && args[1] == "service.test:203.0.113.8" })
+    );
+    assert!(
+        argv.windows(2)
+            .any(|args| { args[0] == "--add-host" && args[1] == "service.test:[2001:db8::8]" })
+    );
     Ok(())
 }
 

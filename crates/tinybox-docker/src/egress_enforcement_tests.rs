@@ -108,6 +108,7 @@ struct BridgeLinkHost {
 #[derive(Debug)]
 struct PreparedNativeHost {
     commands: Mutex<Vec<Vec<String>>>,
+    fail_network_create: bool,
     box_id: String,
     bridge: String,
     forward_chain: String,
@@ -118,6 +119,7 @@ impl PreparedNativeHost {
     fn new(id: &BoxId, names: &NetworkNames) -> Self {
         Self {
             commands: Mutex::new(Vec::new()),
+            fail_network_create: false,
             box_id: id.to_string(),
             bridge: names.bridge.clone(),
             forward_chain: names.forward_chain.clone(),
@@ -161,6 +163,13 @@ impl Host for PreparedNativeHost {
             }
             if docker_args.iter().any(|arg| arg == "network") {
                 if docker_args.iter().any(|arg| arg == "create") {
+                    if self.fail_network_create {
+                        return Ok(ExecOutput::new(
+                            1,
+                            Vec::new(),
+                            b"network name already exists".to_vec(),
+                        ));
+                    }
                     return Ok(ExecOutput::new(0, b"network-id".to_vec(), Vec::new()));
                 }
                 if let Some(inspect_index) = docker_args.iter().position(|arg| arg == "inspect") {
@@ -318,6 +327,31 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
                     && argv.iter().any(|arg| arg == "unix:///var/run/docker.sock")
             })
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_name_conflict_does_not_clean_an_existing_owners_firewall() -> Result<()> {
+    let id = BoxId::new("box-0")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.fail_network_create = true;
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+    let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
+
+    assert!(matches!(
+        controller.prepare(&host, namespace, &id, &allowlist).await,
+        Err(Error::Backend {
+            operation: "configure egress filtering",
+            ..
+        })
+    ));
+    assert!(host.commands().iter().all(|argv| {
+        !argv
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "-D" | "-F" | "-X"))
+    }));
     Ok(())
 }
 

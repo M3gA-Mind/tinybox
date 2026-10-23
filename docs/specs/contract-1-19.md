@@ -48,15 +48,22 @@ least 19, which `tinybox_bus::is_compatible` already enforces.
 `NativeLinuxDockerEgressController` and a local, rootful Linux Docker Engine
 whose firewall chains can be verified. It resolves names before creating the
 per-box bridge, installs default-drop IPv4 and IPv6 filters before `docker run`,
-and permits only pinned destination IP/port pairs. Traffic from that bridge to
-the Docker host is dropped. The ordinary Docker sandbox continues to refuse
-allowlists unless this controller is installed.
+and permits only pinned destination IP/port pairs. It writes the pinned
+hostname/address pairs into the container's `/etc/hosts` and configures its
+only DNS upstream as container-local `127.0.0.1`, so Docker's embedded resolver
+cannot forward arbitrary queries to host DNS. Unlisted names therefore fail to
+resolve unless the workload provides a resolver in its own loopback namespace.
+Traffic from that bridge to the Docker host is dropped. The ordinary Docker
+sandbox continues to refuse allowlists unless this controller is installed.
 
 Docker Desktop, Windows, remote or unknown Hosts, rootless daemons, and daemons
 without the required firewall support refuse `Allowlist` as Unsupported.
-`passthrough`, `namespace` and `microvm` continue to refuse it. The filter does
-not claim to filter DNS answers; it pins the addresses used for firewall
-authorization, so later answers cannot expand reachable destinations.
+`passthrough`, `namespace` and `microvm` continue to refuse it. Docker's custom
+bridge embedded resolver forwards external queries to an upstream resolver;
+the backend uses Docker's `--dns` option to pin that upstream to the container's
+own loopback, and installs approved hostname mappings from the single pinned
+resolution result. This follows Docker's documented per-container DNS behavior
+for custom upstream addresses. The workload cannot fall back to host DNS.
 
 ## Deprecated
 

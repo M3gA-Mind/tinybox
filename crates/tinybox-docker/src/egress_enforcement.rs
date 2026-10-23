@@ -4,12 +4,7 @@
 //! consumes pinned resolver answers and does not use proxy environment
 //! variables as an enforcement boundary.
 
-use std::{
-    collections::BTreeSet,
-    fmt::Debug,
-    net::IpAddr,
-    sync::Arc,
-};
+use std::{collections::BTreeSet, fmt::Debug, net::IpAddr, sync::Arc};
 
 use async_trait::async_trait;
 use tinybox_core::{

@@ -685,13 +685,7 @@ impl Sandbox for DockerSandbox {
 
         // Build the command before running anything, so a source this backend
         // cannot handle leaves no container behind.
-        let argv = match args::run(
-            &self.namespace,
-            &info.id,
-            &attempt,
-            spec,
-            network.as_ref(),
-        ) {
+        let argv = match args::run(&self.namespace, &info.id, &attempt, spec, network.as_ref()) {
             Ok(argv) => argv,
             Err(error) => {
                 return Err(self
