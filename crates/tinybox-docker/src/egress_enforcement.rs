@@ -172,7 +172,7 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
                     operation: "configure egress filtering",
                     message: output.stderr_lossy().trim().to_owned(),
                 };
-                return Err(reconcile_failed_network_create(host, &names, id, error).await);
+                return Err(error);
             }
             Err(error) => {
                 return Err(reconcile_failed_network_create(host, &names, id, error).await);
