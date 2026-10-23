@@ -484,18 +484,8 @@ impl DockerSandbox {
         self
     }
 
-    fn docker_argv(&self, argv: Vec<String>) -> Vec<String> {
-        if let Some(controller) = &self.egress_controller {
-            controller.docker_argv(argv)
-        } else {
-            argv
-        }
-    }
-
     async fn run_docker(&self, request: &ExecRequest) -> Result<ExecOutput> {
-        let mut request = request.clone();
-        request.argv = self.docker_argv(request.argv);
-        self.host.run(&request).await
+        self.host.run(request).await
     }
 
     /// What this sandbox declares.
