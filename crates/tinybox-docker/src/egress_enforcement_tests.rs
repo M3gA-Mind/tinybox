@@ -106,7 +106,6 @@ struct BridgeLinkHost {
 struct PreparedNativeHost {
     commands: Mutex<Vec<Vec<String>>>,
     box_id: String,
-    network: String,
     bridge: String,
     forward_chain: String,
     input_chain: String,
@@ -117,7 +116,6 @@ impl PreparedNativeHost {
         Self {
             commands: Mutex::new(Vec::new()),
             box_id: id.to_string(),
-            network: names.network.clone(),
             bridge: names.bridge.clone(),
             forward_chain: names.forward_chain.clone(),
             input_chain: names.input_chain.clone(),
@@ -272,9 +270,9 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
     let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
 
-    let network = controller
-        .prepare(&host, namespace, &id, &allowlist)
-        .await?;
+    let prepared = controller.prepare(&host, namespace, &id, &allowlist).await;
+    assert!(prepared.is_ok(), "{prepared:?}; commands={:?}", host.commands());
+    let network = prepared?;
     assert_eq!(network, names.network);
     controller.cleanup(&host, namespace, &id).await?;
 
