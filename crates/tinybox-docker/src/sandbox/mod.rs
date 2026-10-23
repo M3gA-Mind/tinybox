@@ -69,14 +69,18 @@ struct ControllerHost {
 impl ControllerHost {
     fn request(&self, request: &ExecRequest) -> Result<PreparedDockerRequest> {
         let mut request = request.clone();
-        if request
+        let is_docker_command = request
             .argv
             .first()
-            .is_some_and(|program| program == "docker")
-        {
+            .is_some_and(|program| program == "docker");
+        if is_docker_command {
             request.argv = self.controller.docker_argv(request.argv);
         }
-        let env_file = write_workload_docker_env_file(&mut request)?;
+        let env_file = if is_docker_command {
+            write_workload_docker_env_file(&mut request)?
+        } else {
+            None
+        };
         Ok(PreparedDockerRequest {
             request,
             _env_file: env_file,
@@ -99,8 +103,22 @@ fn write_workload_docker_env_file(
         .iter()
         .filter_map(|key| request.env.get(*key).map(|value| (*key, value.clone())))
         .collect::<Vec<_>>();
+    for key in KEYS {
+        request.env.insert(key.to_owned(), String::new());
+    }
     if values.is_empty() {
         return Ok(None);
+    }
+    if !request
+        .argv
+        .iter()
+        .any(|part| part == "run" || part == "exec")
+    {
+        return Err(Error::Backend {
+            sandbox: NAME.to_owned(),
+            operation: "preserve Docker workload environment",
+            message: "Docker environment files are supported only for run and exec".to_owned(),
+        });
     }
     if values.iter().any(|(_, value)| value.contains(['\n', '\r'])) {
         return Err(Error::Backend {
@@ -119,9 +137,6 @@ fn write_workload_docker_env_file(
             .map_err(|error| Error::io("write Docker workload environment file", &error))?;
     }
 
-    for (key, _) in &values {
-        request.env.insert((*key).to_owned(), String::new());
-    }
     request.argv =
         add_docker_env_file_flag(std::mem::take(&mut request.argv), file.path(), &values);
     Ok(Some(file))
