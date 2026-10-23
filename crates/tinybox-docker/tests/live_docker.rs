@@ -121,9 +121,7 @@ fn exchange_before(address: SocketAddr, deadline: Instant) -> Result<Vec<u8>> {
                     .set_read_timeout(Some(Duration::from_millis(100)))
                     .map_err(|error| Error::io("set published-port read timeout", &error))?;
                 stream
-                    .write_all(
-                        b"GET /index.html HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-                    )
+                    .write_all(b"published-port probe\n")
                     .map_err(|error| Error::io("request published-port response", &error))?;
                 let mut response = Vec::new();
                 let mut chunk = [0; 1024];
