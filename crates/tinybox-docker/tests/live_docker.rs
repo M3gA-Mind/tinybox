@@ -515,6 +515,26 @@ fn ipv6_address_inspect_template_quotes_the_network_name() {
     );
 }
 
+#[test]
+fn exchange_before_retries_a_connection_closed_before_the_response() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (first, _) = listener.accept().unwrap();
+        drop(first);
+        let (mut second, _) = listener.accept().unwrap();
+        let mut request = [0; 64];
+        let _ = second.read(&mut request).unwrap();
+        second.write_all(b"published-ok\\n").unwrap();
+    });
+
+    let response = exchange_before(address, Instant::now() + Duration::from_secs(2)).unwrap();
+    server.join().unwrap();
+    assert!(response
+        .windows(b"published-ok\\n".len())
+        .any(|window| window == b"published-ok\\n"));
+}
+
 /// A disposable Linux Engine proof for the native firewall controller.
 ///
 /// Both listeners run in a separate, test-owned bridge container, so this

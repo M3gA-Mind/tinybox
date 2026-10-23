@@ -1091,6 +1091,17 @@ fn assert_input_return_rules(commands: &[Vec<String>], names: &NetworkNames) -> 
             operation: "find IPv6 neighbor-discovery rule",
             message: "rule was not installed".to_owned(),
         })?;
+    let neighbor_advertisement_position = commands
+        .iter()
+        .position(|argv| {
+            argv.iter().any(|arg| arg == "ip6tables")
+                && argv.iter().any(|arg| arg == "neighbor-advertisement")
+        })
+        .ok_or_else(|| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "find IPv6 neighbor-advertisement rule",
+            message: "rule was not installed".to_owned(),
+        })?;
     let input_drop_position = commands
         .iter()
         .position(|argv| {
@@ -1121,6 +1132,7 @@ fn assert_input_return_rules(commands: &[Vec<String>], names: &NetworkNames) -> 
             message: "rule was not installed".to_owned(),
         })?;
     assert!(neighbor_solicitation_position < ipv6_input_established_position);
+    assert!(neighbor_advertisement_position < ipv6_input_established_position);
     assert!(ipv6_input_established_position < input_drop_position);
     Ok(())
 }
