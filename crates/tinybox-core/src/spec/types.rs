@@ -253,8 +253,9 @@ pub enum NetworkPolicy {
 /// `Unsupported`, never `Enforced`.
 ///
 /// The cloud metadata endpoints in [`EgressAllowlist::is_metadata_host`] are
-/// refused at validation time and must also be blocked by the backend even
-/// when a hostname resolves to one of them.
+/// refused at validation time, including legacy numeric IPv4 spellings such as
+/// `0251.0376.0251.0376` and `0xa9fea9fe` for `169.254.169.254`. They must also
+/// be blocked by the backend even when a hostname resolves to one of them.
 ///
 /// Explicit loopback addresses and aliases are also invalid. This includes
 /// IPv4/IPv6 loopback literals, IPv4-mapped loopback literals, scoped IPv6
@@ -284,10 +285,15 @@ impl EgressAllowlist {
     }
 
     /// Whether `host` names a cloud instance-metadata endpoint, which no
-    /// policy may ever allow.
+    /// policy may ever allow. Matching ignores DNS case and terminal root dots,
+    /// and recognizes legacy numeric IPv4 spellings of metadata addresses.
     #[must_use]
     pub fn is_metadata_host(host: &str) -> bool {
-        let host = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+        let host = host
+            .trim()
+            .trim_end_matches('.')
+            .trim_matches(['[', ']'])
+            .to_ascii_lowercase();
         matches!(
             host.as_str(),
             "169.254.169.254"
@@ -297,6 +303,11 @@ impl EgressAllowlist {
                 | "metadata.google.internal"
                 | "metadata"
         ) || host.starts_with("::ffff:169.254.169.254")
+            || Self::parse_legacy_ipv4(&host).is_some_and(|address| {
+                address == Ipv4Addr::new(169, 254, 169, 254)
+                    || address == Ipv4Addr::new(169, 254, 170, 2)
+                    || address == Ipv4Addr::new(100, 100, 100, 200)
+            })
     }
 
     /// Whether an allowlist entry explicitly names a loopback address or alias.

@@ -21,7 +21,7 @@
 
 use std::{
     io::{Read, Write},
-    net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream},
     process::Command,
     sync::Arc,
     thread,
@@ -29,10 +29,10 @@ use std::{
 };
 
 use tinybox_core::{
-    BoxSpec, Error, ExecRequest, Host as _, HostRef, MemoryStore, NetworkPolicy, Placement, Result,
-    Sandbox, SandboxRef, WorkspaceSource,
+    BoxSpec, Error, ExecRequest, Host as _, HostRef, MemoryStore, NetworkPolicy, Placement,
+    PortMapping, Result, Sandbox, SandboxRef, WorkspaceSource,
 };
-use tinybox_docker::DockerSandbox;
+use tinybox_docker::{DockerSandbox, EgressResolver, NativeLinuxDockerEgressController};
 use tinybox_host::LocalHost;
 
 /// The image every live test uses. Small, and it ships a shell.
@@ -108,6 +108,75 @@ fn accept_before(listener: &TcpListener, deadline: Instant) -> std::io::Result<T
                 thread::sleep(Duration::from_millis(10));
             }
             Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Connect to a published guest port and collect its response before timeout.
+fn exchange_before(address: SocketAddr, deadline: Instant) -> Result<Vec<u8>> {
+    loop {
+        match TcpStream::connect_timeout(&address, Duration::from_millis(100)) {
+            Ok(mut stream) => {
+                stream
+                    .set_read_timeout(Some(Duration::from_millis(100)))
+                    .map_err(|error| Error::io("set published-port read timeout", &error))?;
+                stream
+                    .write_all(b"published-port probe\n")
+                    .map_err(|error| Error::io("request published-port response", &error))?;
+                let mut response = Vec::new();
+                let mut chunk = [0; 1024];
+                loop {
+                    let read = match stream.read(&mut chunk) {
+                        Ok(read) => read,
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            ) && Instant::now() < deadline =>
+                        {
+                            continue;
+                        }
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::ConnectionReset
+                                && Instant::now() < deadline =>
+                        {
+                            break;
+                        }
+                        Err(error) => {
+                            return Err(Error::io("read published-port response", &error));
+                        }
+                    };
+                    if read == 0 {
+                        return Ok(response);
+                    }
+                    response.extend_from_slice(&chunk[..read]);
+                    if response
+                        .windows(b"published-ok\n".len())
+                        .any(|window| window == b"published-ok\n")
+                    {
+                        return Ok(response);
+                    }
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionRefused
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                if Instant::now() >= deadline {
+                    return Err(Error::Backend {
+                        sandbox: "docker".to_owned(),
+                        operation: "connect to published container port",
+                        message: error.to_string(),
+                    });
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return Err(Error::io("connect to published container port", &error)),
         }
     }
 }
@@ -373,6 +442,351 @@ async fn live_network_policy_controls_host_listener_connectivity() -> Result<()>
         no_denied_connection,
         "default-Denied container established a connection to the controlled listener"
     );
+    live_allowlist_pins_destinations_and_blocks_other_raw_tcp().await?;
+    Ok(())
+}
+
+#[derive(Debug)]
+struct FixedResolver(Vec<std::net::IpAddr>);
+
+impl EgressResolver for FixedResolver {
+    fn resolve(&self, _hostname: &str) -> std::io::Result<Vec<std::net::IpAddr>> {
+        Ok(self.0.clone())
+    }
+}
+
+fn docker_command(arguments: &[&str]) -> Result<String> {
+    let output = Command::new("docker")
+        .args(arguments)
+        .output()
+        .map_err(|error| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "run the controlled egress listener",
+            message: error.to_string(),
+        })?;
+    if !output.status.success() {
+        return Err(Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "run the controlled egress listener",
+            message: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn ipv6_address_inspect_template(network: &str) -> String {
+    format!("{{{{(index .NetworkSettings.Networks \"{network}\").GlobalIPv6Address}}}}")
+}
+
+fn allowlist_probe_ports() -> tinybox_core::EgressAllowlist {
+    tinybox_core::EgressAllowlist::new(["listener.test"], [18373, 18376])
+}
+
+const TARGET_LISTENER_SCRIPT: &str = "(while true; do nc -l -p 18373 >/dev/null; echo hit >> /tmp/allowed; done) & (while true; do nc -l -p 18374 >/dev/null; echo hit >> /tmp/blocked; done) & (while true; do nc -l -p 18376 >/dev/null; echo hit >> /tmp/allowed-v6; done) & (while true; do nc -u -l -p 53 >/dev/null; echo hit >> /tmp/dns; done) & wait";
+fn ipv6_listener_probe(address: Ipv6Addr) -> String {
+    format!(
+        "unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -z -w 3 {address} 18376"
+    )
+}
+
+#[test]
+fn live_allowlist_covers_both_listener_probe_ports() {
+    let allowlist = allowlist_probe_ports();
+    assert!(allowlist.ports.contains(&18373));
+    assert!(allowlist.ports.contains(&18376));
+}
+
+#[test]
+fn alpine_busybox_nc_uses_literal_ipv6_without_unsupported_flag() {
+    let address = Ipv6Addr::new(0xfd42, 0, 0, 0, 0, 0, 0, 0x1234);
+    let probe = ipv6_listener_probe(address);
+    assert!(TARGET_LISTENER_SCRIPT.contains("nc -l -p 18376"));
+    assert!(!TARGET_LISTENER_SCRIPT.contains("nc -6"));
+    assert!(probe.contains("nc -z -w 3 fd42::1234 18376"));
+    assert!(!probe.contains("listener.test"));
+    assert!(!probe.contains("nc -6"));
+}
+
+#[test]
+fn ipv6_address_inspect_template_quotes_the_network_name() {
+    assert_eq!(
+        ipv6_address_inspect_template("controlled-v6"),
+        r#"{{(index .NetworkSettings.Networks "controlled-v6").GlobalIPv6Address}}"#
+    );
+}
+
+/// A disposable Linux Engine proof for the native firewall controller.
+///
+/// Both listeners run in a separate, test-owned bridge container, so this
+/// exercises raw TCP from the sandbox without opening a path to the Docker
+/// host or relying on a public service.
+// Keep setup, all three probes, assertions, and cleanup together so cleanup
+// runs on every assertion path in the live integration test.
+#[allow(clippy::too_many_lines)]
+async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<()> {
+    const ALLOWED_PORT: &str = "18373";
+    const BLOCKED_PORT: &str = "18374";
+
+    if !live_docker_enabled()? {
+        return Ok(());
+    }
+
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let target_name = format!("tinybox-egress-target-{}", &suffix[..12]);
+    let target_network = format!("tinybox-egress-v6-{}", &suffix[..12]);
+    let target_subnet = format!("fd42:{}:5678::/64", &suffix[..4]);
+    let gateway = docker_bridge_gateway()?;
+    let host_listener = TcpListener::bind((gateway, 0)).map_err(|error| Error::Backend {
+        sandbox: "docker".to_owned(),
+        operation: "bind the host-gateway negative-control listener",
+        message: error.to_string(),
+    })?;
+    host_listener
+        .set_nonblocking(true)
+        .map_err(|error| Error::io("configure host-gateway listener", &error))?;
+    let host_address = host_listener
+        .local_addr()
+        .map_err(|error| Error::io("read host-gateway listener address", &error))?;
+    let image = docker_command(&[
+        "run",
+        "-d",
+        "--name",
+        &target_name,
+        IMAGE,
+        "sh",
+        "-c",
+        TARGET_LISTENER_SCRIPT,
+    ]);
+    let _ = image?;
+    if let Err(error) = docker_command(&[
+        "network",
+        "create",
+        "--driver",
+        "bridge",
+        "--ipv6",
+        "--subnet",
+        &target_subnet,
+        &target_network,
+    ]) {
+        let _ = Command::new("docker")
+            .args(["rm", "-f", &target_name])
+            .status();
+        return Err(error);
+    }
+    let result = async {
+        docker_command(&["network", "connect", &target_network, &target_name])?;
+        let ipv4 = docker_command(&[
+            "inspect",
+            "--format",
+            "{{(index .NetworkSettings.Networks \"bridge\").IPAddress}}",
+            &target_name,
+        ])?
+        .parse::<std::net::IpAddr>()
+        .map_err(|error| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "read the controlled listener address",
+            message: error.to_string(),
+        })?;
+        let ipv6 = docker_command(&[
+            "inspect",
+            "--format",
+            &ipv6_address_inspect_template(&target_network),
+            &target_name,
+        ])?
+        .parse::<Ipv6Addr>()
+        .map_err(|error| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "read the controlled IPv6 listener address",
+            message: error.to_string(),
+        })?;
+
+        let resolver: Arc<dyn EgressResolver> =
+            Arc::new(FixedResolver(vec![ipv4, std::net::IpAddr::V6(ipv6)]));
+        let namespace = format!("ns-egress-{}", &suffix[..8]);
+        let sandbox = sandbox(&namespace)?
+            .with_egress_controller(Arc::new(NativeLinuxDockerEgressController::new(resolver)));
+        let allowlist = allowlist_probe_ports();
+        let info = sandbox
+            .create(
+                &spec()?
+                    .with_network(NetworkPolicy::Allowlist(allowlist))
+                    .with_port(PortMapping::dynamic(18375)),
+            )
+            .await?;
+
+        let probes = async {
+        let container = format!("tinybox-{namespace}-{}", info.id);
+        docker_command(&[
+            "exec",
+            "-d",
+            &container,
+                "sh",
+                "-c",
+                "while true; do printf 'published-ok\\n' | nc -l -p 18375; done",
+        ])?;
+        let published_port = sandbox
+            .published_ports(&info.id)
+            .await?
+            .into_iter()
+            .find(|mapping| mapping.guest == 18375)
+            .and_then(|mapping| mapping.host)
+            .ok_or_else(|| Error::Backend {
+                sandbox: "docker".to_owned(),
+                operation: "inspect published container port",
+                message: "Docker did not assign a host port".to_owned(),
+            })?;
+        let published_response = exchange_before(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, published_port)),
+            Instant::now() + Duration::from_secs(5),
+        )?;
+
+        let allowed = sandbox
+            .exec(
+                &info.id,
+                &ExecRequest::new([
+                    "sh",
+                    "-c",
+                    &format!("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -z -w 3 listener.test {ALLOWED_PORT}"),
+                ]),
+            )
+            .await;
+        let allowed_v6 = sandbox
+            .exec(
+                &info.id,
+                &ExecRequest::new([
+                    "sh",
+                    "-c",
+                    &ipv6_listener_probe(ipv6),
+                ]),
+            )
+            .await;
+        let blocked = sandbox
+            .exec(
+                &info.id,
+                &ExecRequest::new([
+                    "sh",
+                    "-c",
+                    &format!("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -z -w 2 {ipv4} {BLOCKED_PORT}"),
+                ]),
+            )
+            .await;
+        let host_gateway = sandbox
+            .exec(
+                &info.id,
+                &ExecRequest::new([
+                    "sh",
+                    "-c",
+                    &format!("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -z -w 2 {} {}", host_address.ip(), host_address.port()),
+                ]),
+            )
+            .await;
+        let dns_blocked = sandbox
+            .exec(
+                &info.id,
+                &ExecRequest::new([
+                    "sh",
+                    "-c",
+                    "unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nslookup -timeout=1 -retry=1 unlisted-name.test >/dev/null 2>&1",
+                ]),
+            )
+            .await;
+        let direct_dns = sandbox
+            .exec(
+                &info.id,
+                &ExecRequest::new([
+                    "sh",
+                    "-c",
+                    &format!("printf probe | nc -u -w 1 {ipv4} 53 || true"),
+                ]),
+            )
+            .await;
+        let host_listener_untouched = matches!(
+            accept_before(&host_listener, Instant::now() + Duration::from_millis(250)),
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut
+        );
+        let allowed_hits =
+            docker_command(&["exec", &target_name, "sh", "-c", "test -s /tmp/allowed"]);
+        let allowed_v6_hits = docker_command(&[
+            "exec",
+            &target_name,
+            "sh",
+            "-c",
+            "test -s /tmp/allowed-v6",
+        ]);
+        let blocked_hits = Command::new("docker")
+            .args(["exec", &target_name, "sh", "-c", "test ! -s /tmp/blocked"])
+            .status()
+            .map_err(|error| Error::io("check forbidden listener", &error));
+        let dns_hits = Command::new("docker")
+            .args(["exec", &target_name, "sh", "-c", "test ! -s /tmp/dns"])
+            .status()
+            .map_err(|error| Error::io("check forbidden DNS listener", &error));
+
+        let allowed = allowed?;
+        let allowed_v6 = allowed_v6?;
+        let blocked = blocked?;
+        let host_gateway = host_gateway?;
+        let dns_blocked = dns_blocked?;
+        direct_dns?;
+        allowed_hits?;
+        allowed_v6_hits?;
+        let blocked_hits = blocked_hits?;
+        let dns_hits = dns_hits?;
+        if allowed.exit_code != 0
+            || allowed_v6.exit_code != 0
+            || blocked.exit_code == 0
+            || host_gateway.exit_code == 0
+            || dns_blocked.exit_code == 0
+            || !published_response
+                .windows(b"published-ok\n".len())
+                .any(|window| window == b"published-ok\n")
+            || !blocked_hits.success()
+            || !dns_hits.success()
+            || !host_listener_untouched
+        {
+            return Err(Error::Backend {
+                sandbox: "docker".to_owned(),
+                operation: "verify native egress allowlist",
+                message: format!(
+                    "allowed v4 exit={}, allowed v6 exit={}, blocked exit={}, host-gateway exit={}, unlisted DNS lookup exit={}, published response={published_response:?}, forbidden TCP hit={}, forbidden DNS hit={}, host listener touched={}",
+                    allowed.exit_code,
+                    allowed_v6.exit_code,
+                    blocked.exit_code,
+                    host_gateway.exit_code,
+                    dns_blocked.exit_code,
+                    !blocked_hits.success(),
+                    !dns_hits.success(),
+                    !host_listener_untouched
+                ),
+            });
+        }
+        Ok(())
+        }
+        .await;
+        let destroy = sandbox.destroy(&info.id).await;
+        probes?;
+        destroy?;
+        Ok(())
+    }
+    .await;
+    let cleanup = Command::new("docker")
+        .args(["rm", "-f", &target_name])
+        .status()
+        .map_err(|error| Error::io("remove controlled listener", &error));
+    let network_cleanup = Command::new("docker")
+        .args(["network", "rm", &target_network])
+        .status()
+        .map_err(|error| Error::io("remove controlled IPv6 listener network", &error));
+    result?;
+    let cleanup = cleanup?;
+    let network_cleanup = network_cleanup?;
+    if !cleanup.success() || !network_cleanup.success() {
+        return Err(Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "remove controlled listeners",
+            message: "docker rm or docker network rm returned a failure status".to_owned(),
+        });
+    }
     Ok(())
 }
 
