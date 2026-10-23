@@ -113,6 +113,7 @@ async fn docker_argv_controller_rewrites_each_command_once() -> Result<()> {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // Keep credential redaction and env-file lifetime assertions together.
 fn controller_preserves_requested_docker_variables_for_the_workload() -> Result<()> {
     #[derive(Debug)]
     struct Resolver;
