@@ -1090,6 +1090,20 @@ async fn cleanup_refuses_firewall_chains_with_another_owner_marker() -> Result<(
             ("iptables".to_owned(), names.forward_chain.clone()),
             ("iptables".to_owned(), names.input_chain.clone()),
         ]);
+    host.chains_with_rules
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .extend([
+            ("iptables".to_owned(), names.forward_chain.clone()),
+            ("iptables".to_owned(), names.input_chain.clone()),
+        ]);
+    host.marked_chains
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .extend([
+            ("iptables".to_owned(), names.forward_chain.clone()),
+            ("iptables".to_owned(), names.input_chain.clone()),
+        ]);
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
 
     assert!(controller.cleanup(&host, namespace, &id).await.is_err());
