@@ -34,6 +34,7 @@
 //! ```
 
 mod egress;
+mod egress_enforcement;
 mod oneshot;
 mod policy;
 mod sandbox;
@@ -47,6 +48,7 @@ pub use oneshot::{
 pub use policy::{DANGEROUS_MOUNTS, HOST_NETWORK, run_policy_issues};
 
 pub use egress::{EgressResolver, PinnedEgressPlan, PinnedEgressTarget, plan_egress_allowlist};
+pub use egress_enforcement::{DockerEgressController, NativeLinuxDockerEgressController};
 
 pub use sandbox::{
     DEFAULT_BASE_IMAGE, DEFAULT_NAMESPACE, DockerSandbox, NAME, OWNER_LABEL, WORKSPACE_MOUNT,
