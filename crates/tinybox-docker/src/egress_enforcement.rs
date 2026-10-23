@@ -1202,15 +1202,6 @@ fn force_local_rootful_docker(argv: Vec<String>) -> Vec<String> {
         return argv;
     }
     let mut forced = vec![
-        "env".into(),
-        "-u".into(),
-        "DOCKER_HOST".into(),
-        "-u".into(),
-        "DOCKER_CONTEXT".into(),
-        "-u".into(),
-        "DOCKER_TLS_VERIFY".into(),
-        "-u".into(),
-        "DOCKER_CERT_PATH".into(),
         "docker".into(),
         "--host".into(),
         DOCKER_SOCKET.into(),

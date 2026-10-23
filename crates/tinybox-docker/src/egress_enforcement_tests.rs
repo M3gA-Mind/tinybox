@@ -868,7 +868,8 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
             .iter()
             .filter(|argv| argv.iter().any(|arg| arg == "docker"))
             .all(|argv| {
-                argv.first().is_some_and(|arg| arg == "env")
+                argv.first().is_some_and(|arg| arg == "docker")
+                    && argv.iter().any(|arg| arg == "--host")
                     && argv.iter().any(|arg| arg == "unix:///var/run/docker.sock")
             })
     );

@@ -65,13 +65,6 @@ struct ControllerHost {
     controller: Arc<dyn DockerEgressController>,
 }
 
-const WORKLOAD_DOCKER_ENV: [&str; 4] = [
-    "DOCKER_HOST",
-    "DOCKER_CONTEXT",
-    "DOCKER_TLS_VERIFY",
-    "DOCKER_CERT_PATH",
-];
-
 impl ControllerHost {
     fn request(&self, request: &ExecRequest) -> ExecRequest {
         let mut request = request.clone();
@@ -80,23 +73,6 @@ impl ControllerHost {
             .first()
             .is_some_and(|program| program == "docker")
         {
-            if request
-                .argv
-                .get(1)
-                .is_some_and(|subcommand| subcommand == "run")
-            {
-                for index in 0..request.argv.len().saturating_sub(1) {
-                    if request.argv[index] != "--env"
-                        || !WORKLOAD_DOCKER_ENV.contains(&request.argv[index + 1].as_str())
-                    {
-                        continue;
-                    }
-                    let key = request.argv[index + 1].clone();
-                    if let Some(value) = request.env.remove(&key) {
-                        request.argv[index + 1] = format!("{key}={value}");
-                    }
-                }
-            }
             request.argv = self.controller.docker_argv(request.argv);
         }
         request
