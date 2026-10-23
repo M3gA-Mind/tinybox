@@ -7,7 +7,7 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
-use tinybox_core::{Error, ExecOutput, ExecRequest, Host, Result};
+use tinybox_core::{Error, ExecOutput, ExecRequest, Host, HostExecutionLocation, Result};
 
 use super::{NAME, SshHost, SshTarget};
 
@@ -60,6 +60,8 @@ fn it_reports_its_name() -> Result<()> {
     assert_eq!(host.name(), "ssh");
     assert_eq!(host.name(), NAME);
     assert_eq!(host.target().destination(), "builder@example.invalid");
+    assert_eq!(host.execution_location(), HostExecutionLocation::Remote);
+    assert_eq!(inner.execution_location(), HostExecutionLocation::Unknown);
     Ok(())
 }
 
