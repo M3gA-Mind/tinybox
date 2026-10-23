@@ -114,12 +114,16 @@ pub fn plan_egress_allowlist(
                 reason: "allowlist host resolved to no addresses",
             });
         }
+        let addresses = addresses
+            .into_iter()
+            .map(normalize_ip_address)
+            .collect::<BTreeSet<_>>();
         if addresses.iter().any(is_forbidden_address) {
             return Err(Error::InvalidNetworkPolicy {
                 reason: "allowlist host resolves to a metadata or loopback address",
             });
         }
-        addresses_by_host.insert(host, addresses.into_iter().collect());
+        addresses_by_host.insert(host, addresses);
     }
 
     let ports: BTreeSet<_> = allowlist.ports.iter().copied().collect();
@@ -141,6 +145,15 @@ pub fn plan_egress_allowlist(
 
 fn normalize_host(host: &str) -> String {
     host.trim().trim_matches(['[', ']']).to_ascii_lowercase()
+}
+
+fn normalize_ip_address(address: IpAddr) -> IpAddr {
+    match address {
+        IpAddr::V6(address) => address
+            .to_ipv4_mapped()
+            .map_or(IpAddr::V6(address), IpAddr::V4),
+        address => address,
+    }
 }
 
 fn is_forbidden_address(address: &IpAddr) -> bool {
