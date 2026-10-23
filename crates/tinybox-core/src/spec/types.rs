@@ -276,10 +276,14 @@ impl EgressAllowlist {
     }
 
     /// Whether `host` names a cloud instance-metadata endpoint, which no
-    /// policy may ever allow.
+    /// policy may ever allow. Matching ignores DNS case and terminal root dots.
     #[must_use]
     pub fn is_metadata_host(host: &str) -> bool {
-        let host = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+        let host = host
+            .trim()
+            .trim_end_matches('.')
+            .trim_matches(['[', ']'])
+            .to_ascii_lowercase();
         matches!(
             host.as_str(),
             "169.254.169.254"

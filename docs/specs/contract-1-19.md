@@ -22,7 +22,8 @@ least 19, which `tinybox_bus::is_compatible` already enforces.
 - Cloud metadata endpoints (`169.254.169.254`, `169.254.170.2`,
   `100.100.100.200`, `fd00:ec2::254`, `metadata.google.internal`) are refused
   when the spec is validated, and a backend must also block them when a name
-  resolves to one.
+  resolves to one. DNS names are matched case-insensitively with an optional
+  terminal root dot, so `Metadata.Google.Internal.` is refused as well.
 - A backend that cannot enforce the list refuses the box with
   `ConstraintNotEnforced { constraint: Network, enforcement: Unsupported }`.
   It never widens the list to `Egress`. A backend that enforces only part of it
