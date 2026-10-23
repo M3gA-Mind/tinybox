@@ -1210,13 +1210,7 @@ fn force_local_rootful_docker(argv: Vec<String>) -> Vec<String> {
     if argv.first().is_some_and(|program| program == "env") || has_local_docker_host_option(&argv) {
         return argv;
     }
-    let mut forced = vec![
-        "docker".into(),
-        "--tls=false".into(),
-        "--tlsverify=false".into(),
-        "--host".into(),
-        DOCKER_SOCKET.into(),
-    ];
+    let mut forced = vec!["docker".into(), "--host".into(), DOCKER_SOCKET.into()];
     forced.extend(argv.into_iter().skip(1));
     forced
 }
