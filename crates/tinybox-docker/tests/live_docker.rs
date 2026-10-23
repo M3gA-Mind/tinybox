@@ -482,11 +482,22 @@ fn allowlist_probe_ports() -> tinybox_core::EgressAllowlist {
     tinybox_core::EgressAllowlist::new(["listener.test"], [18373, 18376])
 }
 
+const TARGET_LISTENER_SCRIPT: &str = "(while true; do nc -l -p 18373 >/dev/null; echo hit >> /tmp/allowed; done) & (while true; do nc -l -p 18374 >/dev/null; echo hit >> /tmp/blocked; done) & (while true; do nc -6 -l -p 18376 >/dev/null; echo hit >> /tmp/allowed-v6; done) & (while true; do nc -u -l -p 53 >/dev/null; echo hit >> /tmp/dns; done) & wait";
+const IPV6_LISTENER_PROBE: &str = "unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -6 -z -w 3 listener.test 18376";
+
 #[test]
 fn live_allowlist_covers_both_listener_probe_ports() {
     let allowlist = allowlist_probe_ports();
     assert!(allowlist.ports.contains(&18373));
     assert!(allowlist.ports.contains(&18376));
+}
+
+#[test]
+fn alpine_busybox_nc_uses_literal_ipv6_without_unsupported_flag() {
+    assert!(TARGET_LISTENER_SCRIPT.contains("nc -l -p 18376"));
+    assert!(!TARGET_LISTENER_SCRIPT.contains("nc -6"));
+    assert!(IPV6_LISTENER_PROBE.contains("nc -z -w 3 listener.test 18376"));
+    assert!(!IPV6_LISTENER_PROBE.contains("nc -6"));
 }
 
 #[test]
@@ -537,7 +548,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
         IMAGE,
         "sh",
         "-c",
-        "(while true; do nc -l -p 18373 >/dev/null; echo hit >> /tmp/allowed; done) & (while true; do nc -l -p 18374 >/dev/null; echo hit >> /tmp/blocked; done) & (while true; do nc -6 -l -p 18376 >/dev/null; echo hit >> /tmp/allowed-v6; done) & (while true; do nc -u -l -p 53 >/dev/null; echo hit >> /tmp/dns; done) & wait",
+        TARGET_LISTENER_SCRIPT,
     ]);
     let _ = image?;
     if let Err(error) = docker_command(&[
@@ -637,7 +648,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 &ExecRequest::new([
                     "sh",
                     "-c",
-                    "unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -6 -z -w 3 listener.test 18376",
+                    IPV6_LISTENER_PROBE,
                 ]),
             )
             .await;
