@@ -410,15 +410,19 @@ fn docker_command(arguments: &[&str]) -> Result<String> {
 /// Both listeners run in a separate, test-owned bridge container, so this
 /// exercises raw TCP from the sandbox without opening a path to the Docker
 /// host or relying on a public service.
+// Keep setup, all three probes, assertions, and cleanup together so cleanup
+// runs on every assertion path in the live integration test.
+#[allow(clippy::too_many_lines)]
 async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<()> {
+    const ALLOWED_PORT: &str = "18373";
+    const BLOCKED_PORT: &str = "18374";
+
     if !live_docker_enabled()? {
         return Ok(());
     }
 
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let target_name = format!("tinybox-egress-target-{}", &suffix[..12]);
-    const ALLOWED_PORT: &str = "18373";
-    const BLOCKED_PORT: &str = "18374";
     let gateway = docker_bridge_gateway()?;
     let host_listener = TcpListener::bind((gateway, 0)).map_err(|error| Error::Backend {
         sandbox: "docker".to_owned(),

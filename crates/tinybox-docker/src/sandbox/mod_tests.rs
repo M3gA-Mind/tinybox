@@ -195,7 +195,7 @@ async fn native_controller_refuses_hosts_without_explicit_local_identity() -> Re
                 ..
             })
         ));
-        assert!(host.commands().is_empty());
+        assert_eq!(host.commands(), []);
     }
     Ok(())
 }

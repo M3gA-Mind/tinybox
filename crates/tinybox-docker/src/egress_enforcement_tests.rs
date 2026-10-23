@@ -38,7 +38,7 @@ impl FakeNativeHost {
 
 #[async_trait]
 impl Host for FakeNativeHost {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "fake-native"
     }
 
@@ -104,7 +104,7 @@ struct BridgeLinkHost {
 
 #[async_trait]
 impl Host for BridgeLinkHost {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "bridge-link-host"
     }
 
