@@ -190,6 +190,17 @@ fn controller_preserves_requested_docker_variables_for_the_workload() -> Result<
         })?;
     let env_file_contents = std::fs::read_to_string(env_file)
         .map_err(|error| Error::io("read Docker workload environment file in test", &error))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mode = std::fs::metadata(env_file)
+            .map_err(|error| Error::io("inspect Docker workload environment file in test", &error))?
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
     assert!(env_file_contents.contains("DOCKER_TLS_VERIFY=1\n"));
     assert!(env_file_contents.contains("DOCKER_CERT_PATH=/workload/certs\n"));
     assert!(!rewritten.argv.join(" ").contains("/workload/certs"));

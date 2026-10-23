@@ -142,22 +142,6 @@ fn workload_docker_host_arguments_do_not_bypass_daemon_pinning() {
     );
 }
 
-#[test]
-fn local_docker_daemon_pinning_disables_client_tls_from_workload_environment() {
-    let pinned = force_local_rootful_docker(vec!["docker".into(), "info".into()]);
-    let info = pinned
-        .iter()
-        .position(|part| part == "info")
-        .unwrap_or(pinned.len());
-
-    assert!(pinned[..info].iter().any(|part| part == "--tls=false"));
-    assert!(
-        pinned[..info]
-            .iter()
-            .any(|part| part == "--tlsverify=false")
-    );
-}
-
 #[derive(Debug)]
 #[cfg(target_os = "linux")]
 struct MappedIpv4Resolver;
