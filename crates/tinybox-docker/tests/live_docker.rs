@@ -29,10 +29,12 @@ use std::{
 };
 
 use tinybox_core::{
-    BoxSpec, Error, ExecRequest, Host as _, HostRef, MemoryStore, NetworkPolicy, Placement, Result,
-    Sandbox, SandboxRef, WorkspaceSource,
+    BoxId, BoxSpec, EgressAllowlist, Error, ExecRequest, Host as _, HostRef, MemoryStore,
+    NetworkPolicy, Placement, Result, Sandbox, SandboxRef, WorkspaceSource,
 };
-use tinybox_docker::DockerSandbox;
+use tinybox_docker::{
+    DockerEgressController, DockerSandbox, EgressResolver, NativeLinuxDockerEgressController,
+};
 use tinybox_host::LocalHost;
 
 /// The image every live test uses. Small, and it ships a shell.
