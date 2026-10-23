@@ -192,7 +192,7 @@ impl Host for PreparedNativeHost {
                     Vec::new(),
                 ));
             }
-            if argv.last().is_some_and(|arg| arg == "-S") {
+            if argv.iter().any(|arg| arg == "-S") {
                 let chain = argv.last().map_or("", String::as_str);
                 let stdout = if chain == self.forward_chain || chain == self.input_chain {
                     format!("-A {chain} -j DROP\n")

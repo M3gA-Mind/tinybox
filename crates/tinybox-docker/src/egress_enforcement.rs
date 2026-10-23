@@ -515,14 +515,14 @@ async fn cleanup_native(
 
     let inspect = docker_request(
         host,
-        vec![
+        force_local_rootful_docker(vec![
             "docker".into(),
             "network".into(),
             "inspect".into(),
             "--format".into(),
             format!("{{{{index .Labels \"{OWNER_LABEL}\"}}}}"),
             names.network.clone(),
-        ],
+        ]),
     )
     .await?;
     if inspect.succeeded() {
