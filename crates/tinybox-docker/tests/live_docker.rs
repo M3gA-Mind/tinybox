@@ -491,6 +491,19 @@ fn ipv6_address_inspect_template(network: &str) -> String {
     format!("{{{{(index .NetworkSettings.Networks \"{network}\").GlobalIPv6Address}}}}")
 }
 
+fn ipv6_mac_inspect_template(network: &str) -> String {
+    format!("{{{{(index .NetworkSettings.Networks \"{network}\").MacAddress}}}}")
+}
+
+fn stale_neighbor_args(address: &str, mac: &str, bridge: &str) -> Vec<String> {
+    [
+        "-6", "neigh", "replace", address, "lladdr", mac, "nud", "stale", "dev", bridge,
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
 fn allowlist_probe_ports() -> tinybox_core::EgressAllowlist {
     tinybox_core::EgressAllowlist::new(["listener.test"], [18373, 18376])
 }
@@ -525,6 +538,29 @@ fn ipv6_address_inspect_template_quotes_the_network_name() {
     assert_eq!(
         ipv6_address_inspect_template("controlled-v6"),
         r#"{{(index .NetworkSettings.Networks "controlled-v6").GlobalIPv6Address}}"#
+    );
+}
+
+#[test]
+fn stale_neighbor_command_targets_the_sandbox_ipv6_peer() {
+    assert_eq!(
+        ipv6_mac_inspect_template("managed-v6"),
+        r#"{{(index .NetworkSettings.Networks "managed-v6").MacAddress}}"#
+    );
+    assert_eq!(
+        stale_neighbor_args("fd42::10", "02:42:ac:11:00:02", "br-tinybox"),
+        [
+            "-6",
+            "neigh",
+            "replace",
+            "fd42::10",
+            "lladdr",
+            "02:42:ac:11:00:02",
+            "nud",
+            "stale",
+            "dev",
+            "br-tinybox"
+        ]
     );
 }
 
@@ -567,9 +603,11 @@ fn exchange_before_retries_a_connection_closed_before_the_response() {
 
     let response = exchange_before(address, Instant::now() + Duration::from_secs(2)).unwrap();
     server.join().unwrap();
-    assert!(response
-        .windows(b"published-ok\\n".len())
-        .any(|window| window == b"published-ok\\n"));
+    assert!(
+        response
+            .windows(b"published-ok\\n".len())
+            .any(|window| window == b"published-ok\\n")
+    );
 }
 
 /// A disposable Linux Engine proof for the native firewall controller.
@@ -717,6 +755,50 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 ]),
             )
             .await;
+        let egress_network = docker_command(&[
+            "inspect",
+            "--format",
+            "{{range $name, $endpoint := .NetworkSettings.Networks}}{{$name}}{{end}}",
+            &container,
+        ])?;
+        let sandbox_ipv6 = docker_command(&[
+            "inspect",
+            "--format",
+            &ipv6_address_inspect_template(&egress_network),
+            &container,
+        ])?;
+        let sandbox_mac = docker_command(&[
+            "inspect",
+            "--format",
+            &ipv6_mac_inspect_template(&egress_network),
+            &container,
+        ])?;
+        let bridge = docker_command(&[
+            "network",
+            "inspect",
+            "--format",
+            "{{index .Options \"com.docker.network.bridge.name\"}}",
+            &egress_network,
+        ])?;
+        let mut stale_args = vec!["-n".to_owned(), "ip".to_owned()];
+        stale_args.extend(stale_neighbor_args(&sandbox_ipv6, &sandbox_mac, &bridge));
+        let stale_neighbor = Command::new("sudo")
+            .args(&stale_args)
+            .output()
+            .map_err(|error| Error::io("mark sandbox IPv6 neighbor stale", &error))?;
+        if !stale_neighbor.status.success() {
+            return Err(Error::Backend {
+                sandbox: "docker".to_owned(),
+                operation: "mark sandbox IPv6 neighbor stale",
+                message: String::from_utf8_lossy(&stale_neighbor.stderr).trim().to_owned(),
+            });
+        }
+        let allowed_v6_revalidated = sandbox
+            .exec(
+                &info.id,
+                &ExecRequest::new(["sh", "-c", &ipv6_listener_probe(ipv6)]),
+            )
+            .await;
         let blocked = sandbox
             .exec(
                 &info.id,
@@ -781,6 +863,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
 
         let allowed = allowed?;
         let allowed_v6 = allowed_v6?;
+        let allowed_v6_revalidated = allowed_v6_revalidated?;
         let blocked = blocked?;
         let host_gateway = host_gateway?;
         let dns_blocked = dns_blocked?;
@@ -791,6 +874,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
         let dns_hits = dns_hits?;
         if allowed.exit_code != 0
             || allowed_v6.exit_code != 0
+            || allowed_v6_revalidated.exit_code != 0
             || blocked.exit_code == 0
             || host_gateway.exit_code == 0
             || dns_blocked.exit_code == 0
@@ -805,9 +889,10 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 sandbox: "docker".to_owned(),
                 operation: "verify native egress allowlist",
                 message: format!(
-                    "allowed v4 exit={}, allowed v6 exit={}, blocked exit={}, host-gateway exit={}, unlisted DNS lookup exit={}, published response={published_response:?}, forbidden TCP hit={}, forbidden DNS hit={}, host listener touched={}",
+                    "allowed v4 exit={}, allowed v6 exit={}, revalidated allowed v6 exit={}, blocked exit={}, host-gateway exit={}, unlisted DNS lookup exit={}, published response={published_response:?}, forbidden TCP hit={}, forbidden DNS hit={}, host listener touched={}",
                     allowed.exit_code,
                     allowed_v6.exit_code,
+                    allowed_v6_revalidated.exit_code,
                     blocked.exit_code,
                     host_gateway.exit_code,
                     dns_blocked.exit_code,
