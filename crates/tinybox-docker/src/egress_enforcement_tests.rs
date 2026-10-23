@@ -232,15 +232,15 @@ impl Host for PreparedNativeHost {
                 ));
             }
             if argv.iter().any(|arg| arg == "-S") {
-                let chain = argv.last().map_or("", String::as_str);
-                let stdout = if chain == self.forward_chain || chain == self.input_chain {
-                    format!(
-                        "-A {chain} -s 0.0.0.0/32 -m comment --comment {} -j DROP\n-A {chain} -j DROP\n",
-                        self.chain_owner_token
-                    )
-                } else {
-                    String::new()
-                };
+                let stdout = [&self.forward_chain, &self.input_chain]
+                    .into_iter()
+                    .map(|chain| {
+                        format!(
+                            "-N {chain}\n-A {chain} -s 0.0.0.0/32 -m comment --comment {} -j DROP\n-A {chain} -j DROP\n",
+                            self.chain_owner_token
+                        )
+                    })
+                    .collect::<String>();
                 return Ok(ExecOutput::new(0, stdout.into_bytes(), Vec::new()));
             }
             return Ok(ExecOutput::new(0, Vec::new(), Vec::new()));
@@ -496,6 +496,48 @@ async fn cleanup_refuses_a_different_network_owner_before_firewall_mutation() ->
     let names = NetworkNames::for_box(namespace, &id);
     let mut host = PreparedNativeHost::new(&id, &names);
     host.network_owner = "another-box".to_owned();
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+
+    assert!(controller.cleanup(&host, namespace, &id).await.is_err());
+
+    assert!(!host.commands().iter().any(|argv| {
+        argv.iter()
+            .any(|part| part == "iptables" || part == "ip6tables")
+            && argv
+                .iter()
+                .any(|part| part == "-D" || part == "-F" || part == "-X")
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn cleanup_refuses_a_network_scope_hash_collision_before_firewall_mutation() -> Result<()> {
+    let id = BoxId::new("box-scope-collision")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.network_scope = "different-full-hash".to_owned();
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+
+    assert!(controller.cleanup(&host, namespace, &id).await.is_err());
+
+    assert!(!host.commands().iter().any(|argv| {
+        argv.iter()
+            .any(|part| part == "iptables" || part == "ip6tables")
+            && argv
+                .iter()
+                .any(|part| part == "-D" || part == "-F" || part == "-X")
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn cleanup_refuses_firewall_chains_with_another_owner_marker() -> Result<()> {
+    let id = BoxId::new("box-chain-collision")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.chain_owner_token = "different-full-hash".to_owned();
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
 
     assert!(controller.cleanup(&host, namespace, &id).await.is_err());

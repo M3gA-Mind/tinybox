@@ -15,6 +15,7 @@ use crate::{EgressResolver, PinnedEgressPlan, plan_egress_allowlist};
 
 const DOCKER_SOCKET: &str = "unix:///var/run/docker.sock";
 const OWNER_LABEL: &str = "ai.tinyhumans.tinybox.egress.owner";
+const SCOPE_LABEL: &str = "ai.tinyhumans.tinybox.egress.scope";
 const ALLOWLIST_PROTOCOLS: [&str; 1] = ["tcp"];
 
 /// A controller that installs and removes a per-box egress filter.
@@ -151,13 +152,15 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
                 format!("com.docker.network.bridge.name={}", names.bridge),
                 "--label".into(),
                 format!("{OWNER_LABEL}={id}"),
+                "--label".into(),
+                format!("{SCOPE_LABEL}={}", names.owner_token),
                 names.network.clone(),
             ],
         )
         .await?;
         if network.is_empty() {
             let error = unsupported("Docker did not confirm the egress network");
-            return match cleanup_native(host, namespace, id, true).await {
+            return match cleanup_native(host, namespace, id).await {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(Error::Backend {
                     sandbox: "docker".to_owned(),
@@ -174,7 +177,7 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
         }
         .await;
         if let Err(error) = setup {
-            let cleanup = cleanup_native(host, namespace, id, true).await;
+            let cleanup = cleanup_native(host, namespace, id).await;
             return match cleanup {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(Error::Backend {
@@ -210,7 +213,7 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
         ensure_supported_host(host)?;
         ensure_linux_target()?;
         verify_engine_and_firewall(host).await?;
-        cleanup_native(host, namespace, id, false).await
+        cleanup_native(host, namespace, id).await
     }
 
     fn docker_argv(&self, argv: Vec<String>) -> Vec<String> {
@@ -224,6 +227,7 @@ struct NetworkNames {
     bridge: String,
     forward_chain: String,
     input_chain: String,
+    owner_token: String,
 }
 
 impl NetworkNames {
@@ -236,6 +240,7 @@ impl NetworkNames {
             bridge: format!("tbx{}", &short[..12]),
             forward_chain: format!("TBX{}F", &short[..10]),
             input_chain: format!("TBX{}I", &short[..10]),
+            owner_token: short,
         }
     }
 }
@@ -335,12 +340,12 @@ async fn verify_created_network(host: &dyn Host, names: &NetworkNames, id: &BoxI
             "network".into(),
             "inspect".into(),
             "--format".into(),
-            "{{.Driver}}|{{.EnableIPv6}}|{{index .Options \"com.docker.network.bridge.name\"}}|{{index .Labels \"ai.tinyhumans.tinybox.egress.owner\"}}".into(),
+            format!("{{{{.Driver}}}}|{{{{.EnableIPv6}}}}|{{{{index .Options \"com.docker.network.bridge.name\"}}}}|{{{{index .Labels \"{OWNER_LABEL}\"}}}}|{{{{index .Labels \"{SCOPE_LABEL}\"}}}}"),
             names.network.clone(),
         ],
     )
     .await?;
-    let expected = format!("bridge|true|{}|{id}", names.bridge);
+    let expected = format!("bridge|true|{}|{id}|{}", names.bridge, names.owner_token);
     if output != expected {
         return Err(unsupported(
             "Docker egress network did not match its verified configuration",
@@ -424,6 +429,7 @@ async fn install_family(
 
     for chain in [&names.forward_chain, &names.input_chain] {
         firewall_success(host, firewall, ["-N", chain]).await?;
+        install_chain_owner_marker(host, firewall, chain, &names.owner_token, ipv6).await?;
     }
     for rule in deny_rules(ipv6) {
         let mut command = vec!["-A".to_owned(), names.forward_chain.clone()];
@@ -562,6 +568,50 @@ async fn install_pinned_destinations(
     Ok(())
 }
 
+async fn install_chain_owner_marker(
+    host: &dyn Host,
+    firewall: &str,
+    chain: &str,
+    owner_token: &str,
+    ipv6: bool,
+) -> Result<()> {
+    let impossible_source = if ipv6 { "::/128" } else { "0.0.0.0/32" };
+    firewall_success(
+        host,
+        firewall,
+        [
+            "-A",
+            chain,
+            "-s",
+            impossible_source,
+            "-m",
+            "comment",
+            "--comment",
+            owner_token,
+            "-j",
+            "DROP",
+        ],
+    )
+    .await
+}
+
+fn chain_has_owner_marker(rules: &str, chain: &str, owner_token: &str) -> bool {
+    let chain_prefix = format!("-A {chain} ");
+    rules.lines().any(|line| {
+        line.starts_with(&chain_prefix)
+            && line
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|pair| pair == ["--comment", owner_token])
+            && line
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|pair| pair == ["-j", "DROP"])
+    })
+}
+
 fn deny_rules(ipv6: bool) -> Vec<Vec<String>> {
     if ipv6 {
         ["::1/128", "fe80::/10", "fd00:ec2::254/128"]
@@ -590,55 +640,8 @@ async fn verify_hook(
     firewall_success(host, firewall, ["-C", parent, "-i", bridge, "-j", chain]).await
 }
 
-async fn cleanup_native(
-    host: &dyn Host,
-    namespace: &str,
-    id: &BoxId,
-    network_known_owned: bool,
-) -> Result<()> {
+async fn cleanup_native(host: &dyn Host, namespace: &str, id: &BoxId) -> Result<()> {
     let names = NetworkNames::for_box(namespace, id);
-    for firewall in ["iptables", "ip6tables"] {
-        for (parent, chain) in [
-            ("DOCKER-USER", names.forward_chain.as_str()),
-            ("INPUT", names.input_chain.as_str()),
-        ] {
-            let hook = host
-                .run(&ExecRequest::new([
-                    "sudo",
-                    "-n",
-                    firewall,
-                    "-w",
-                    "5",
-                    "-C",
-                    parent,
-                    "-i",
-                    &names.bridge,
-                    "-j",
-                    chain,
-                ]))
-                .await?;
-            if hook.succeeded() {
-                firewall_success(
-                    host,
-                    firewall,
-                    ["-D", parent, "-i", &names.bridge, "-j", chain],
-                )
-                .await?;
-            }
-            let rules = firewall_output(host, firewall, ["-S"]).await?;
-            if rules.lines().any(|line| line.contains(chain)) {
-                firewall_success(host, firewall, ["-F", chain]).await?;
-                firewall_success(host, firewall, ["-X", chain]).await?;
-            }
-            let remaining = firewall_output(host, firewall, ["-S"]).await?;
-            if remaining.lines().any(|line| line.contains(chain)) {
-                return Err(unsupported(
-                    "egress firewall chain cleanup was not verified",
-                ));
-            }
-        }
-    }
-
     let inspect = docker_request(
         host,
         force_local_rootful_docker(vec![
@@ -646,18 +649,94 @@ async fn cleanup_native(
             "network".into(),
             "inspect".into(),
             "--format".into(),
-            format!("{{{{index .Labels \"{OWNER_LABEL}\"}}}}"),
+            format!(
+                "{{{{index .Labels \"{OWNER_LABEL}\"}}}}|{{{{index .Labels \"{SCOPE_LABEL}\"}}}}"
+            ),
             names.network.clone(),
         ]),
     )
     .await?;
-    if inspect.succeeded() {
-        let owner = inspect.stdout_lossy().trim().to_owned();
-        if !network_known_owned && owner != id.as_str() {
+    let network_exists = if inspect.succeeded() {
+        let owner = inspect.stdout_lossy();
+        let expected_owner = format!("{}|{}", id, names.owner_token);
+        if owner.trim() != expected_owner {
             return Err(unsupported(
                 "egress network ownership could not be verified",
             ));
         }
+        true
+    } else if inspect.stderr_lossy().contains("No such network")
+        || inspect.stderr_lossy().contains("not found")
+    {
+        false
+    } else {
+        return Err(unsupported("egress network cleanup could not be verified"));
+    };
+
+    let chains = [
+        ("iptables", "DOCKER-USER", names.forward_chain.as_str()),
+        ("iptables", "INPUT", names.input_chain.as_str()),
+        ("ip6tables", "DOCKER-USER", names.forward_chain.as_str()),
+        ("ip6tables", "INPUT", names.input_chain.as_str()),
+    ];
+    let mut owned_chains = BTreeSet::new();
+    for (firewall, _, chain) in chains {
+        let rules = firewall_output(host, firewall, ["-S"]).await?;
+        let chain_prefix = format!("-A {chain} ");
+        let chain_exists = rules
+            .lines()
+            .any(|line| line == format!("-N {chain}") || line.starts_with(&chain_prefix));
+        if chain_exists {
+            if !chain_has_owner_marker(&rules, chain, &names.owner_token) {
+                return Err(unsupported(
+                    "egress firewall chain ownership could not be verified",
+                ));
+            }
+            owned_chains.insert((firewall, chain));
+        }
+    }
+
+    for (firewall, parent, chain) in chains {
+        if !owned_chains.contains(&(firewall, chain)) {
+            continue;
+        }
+        let hook = host
+            .run(&ExecRequest::new([
+                "sudo",
+                "-n",
+                firewall,
+                "-w",
+                "5",
+                "-C",
+                parent,
+                "-i",
+                &names.bridge,
+                "-j",
+                chain,
+            ]))
+            .await?;
+        if hook.succeeded() {
+            firewall_success(
+                host,
+                firewall,
+                ["-D", parent, "-i", &names.bridge, "-j", chain],
+            )
+            .await?;
+        }
+        firewall_success(host, firewall, ["-F", chain]).await?;
+        firewall_success(host, firewall, ["-X", chain]).await?;
+        let remaining = firewall_output(host, firewall, ["-S"]).await?;
+        if remaining
+            .lines()
+            .any(|line| line == format!("-N {chain}") || line.starts_with(&format!("-A {chain} ")))
+        {
+            return Err(unsupported(
+                "egress firewall chain cleanup was not verified",
+            ));
+        }
+    }
+
+    if network_exists {
         docker_success(
             host,
             vec![
@@ -668,10 +747,6 @@ async fn cleanup_native(
             ],
         )
         .await?;
-    } else if !inspect.stderr_lossy().contains("No such network")
-        && !inspect.stderr_lossy().contains("not found")
-    {
-        return Err(unsupported("egress network cleanup could not be verified"));
     }
     Ok(())
 }
