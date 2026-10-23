@@ -86,8 +86,10 @@ impl PinnedEgressTarget {
 /// # Errors
 ///
 /// Returns [`Error::InvalidNetworkPolicy`] for a malformed allowlist, an empty
-/// DNS answer, or any resolved metadata or loopback address. Resolver errors
-/// are returned as [`Error::Backend`].
+/// DNS answer, or any resolved metadata or loopback address. Returns
+/// [`Error::ConstraintNotEnforced`] when an IPv6 link-local target needs an
+/// interface scope that this backend cannot preserve. Resolver errors are
+/// returned as [`Error::Backend`].
 pub fn plan_egress_allowlist(
     allowlist: &EgressAllowlist,
     resolver: &dyn EgressResolver,
@@ -121,6 +123,13 @@ pub fn plan_egress_allowlist(
         if addresses.iter().any(is_forbidden_address) {
             return Err(Error::InvalidNetworkPolicy {
                 reason: "allowlist host resolves to a metadata or loopback address",
+            });
+        }
+        if addresses.iter().any(is_ipv6_link_local) {
+            return Err(Error::ConstraintNotEnforced {
+                sandbox: "docker".to_owned(),
+                constraint: tinybox_core::Constraint::Network,
+                enforcement: tinybox_core::Enforcement::Unsupported,
             });
         }
         addresses_by_host.insert(host, addresses);
@@ -169,6 +178,13 @@ fn is_forbidden_address(address: &IpAddr) -> bool {
                     mapped.is_loopback() || EgressAllowlist::is_metadata_host(&mapped.to_string())
                 })
         }
+    }
+}
+
+fn is_ipv6_link_local(address: &IpAddr) -> bool {
+    match address {
+        IpAddr::V4(_) => false,
+        IpAddr::V6(address) => address.segments()[0] & 0xffc0 == 0xfe80,
     }
 }
 

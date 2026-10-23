@@ -112,6 +112,24 @@ fn pins_ip_literals_without_resolving_and_rejects_forbidden_literals() -> tinybo
 }
 
 #[test]
+fn rejects_ipv6_link_local_targets_without_scope_ids() {
+    let resolver = StaticResolver(BTreeMap::new());
+    let allowlist = EgressAllowlist::new(["fe80::1"], [443]);
+
+    assert!(matches!(
+        plan_egress_allowlist(&allowlist, &resolver),
+        Err(Error::ConstraintNotEnforced {
+            constraint: tinybox_core::Constraint::Network,
+            enforcement: tinybox_core::Enforcement::Unsupported,
+            ..
+        })
+    ));
+
+    let ipv4_link_local = EgressAllowlist::new(["169.254.1.1"], [443]);
+    assert!(plan_egress_allowlist(&ipv4_link_local, &resolver).is_ok());
+}
+
+#[test]
 fn returns_resolver_errors_as_backend_errors() {
     let resolver = StaticResolver(BTreeMap::new());
     let allowlist = EgressAllowlist::new(["unavailable.example"], [443]);

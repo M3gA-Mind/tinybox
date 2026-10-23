@@ -125,6 +125,7 @@ struct PreparedNativeHost {
     chains: Mutex<std::collections::BTreeSet<(String, String)>>,
     marked_chains: Mutex<std::collections::BTreeSet<(String, String)>>,
     fail_network_create: bool,
+    network_create_side_effect_then_host_error: bool,
     empty_network_create: bool,
     fail_chain_marker: bool,
     network_owner: String,
@@ -142,6 +143,7 @@ impl PreparedNativeHost {
             chains: Mutex::new(std::collections::BTreeSet::new()),
             marked_chains: Mutex::new(std::collections::BTreeSet::new()),
             fail_network_create: false,
+            network_create_side_effect_then_host_error: false,
             empty_network_create: false,
             fail_chain_marker: false,
             network_owner: id.to_string(),
@@ -197,6 +199,13 @@ impl Host for PreparedNativeHost {
                             b"network name already exists".to_vec(),
                         ));
                     }
+                    if self.network_create_side_effect_then_host_error {
+                        return Err(Error::Backend {
+                            sandbox: "fake-native".to_owned(),
+                            operation: "run Docker network create",
+                            message: "simulated lost command response after create".to_owned(),
+                        });
+                    }
                     let network_id = if self.empty_network_create {
                         Vec::new()
                     } else {
@@ -208,7 +217,9 @@ impl Host for PreparedNativeHost {
                     let format = docker_args
                         .get(inspect_index + 2)
                         .map_or("", String::as_str);
-                    let stdout = if format.contains(".Driver") {
+                    let stdout = if format.contains(".Id") {
+                        format!("network-id|{}|{}", self.network_owner, self.network_scope)
+                    } else if format.contains(".Driver") {
                         format!(
                             "bridge|true|{}|{}|{}",
                             self.bridge, self.network_owner, self.network_scope
@@ -332,6 +343,41 @@ impl Host for PreparedNativeHost {
 
         Ok(ExecOutput::new(0, Vec::new(), Vec::new()))
     }
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn uncertain_network_create_removes_only_the_verified_owned_network() -> Result<()> {
+    let id = BoxId::new("box-create-response-lost")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.network_create_side_effect_then_host_error = true;
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
+    let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
+
+    let result = controller.prepare(&host, namespace, &id, &allowlist).await;
+
+    assert!(matches!(
+        result,
+        Err(Error::Backend {
+            operation: "run Docker network create",
+            ref message,
+            ..
+        }) if message.contains("simulated lost command response")
+    ));
+    let commands = host.commands();
+    assert!(commands.iter().any(|argv| {
+        argv.iter().any(|arg| arg == "inspect") && argv.iter().any(|arg| arg.contains("{{.Id}}"))
+    }));
+    assert!(commands.iter().any(|argv| {
+        argv.iter().any(|arg| arg == "rm") && argv.iter().any(|arg| arg == "network-id")
+    }));
+    assert!(!commands.iter().any(|argv| {
+        argv.iter()
+            .any(|arg| matches!(arg.as_str(), "-A" | "-D" | "-F" | "-X"))
+    }));
+    Ok(())
 }
 
 #[async_trait]
@@ -681,6 +727,7 @@ async fn network_name_conflict_does_not_clean_an_existing_owners_firewall() -> R
     let names = NetworkNames::for_box(namespace, &id);
     let mut host = PreparedNativeHost::new(&id, &names);
     host.fail_network_create = true;
+    host.network_owner = "foreign-owner".to_owned();
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
     let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
 

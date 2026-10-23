@@ -21,7 +21,7 @@
 
 use std::{
     io::{Read, Write},
-    net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream},
     process::Command,
     sync::Arc,
     thread,
@@ -483,7 +483,11 @@ fn allowlist_probe_ports() -> tinybox_core::EgressAllowlist {
 }
 
 const TARGET_LISTENER_SCRIPT: &str = "(while true; do nc -l -p 18373 >/dev/null; echo hit >> /tmp/allowed; done) & (while true; do nc -l -p 18374 >/dev/null; echo hit >> /tmp/blocked; done) & (while true; do nc -l -p 18376 >/dev/null; echo hit >> /tmp/allowed-v6; done) & (while true; do nc -u -l -p 53 >/dev/null; echo hit >> /tmp/dns; done) & wait";
-const IPV6_LISTENER_PROBE: &str = "unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -z -w 3 listener.test 18376";
+fn ipv6_listener_probe(address: Ipv6Addr) -> String {
+    format!(
+        "unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; nc -z -w 3 {address} 18376"
+    )
+}
 
 #[test]
 fn live_allowlist_covers_both_listener_probe_ports() {
@@ -494,10 +498,13 @@ fn live_allowlist_covers_both_listener_probe_ports() {
 
 #[test]
 fn alpine_busybox_nc_uses_literal_ipv6_without_unsupported_flag() {
+    let address = "fd42::1234".parse().expect("valid IPv6 fixture");
+    let probe = ipv6_listener_probe(address);
     assert!(TARGET_LISTENER_SCRIPT.contains("nc -l -p 18376"));
     assert!(!TARGET_LISTENER_SCRIPT.contains("nc -6"));
-    assert!(IPV6_LISTENER_PROBE.contains("nc -z -w 3 listener.test 18376"));
-    assert!(!IPV6_LISTENER_PROBE.contains("nc -6"));
+    assert!(probe.contains("nc -z -w 3 fd42::1234 18376"));
+    assert!(!probe.contains("listener.test"));
+    assert!(!probe.contains("nc -6"));
 }
 
 #[test]
@@ -586,14 +593,15 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
             &ipv6_address_inspect_template(&target_network),
             &target_name,
         ])?
-        .parse::<std::net::IpAddr>()
+        .parse::<Ipv6Addr>()
         .map_err(|error| Error::Backend {
             sandbox: "docker".to_owned(),
             operation: "read the controlled IPv6 listener address",
             message: error.to_string(),
         })?;
 
-        let resolver: Arc<dyn EgressResolver> = Arc::new(FixedResolver(vec![ipv4, ipv6]));
+        let resolver: Arc<dyn EgressResolver> =
+            Arc::new(FixedResolver(vec![ipv4, std::net::IpAddr::V6(ipv6)]));
         let namespace = format!("ns-egress-{}", &suffix[..8]);
         let sandbox = sandbox(&namespace)?
             .with_egress_controller(Arc::new(NativeLinuxDockerEgressController::new(resolver)));
@@ -648,7 +656,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 &ExecRequest::new([
                     "sh",
                     "-c",
-                    IPV6_LISTENER_PROBE,
+                    &ipv6_listener_probe(ipv6),
                 ]),
             )
             .await;
