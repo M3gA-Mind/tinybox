@@ -601,22 +601,17 @@ async fn cleanup_refuses_firewall_chains_with_another_owner_marker() -> Result<(
 fn deny_rules_block_metadata_without_disabling_other_link_local_destinations() {
     let ipv4 = deny_rules(false);
     let ipv6 = deny_rules(true);
-    let destinations = |rules: &[Vec<String>]| {
+    let has_destination = |rules: &[Vec<String>], destination: &str| {
         rules
             .iter()
-            .filter_map(|rule| rule.windows(2).find(|pair| pair[0] == "-d"))
-            .map(|pair| pair[1].as_str())
-            .collect::<Vec<_>>()
+            .any(|rule| rule.windows(2).any(|pair| pair == ["-d", destination]))
     };
 
-    let ipv4_destinations = destinations(&ipv4);
-    assert!(ipv4_destinations.contains(&"169.254.169.254/32"));
-    assert!(ipv4_destinations.contains(&"169.254.170.2/32"));
-    assert!(!ipv4_destinations.contains(&"169.254.0.0/16"));
-
-    let ipv6_destinations = destinations(&ipv6);
-    assert!(ipv6_destinations.contains(&"fd00:ec2::254/128"));
-    assert!(!ipv6_destinations.contains(&"fe80::/10"));
+    assert!(has_destination(&ipv4, "169.254.169.254/32"));
+    assert!(has_destination(&ipv4, "169.254.170.2/32"));
+    assert!(!has_destination(&ipv4, "169.254.0.0/16"));
+    assert!(has_destination(&ipv6, "fd00:ec2::254/128"));
+    assert!(!has_destination(&ipv6, "fe80::/10"));
 }
 
 #[tokio::test]
