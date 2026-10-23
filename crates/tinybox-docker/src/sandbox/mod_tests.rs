@@ -396,7 +396,7 @@ async fn failed_egress_rollback_retains_box_record_for_cleanup_retry() -> Result
             // second, potentially unsafe cleanup.
             Err(Error::Backend {
                 sandbox: NAME.to_owned(),
-                operation: "roll back egress network setup",
+                operation: "controller-specific rollback operation",
                 message: "cleanup failed: filter unavailable".to_owned(),
             })
         }
@@ -424,7 +424,7 @@ async fn failed_egress_rollback_retains_box_record_for_cleanup_retry() -> Result
         sandbox
             .create(&spec()?.with_network(NetworkPolicy::Allowlist(allowlist)))
             .await,
-        Err(Error::Backend { operation: "roll back egress network setup", message, .. }) if message.contains("cleanup failed")
+        Err(Error::Backend { operation: "controller-specific rollback operation", message, .. }) if message.contains("cleanup failed")
     ));
     assert_eq!(store.list()?.len(), 1);
     Ok(())
