@@ -436,7 +436,7 @@ async fn failed_create_cleanup_retains_the_record_for_retry() -> Result<()> {
         sandbox
             .failed_create_attempts
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&info.id)
             .map(String::as_str),
         Some("attempt")
