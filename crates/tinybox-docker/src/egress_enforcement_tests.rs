@@ -450,7 +450,7 @@ async fn owner_marker_drop_does_not_satisfy_default_drop_verification() -> Resul
     let id = BoxId::new("box-marker-is-not-default-drop")?;
     let namespace = "test";
     let names = NetworkNames::for_box(namespace, &id);
-    let host = PreparedNativeHost::new(&id, &names);
+    let mut host = PreparedNativeHost::new(&id, &names);
     host.missing_final_drop = Some(names.forward_chain.clone());
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
     let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
@@ -964,7 +964,7 @@ async fn cleanup_restores_owner_marker_when_chain_delete_fails_after_flush() -> 
     let id = BoxId::new("box-delete-retry")?;
     let namespace = "test";
     let names = NetworkNames::for_box(namespace, &id);
-    let mut host = PreparedNativeHost::new(&id, &names);
+    let host = PreparedNativeHost::new(&id, &names);
     *host
         .fail_chain_delete_once
         .lock()
