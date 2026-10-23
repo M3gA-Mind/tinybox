@@ -519,10 +519,31 @@ fn ipv6_address_inspect_template_quotes_the_network_name() {
 fn exchange_before_retries_a_connection_closed_before_the_response() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
     let server = thread::spawn(move || {
-        let (first, _) = listener.accept().unwrap();
+        let (first, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("accept first probe: {error}"),
+            }
+        };
         drop(first);
-        let (mut second, _) = listener.accept().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let (mut second, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("accept retry probe: {error}"),
+            }
+        };
         let mut request = [0; 64];
         let _ = second.read(&mut request).unwrap();
         second.write_all(b"published-ok\\n").unwrap();
