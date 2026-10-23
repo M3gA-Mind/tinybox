@@ -137,7 +137,7 @@ async fn native_controller_refuses_hosts_without_explicit_local_identity() -> Re
     #[derive(Debug)]
     struct Resolver;
     impl crate::EgressResolver for Resolver {
-        fn resolve(&self, _hostname: &str) -> Result<Vec<std::net::IpAddr>> {
+        fn resolve(&self, _hostname: &str) -> std::io::Result<Vec<std::net::IpAddr>> {
             Ok(vec!["203.0.113.7".parse().expect("valid test address")])
         }
     }
