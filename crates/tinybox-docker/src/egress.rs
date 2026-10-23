@@ -152,7 +152,7 @@ fn normalize_ip_address(address: IpAddr) -> IpAddr {
         IpAddr::V6(address) => address
             .to_ipv4_mapped()
             .map_or(IpAddr::V6(address), IpAddr::V4),
-        address => address,
+        IpAddr::V4(address) => IpAddr::V4(address),
     }
 }
 
