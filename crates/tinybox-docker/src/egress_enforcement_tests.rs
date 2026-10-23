@@ -493,7 +493,7 @@ async fn ambiguous_network_create_reports_rollback_uncertainty_when_inspection_f
             ref message,
             ..
         }) if message.contains("simulated lost command response")
-            && message.contains("could not be inspected")
+            && message.contains("daemon temporarily unavailable")
     ));
     assert!(
         !host
@@ -897,20 +897,24 @@ async fn network_name_conflict_does_not_clean_an_existing_owners_firewall() -> R
             .iter()
             .any(|arg| matches!(arg.as_str(), "-D" | "-F" | "-X"))
     }));
-    assert!(host
-        .commands()
-        .iter()
-        .any(|argv| argv.iter().any(|arg| arg == "inspect")));
-    assert!(!host.commands().iter().any(|argv| {
-        argv.iter().any(|arg| arg == "rm")
-    }));
+    assert!(
+        host.commands()
+            .iter()
+            .any(|argv| argv.iter().any(|arg| arg == "inspect"))
+    );
+    assert!(
+        !host
+            .commands()
+            .iter()
+            .any(|argv| { argv.iter().any(|arg| arg == "rm") })
+    );
     Ok(())
 }
 
 #[tokio::test]
 #[cfg(target_os = "linux")]
-async fn network_create_conflict_reconciles_a_stale_network_with_matching_owner_labels() -> Result<()>
-{
+async fn network_create_conflict_reconciles_a_stale_network_with_matching_owner_labels()
+-> Result<()> {
     let id = BoxId::new("box-stale-owned-network")?;
     let namespace = "test";
     let names = NetworkNames::for_box(namespace, &id);
@@ -931,7 +935,8 @@ async fn network_create_conflict_reconciles_a_stale_network_with_matching_owner_
         argv.iter().any(|arg| arg == "rm") && argv.iter().any(|arg| arg == "network-id")
     }));
     assert!(!host.commands().iter().any(|argv| {
-        argv.iter().any(|arg| matches!(arg.as_str(), "-A" | "-D" | "-F" | "-X"))
+        argv.iter()
+            .any(|arg| matches!(arg.as_str(), "-A" | "-D" | "-F" | "-X"))
     }));
     Ok(())
 }

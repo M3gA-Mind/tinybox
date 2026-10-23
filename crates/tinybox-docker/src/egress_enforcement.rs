@@ -168,9 +168,7 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
                     operation: "configure egress filtering",
                     message: output.stderr_lossy().trim().to_owned(),
                 };
-                return Err(
-                    reconcile_failed_network_create(host, &names, id, error).await,
-                );
+                return Err(reconcile_failed_network_create(host, &names, id, error).await);
             }
             Err(error) => {
                 return Err(reconcile_failed_network_create(host, &names, id, error).await);
@@ -719,9 +717,11 @@ async fn reconcile_ambiguous_network_create(
         if stderr.contains("No such network") || stderr.contains("not found") {
             return Ok(());
         }
-        return Err(unsupported(
-            "egress network create rollback could not be inspected",
-        ));
+        return Err(Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "inspect egress network ownership",
+            message: stderr.trim().to_owned(),
+        });
     }
 
     let inspect_stdout = inspect.stdout_lossy();
@@ -736,7 +736,7 @@ async fn reconcile_ambiguous_network_create(
             "docker".into(),
             "network".into(),
             "rm".into(),
-            network_id.to_owned(),
+            network_id.clone(),
         ]),
     )
     .await?;
@@ -765,7 +765,11 @@ async fn reconcile_ambiguous_network_create(
         if stderr.contains("No such network") || stderr.contains("not found") {
             return Ok(());
         }
-        return Err(unsupported("egress network cleanup could not be verified"));
+        return Err(Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "inspect egress network ownership",
+            message: stderr.trim().to_owned(),
+        });
     }
     let verify_stdout = verify.stdout_lossy();
     let (_network_id, owner, scope) = parse_network_ownership(&verify_stdout)?;
