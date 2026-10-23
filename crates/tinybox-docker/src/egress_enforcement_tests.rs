@@ -353,6 +353,26 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
             message: "rule was not installed".to_owned(),
         })?;
     assert!(established_position < forward_drop_position);
+    assert_input_return_rules(&commands, &names)?;
+    assert!(commands.iter().any(|argv| {
+        argv.iter().any(|arg| arg == "-D") && argv.iter().any(|arg| arg == "DOCKER-USER")
+    }));
+    assert!(commands.iter().any(|argv| {
+        argv.iter().any(|arg| arg == "rm") && argv.iter().any(|arg| arg == &names.network)
+    }));
+    assert!(
+        commands
+            .iter()
+            .filter(|argv| argv.iter().any(|arg| arg == "docker"))
+            .all(|argv| {
+                argv.first().is_some_and(|arg| arg == "env")
+                    && argv.iter().any(|arg| arg == "unix:///var/run/docker.sock")
+            })
+    );
+    Ok(())
+}
+
+fn assert_input_return_rules(commands: &[Vec<String>], names: &NetworkNames) -> Result<()> {
     let input_established_position = commands
         .iter()
         .position(|argv| {
@@ -425,21 +445,6 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
         })?;
     assert!(neighbor_solicitation_position < ipv6_input_established_position);
     assert!(ipv6_input_established_position < input_drop_position);
-    assert!(commands.iter().any(|argv| {
-        argv.iter().any(|arg| arg == "-D") && argv.iter().any(|arg| arg == "DOCKER-USER")
-    }));
-    assert!(commands.iter().any(|argv| {
-        argv.iter().any(|arg| arg == "rm") && argv.iter().any(|arg| arg == &names.network)
-    }));
-    assert!(
-        commands
-            .iter()
-            .filter(|argv| argv.iter().any(|arg| arg == "docker"))
-            .all(|argv| {
-                argv.first().is_some_and(|arg| arg == "env")
-                    && argv.iter().any(|arg| arg == "unix:///var/run/docker.sock")
-            })
-    );
     Ok(())
 }
 
