@@ -77,7 +77,10 @@ impl ControllerHost {
             request.argv = self.controller.docker_argv(request.argv);
         }
         let env_file = write_workload_docker_env_file(&mut request)?;
-        Ok(PreparedDockerRequest { request, env_file })
+        Ok(PreparedDockerRequest {
+            request,
+            _env_file: env_file,
+        })
     }
 }
 
