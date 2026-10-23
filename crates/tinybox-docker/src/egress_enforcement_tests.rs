@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use tinybox_core::{BoxId, Error, ExecOutput, ExecRequest, Host, HostExecutionLocation, Result};
 
 use super::{
-    deny_rules, DockerEgressController, NativeLinuxDockerEgressController, NetworkNames,
+    deny_rules, scope_token, DockerEgressController, NativeLinuxDockerEgressController, NetworkNames,
     verify_created_bridge_link,
 };
 use crate::EgressResolver;
@@ -612,6 +612,16 @@ fn deny_rules_block_metadata_without_disabling_other_link_local_destinations() {
     assert!(!has_destination(&ipv4, "169.254.0.0/16"));
     assert!(has_destination(&ipv6, "fd00:ec2::254/128"));
     assert!(!has_destination(&ipv6, "fe80::/10"));
+}
+
+#[test]
+fn firewall_owner_token_uses_unambiguous_sha256_identity() {
+    let left = scope_token("ab", "c");
+    let right = scope_token("a", "bc");
+
+    assert_eq!(left.len(), 64);
+    assert_ne!(left, right);
+    assert_eq!(left, scope_token("ab", "c"));
 }
 
 #[tokio::test]
