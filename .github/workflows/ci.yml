@@ -15,3 +15,27 @@ jobs:
       coverage-script: scripts/check-coverage.sh
       module-e2e-script: scripts/test-e2e.sh
       feature-test-script: scripts/test-features.sh
+  docker-network-live:
+    name: Docker Egress and denied network connectivity
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
+      - name: Require Docker daemon and default bridge gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker info --format 'Docker daemon ready: {{.ServerVersion}}'
+          gateway="$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')"
+          test -n "$gateway"
+          echo "Docker bridge gateway: $gateway"
+      - name: Prove Egress connectivity and default-Denied refusal
+        env:
+          TINYBOX_LIVE_DOCKER: "1"
+          TINYBOX_REQUIRE_LIVE_DOCKER: "1"
+        run: >-
+          cargo test --locked -p tinybox-docker --test live_docker
+          live_network_policy_controls_host_listener_connectivity --
+          --nocapture --test-threads=1
