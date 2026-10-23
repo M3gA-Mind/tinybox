@@ -656,7 +656,7 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
         let dns_blocked = dns_blocked?;
         direct_dns?;
         allowed_hits?;
-        let allowed_v6_hits = allowed_v6_hits?;
+        allowed_v6_hits?;
         let blocked_hits = blocked_hits?;
         let dns_hits = dns_hits?;
         if allowed.exit_code != 0
