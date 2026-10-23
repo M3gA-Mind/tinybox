@@ -7,9 +7,9 @@ allowlist remains Unsupported unless a host installs this implementation.
 ## Setup and enforcement
 
 Before creating a network, the controller requires an explicitly local host,
-the rootful Docker Engine socket, Linux Docker, `iptables` and `ip6tables`,
-their restore tools, Docker's `DOCKER-USER` forwarding hooks, and a usable
-bridge firewall interface. It resolves hostnames once through the injected
+the rootful Docker Engine socket, Linux Docker, non-interactive `sudo` access
+without a password or `requiretty` for `iptables` and `ip6tables`, Docker's
+`DOCKER-USER` forwarding hooks, and a usable bridge firewall interface. It resolves hostnames once through the injected
 resolver, rejects loopback and metadata answers, and retains every pinned
 address. Docker-assigned IPAM subnets are checked before the firewall is
 installed; any pinned address inside one causes the whole setup to roll back.
@@ -18,8 +18,8 @@ The controller installs a per-attempt bridge and default-drop input and forwardi
 chains before Docker starts the workload. A fresh random attempt token is stored
 on the Docker network and incorporated into the chain names. Pinned TCP destination addresses and
 ports are accepted in `DOCKER-USER`; new host-bound traffic is dropped. The
-input chain permits required IPv6 Neighbor Solicitation and established
-replies. Docker receives static `/etc/hosts` mappings for approved names and a
+input chain permits IPv6 Neighbor Solicitation and Advertisement for neighbor
+discovery, plus established replies. Docker receives static `/etc/hosts` mappings for approved names and a
 loopback-only resolver, so its embedded resolver cannot forward arbitrary
 queries. Firewall rules also block loopback and the known metadata endpoints.
 
@@ -43,7 +43,7 @@ cleanup can be retried.
   the pinned plan.
 
 Docker Desktop, remote or unknown daemons, rootless Docker, Windows, macOS, and
-hosts without the required firewall or restore capability are refused. The
+hosts without the required firewall capability are refused. The
 controller filters TCP egress only; this is not a general-purpose firewall or
 a claim that DNS answers are monitored after the one-time plan is created.
 The real firewall proof runs only in the disposable hosted Ubuntu Docker job.

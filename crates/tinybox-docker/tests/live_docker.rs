@@ -115,6 +115,13 @@ fn accept_before(listener: &TcpListener, deadline: Instant) -> std::io::Result<T
 /// Connect to a published guest port and collect its response before timeout.
 fn exchange_before(address: SocketAddr, deadline: Instant) -> Result<Vec<u8>> {
     loop {
+        if Instant::now() >= deadline {
+            return Err(Error::Backend {
+                sandbox: "docker".to_owned(),
+                operation: "read published-port response",
+                message: "timed out waiting for published-ok response".to_owned(),
+            });
+        }
         match TcpStream::connect_timeout(&address, Duration::from_millis(100)) {
             Ok(mut stream) => {
                 stream
@@ -147,7 +154,13 @@ fn exchange_before(address: SocketAddr, deadline: Instant) -> Result<Vec<u8>> {
                         }
                     };
                     if read == 0 {
-                        return Ok(response);
+                        if response
+                            .windows(b"published-ok\n".len())
+                            .any(|window| window == b"published-ok\n")
+                        {
+                            return Ok(response);
+                        }
+                        break;
                     }
                     response.extend_from_slice(&chunk[..read]);
                     if response
