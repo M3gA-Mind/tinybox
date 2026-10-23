@@ -831,8 +831,8 @@ async fn cleanup_native(host: &dyn Host, namespace: &str, id: &BoxId) -> Result<
 
 /// Reconcile a network create whose command result is ambiguous.
 ///
-/// The network is removed by its inspected Docker ID only when both owner
-/// labels match this box. A missing or foreign network is safe to leave alone;
+/// The network is removed by its inspected Docker ID only when owner, scope,
+/// and attempt labels match this create attempt. A missing or foreign network is safe to leave alone;
 /// an inconclusive inspection or removal error is returned so the sandbox
 /// retains a cleanup record for a later retry.
 async fn reconcile_ambiguous_network_create(
@@ -848,7 +848,7 @@ async fn reconcile_ambiguous_network_create(
             "inspect".into(),
             "--format".into(),
             format!(
-                "{{{{.Id}}}}|{{{{index .Labels \"{OWNER_LABEL}\"}}}}|{{{{index .Labels \"{SCOPE_LABEL}\"}}}}"
+                "{{{{.Id}}}}|{{{{index .Labels \"{OWNER_LABEL}\"}}}}|{{{{index .Labels \"{SCOPE_LABEL}\"}}}}|{{{{index .Labels \"{ATTEMPT_LABEL}\"}}}}"
             ),
             names.network.clone(),
         ]),
@@ -867,8 +867,11 @@ async fn reconcile_ambiguous_network_create(
     }
 
     let inspect_stdout = inspect.stdout_lossy();
-    let (network_id, owner, scope) = parse_network_ownership(&inspect_stdout)?;
-    if owner != id.to_string() || scope != names.owner_token {
+    let (network_id, owner, scope, attempt) = parse_network_ownership(&inspect_stdout)?;
+    if owner != id.to_string()
+        || scope != names.owner_token
+        || attempt != names.attempt_token
+    {
         return Ok(());
     }
 
@@ -896,7 +899,7 @@ async fn reconcile_ambiguous_network_create(
             "inspect".into(),
             "--format".into(),
             format!(
-                "{{{{.Id}}}}|{{{{index .Labels \"{OWNER_LABEL}\"}}}}|{{{{index .Labels \"{SCOPE_LABEL}\"}}}}"
+                "{{{{.Id}}}}|{{{{index .Labels \"{OWNER_LABEL}\"}}}}|{{{{index .Labels \"{SCOPE_LABEL}\"}}}}|{{{{index .Labels \"{ATTEMPT_LABEL}\"}}}}"
             ),
             names.network.clone(),
         ]),
@@ -914,8 +917,11 @@ async fn reconcile_ambiguous_network_create(
         });
     }
     let verify_stdout = verify.stdout_lossy();
-    let (_network_id, owner, scope) = parse_network_ownership(&verify_stdout)?;
-    if owner != id.to_string() || scope != names.owner_token {
+    let (_network_id, owner, scope, attempt) = parse_network_ownership(&verify_stdout)?;
+    if owner != id.to_string()
+        || scope != names.owner_token
+        || attempt != names.attempt_token
+    {
         return Ok(());
     }
     Err(unsupported("owned egress network rollback failed"))
@@ -937,9 +943,9 @@ async fn reconcile_failed_network_create(
     }
 }
 
-fn parse_network_ownership(output: &str) -> Result<(String, String, String)> {
+fn parse_network_ownership(output: &str) -> Result<(String, String, String, String)> {
     let fields = output.trim().split('|').collect::<Vec<_>>();
-    if fields.len() != 3 || fields.iter().any(|field| field.is_empty()) {
+    if fields.len() != 4 || fields.iter().any(|field| field.is_empty()) {
         return Err(Error::Backend {
             sandbox: "docker".to_owned(),
             operation: "inspect egress network ownership",
@@ -951,6 +957,7 @@ fn parse_network_ownership(output: &str) -> Result<(String, String, String)> {
         fields[0].to_owned(),
         fields[1].to_owned(),
         fields[2].to_owned(),
+        fields[3].to_owned(),
     ))
 }
 
