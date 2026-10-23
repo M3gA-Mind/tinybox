@@ -1,6 +1,6 @@
 //! The parts a [`BoxSpec`](crate::spec::BoxSpec) is assembled from.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -255,6 +255,13 @@ pub enum NetworkPolicy {
 /// The cloud metadata endpoints in [`EgressAllowlist::is_metadata_host`] are
 /// refused at validation time and must also be blocked by the backend even
 /// when a hostname resolves to one of them.
+///
+/// Explicit loopback addresses and aliases are also invalid. This includes
+/// IPv4/IPv6 loopback literals, IPv4-mapped loopback literals, `localhost`
+/// names, and legacy numeric IPv4 spellings accepted by common resolvers (for
+/// example `127.1`, `2130706433`, `0x7f000001`, and `0177.0.0.1`). These are
+/// checked as explicit allowlist entries; enforcing backends must also reject
+/// resolved loopback addresses.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct EgressAllowlist {
     /// Host names or IP literals the box may connect to.
@@ -311,11 +318,71 @@ impl EgressAllowlist {
                         .to_ipv4_mapped()
                         .is_some_and(|mapped| mapped.is_loopback())
             }
-            Err(_) => false,
+            Err(_) => Self::parse_legacy_ipv4(host).is_some_and(|address| address.is_loopback()),
         }
     }
 
-    /// Check the list is non-empty, well formed and names no metadata endpoint.
+    /// Parse the legacy numeric IPv4 formats accepted by common resolvers.
+    ///
+    /// These formats are still relevant to validation because a backend may
+    /// resolve the input through a system resolver that treats them as IP
+    /// addresses rather than DNS names.
+    fn parse_legacy_ipv4(host: &str) -> Option<Ipv4Addr> {
+        let components: Vec<_> = host.split('.').collect();
+        if !(1..=4).contains(&components.len()) || components.iter().any(|part| part.is_empty()) {
+            return None;
+        }
+
+        let numbers: Vec<u64> = components
+            .iter()
+            .map(|part| {
+                if let Some(hex) = part.strip_prefix("0x").or_else(|| part.strip_prefix("0X")) {
+                    u64::from_str_radix(hex, 16).ok()
+                } else if part.len() > 1 && part.starts_with('0') {
+                    u64::from_str_radix(&part[1..], 8).ok()
+                } else {
+                    part.parse().ok()
+                }
+            })
+            .collect::<Option<_>>()?;
+
+        if numbers[..numbers.len() - 1]
+            .iter()
+            .any(|number| *number > u8::MAX.into())
+        {
+            return None;
+        }
+        let last = *numbers.last()?;
+        let last_max = match numbers.len() {
+            1 => u32::MAX.into(),
+            2 => 0x00ff_ffff,
+            3 => 0x0000_ffff,
+            4 => u8::MAX.into(),
+            _ => return None,
+        };
+        if last > last_max {
+            return None;
+        }
+
+        let address = match numbers.as_slice() {
+            [whole] => *whole as u32,
+            [first, last] => ((*first as u32) << 24) | *last as u32,
+            [first, second, last] => {
+                ((*first as u32) << 24) | ((*second as u32) << 16) | *last as u32
+            }
+            [first, second, third, last] => {
+                ((*first as u32) << 24)
+                    | ((*second as u32) << 16)
+                    | ((*third as u32) << 8)
+                    | *last as u32
+            }
+            _ => return None,
+        };
+        Some(Ipv4Addr::from(address))
+    }
+
+    /// Check the list is non-empty, well formed, and names no metadata or
+    /// explicit loopback endpoint.
     ///
     /// # Errors
     ///
