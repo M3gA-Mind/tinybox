@@ -754,57 +754,61 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
 
 #[tokio::test]
 #[cfg(target_os = "linux")]
-async fn chain_creation_and_owner_marker_are_atomic_and_cleanup_survives_restart() -> Result<()> {
-    let id = BoxId::new("box-atomic-chain-owner")?;
+async fn cleanup_reclaims_an_empty_attempt_chain_after_restart() -> Result<()> {
+    let id = BoxId::new("box-empty-orphan")?;
     let namespace = "test";
     let names = NetworkNames::for_box(namespace, &id);
     let host = PreparedNativeHost::new(&id, &names);
-    let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
-    let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
-
-    controller
-        .prepare(&host, namespace, &id, &allowlist)
-        .await?;
-
-    let scripts = host
-        .restore_scripts
+    host.no_matching_hooks = true;
+    host.chains
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
-    assert_eq!(
-        scripts.len(),
-        4,
-        "each family/chain uses one restore transaction"
-    );
-    for (firewall, chain) in [
-        ("iptables", names.forward_chain.as_str()),
-        ("iptables", names.input_chain.as_str()),
-        ("ip6tables", names.forward_chain.as_str()),
-        ("ip6tables", names.input_chain.as_str()),
-    ] {
-        let restore_program = if firewall == "ip6tables" {
-            "ip6tables-restore"
-        } else {
-            "iptables-restore"
-        };
-        assert!(
-            host.commands()
-                .iter()
-                .any(|argv| { argv.iter().any(|arg| arg == restore_program) })
-        );
-        assert!(scripts.iter().any(|script| {
-            script.starts_with(&format!("*filter\n:{chain} - [0:0]\n"))
-                && script.contains(&format!("-A {chain} -s "))
-                && script.contains(&format!("--comment {} -j DROP\n", names.owner_token))
-                && script.ends_with("COMMIT\n")
-        }));
-    }
+        .insert(("iptables".to_owned(), names.forward_chain.clone()));
 
-    // A fresh controller has no in-memory ownership set; cleanup must recover
-    // solely from the transactionally installed marker.
+    // This host models a fresh process: no attempt-owned in-memory set exists.
     NativeLinuxDockerEgressController::new(Arc::new(Resolver))
         .cleanup(&host, namespace, &id)
         .await?;
+    assert!(!host
+        .chains
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(&("iptables".to_owned(), names.forward_chain.clone())));
+    assert!(host.commands().iter().any(|argv| {
+        argv.iter().any(|arg| arg == "-X") && argv.iter().any(|arg| arg == &names.forward_chain)
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn cleanup_refuses_a_nonempty_unmarked_attempt_chain_after_restart() -> Result<()> {
+    let id = BoxId::new("box-nonempty-orphan")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let host = PreparedNativeHost::new(&id, &names);
+    host.no_matching_hooks = true;
+    host.chains
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(("iptables".to_owned(), names.forward_chain.clone()));
+    host.chains_with_rules
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(("iptables".to_owned(), names.forward_chain.clone()));
+
+    assert!(NativeLinuxDockerEgressController::new(Arc::new(Resolver))
+        .cleanup(&host, namespace, &id)
+        .await
+        .is_err());
+    assert!(!host.commands().iter().any(|argv| {
+        argv.iter().any(|arg| matches!(arg.as_str(), "-D" | "-F" | "-X"))
+    }));
+    assert!(host
+        .chains
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(&("iptables".to_owned(), names.forward_chain.clone())));
     Ok(())
 }
 
