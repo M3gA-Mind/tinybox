@@ -148,6 +148,7 @@ struct PreparedNativeHost {
     missing_final_drop: Option<String>,
     empty_network_create: bool,
     fail_chain_marker: bool,
+    #[cfg(target_os = "linux")]
     no_matching_hooks: bool,
     #[cfg(target_os = "linux")]
     fail_chain_delete_once: Mutex<bool>,
@@ -175,6 +176,7 @@ impl PreparedNativeHost {
             missing_final_drop: None,
             empty_network_create: false,
             fail_chain_marker: false,
+            #[cfg(target_os = "linux")]
             no_matching_hooks: false,
             #[cfg(target_os = "linux")]
             fail_chain_delete_once: Mutex::new(false),
