@@ -592,8 +592,7 @@ async fn ambiguous_create_retains_cleanup_error_when_owned_network_removal_fails
     assert!(
         matches!(
             result,
-            Err(Error::Backend {
-                operation: "roll back egress network setup",
+            Err(Error::EgressRollbackFailed {
                 ref message,
                 ..
         }) if message.contains("simulated lost command response")
@@ -699,8 +698,7 @@ async fn ambiguous_network_create_reports_rollback_uncertainty_when_inspection_f
 
     assert!(matches!(
         controller.prepare(&host, namespace, &id, &allowlist).await,
-        Err(Error::Backend {
-            operation: "roll back egress network setup",
+        Err(Error::EgressRollbackFailed {
             ref message,
             ..
         }) if message.contains("simulated lost command response")
@@ -730,8 +728,7 @@ async fn ambiguous_network_create_retains_ownership_uncertainty_for_malformed_in
 
     assert!(matches!(
         controller.prepare(&host, namespace, &id, &allowlist).await,
-        Err(Error::Backend {
-            operation: "roll back egress network setup",
+        Err(Error::EgressRollbackFailed {
             ref message,
             ..
         }) if message.contains("missing or malformed network identity")
