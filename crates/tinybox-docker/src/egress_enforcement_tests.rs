@@ -167,8 +167,8 @@ impl PreparedNativeHost {
             fail_chain_marker: false,
             network_owner: id.to_string(),
             network_scope: names.owner_token.clone(),
-            network_subnets:
-                r#"[{"Subnet":"172.18.0.0/16"},{"Subnet":"fd00:dead:beef::/64"}]"#.to_owned(),
+            network_subnets: r#"[{"Subnet":"172.18.0.0/16"},{"Subnet":"fd00:dead:beef::/64"}]"#
+                .to_owned(),
             chain_owner_token: names.owner_token.clone(),
             bridge: names.bridge.clone(),
             forward_chain: names.forward_chain.clone(),
@@ -703,8 +703,8 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
 
 #[tokio::test]
 #[cfg(target_os = "linux")]
-async fn pinned_targets_inside_auto_selected_network_subnets_are_rejected_and_rolled_back() -> Result<()>
-{
+async fn pinned_targets_inside_auto_selected_network_subnets_are_rejected_and_rolled_back()
+-> Result<()> {
     for (id_text, address, subnet) in [
         ("box-v4-overlap", "172.28.1.5", "172.28.0.0/16"),
         ("box-v6-overlap", "fd00:1234::42", "fd00:1234::/64"),

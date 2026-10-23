@@ -104,7 +104,10 @@ async fn docker_argv_controller_rewrites_each_command_once() -> Result<()> {
         .collect::<Vec<_>>();
     assert!(!docker_commands.is_empty());
     assert!(docker_commands.iter().all(|argv| {
-        argv.iter().filter(|arg| arg.as_str() == "rewrite-once").count() == 1
+        argv.iter()
+            .filter(|arg| arg.as_str() == "rewrite-once")
+            .count()
+            == 1
     }));
     Ok(())
 }

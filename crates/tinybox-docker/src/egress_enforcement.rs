@@ -7,6 +7,7 @@
 use std::{collections::BTreeSet, fmt::Debug, net::IpAddr, sync::Arc};
 
 use async_trait::async_trait;
+use ipnet::IpNet;
 use sha2::{Digest, Sha256};
 use tinybox_core::{
     BoxId, EgressAllowlist, Error, ExecOutput, ExecRequest, Host, HostExecutionLocation, Result,
@@ -189,6 +190,7 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
         let mut attempt_owned_chains = BTreeSet::new();
         let setup = async {
             verify_created_network(host, &names, id).await?;
+            verify_targets_outside_network_subnets(host, &names, &plan).await?;
             verify_created_bridge_link(host, &names).await?;
             install_firewall(host, &names, &plan, &mut attempt_owned_chains).await
         }
@@ -382,6 +384,54 @@ async fn verify_created_network(host: &dyn Host, names: &NetworkNames, id: &BoxI
     if output != expected {
         return Err(unsupported(
             "Docker egress network did not match its verified configuration",
+        ));
+    }
+    Ok(())
+}
+
+async fn verify_targets_outside_network_subnets(
+    host: &dyn Host,
+    names: &NetworkNames,
+    plan: &PinnedEgressPlan,
+) -> Result<()> {
+    let output = docker_output(
+        host,
+        vec![
+            "docker".into(),
+            "network".into(),
+            "inspect".into(),
+            "--format".into(),
+            "{{json .IPAM.Config}}".into(),
+            names.network.clone(),
+        ],
+    )
+    .await?;
+    let configs = serde_json::from_str::<Vec<serde_json::Value>>(&output)
+        .map_err(|_| unsupported("Docker egress network IPAM configuration is invalid"))?;
+    if configs.is_empty() {
+        return Err(unsupported(
+            "Docker egress network has no inspectable IPAM subnets",
+        ));
+    }
+
+    let subnets = configs
+        .iter()
+        .map(|config| {
+            config
+                .get("Subnet")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| unsupported("Docker egress network subnet is missing"))?
+                .parse::<IpNet>()
+                .map_err(|_| unsupported("Docker egress network subnet is invalid"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if plan.targets().iter().any(|target| {
+        subnets
+            .iter()
+            .any(|subnet| subnet.contains(&target.address()))
+    }) {
+        return Err(unsupported(
+            "an egress destination overlaps the Docker network subnet",
         ));
     }
     Ok(())

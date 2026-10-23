@@ -1294,6 +1294,7 @@ name = "tinybox-docker"
 version = "0.2.0"
 dependencies = [
  "async-trait",
+ "ipnet",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
