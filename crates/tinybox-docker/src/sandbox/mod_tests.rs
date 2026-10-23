@@ -279,6 +279,44 @@ fn docker_workload_env_files_reject_newline_values() {
     assert!(super::write_workload_docker_env_file(&mut request).is_err());
 }
 
+#[test]
+fn docker_env_file_rewrite_preserves_exec_workload_arguments() -> Result<()> {
+    #[derive(Debug)]
+    struct Resolver;
+
+    impl crate::EgressResolver for Resolver {
+        fn resolve(&self, _hostname: &str) -> std::io::Result<Vec<std::net::IpAddr>> {
+            Ok(Vec::new())
+        }
+    }
+
+    let controller = Arc::new(crate::NativeLinuxDockerEgressController::new(Arc::new(
+        Resolver,
+    )));
+    let host = super::ControllerHost {
+        inner: ScriptedHost::local(),
+        controller,
+    };
+    let mut request = ExecRequest::new([
+        "docker",
+        "exec",
+        "tinybox-box",
+        "printf",
+        "--env",
+        "DOCKER_TLS_VERIFY",
+    ]);
+    request
+        .env
+        .insert("DOCKER_TLS_VERIFY".to_owned(), "1".to_owned());
+
+    let prepared = host.request(&request)?;
+    assert_eq!(
+        &prepared.request.argv[prepared.request.argv.len() - 3..],
+        ["printf", "--env", "DOCKER_TLS_VERIFY"]
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn allowlist_controller_prepares_before_start_and_cleans_after_destroy() -> Result<()> {
     let host = ScriptedHost::silent();
