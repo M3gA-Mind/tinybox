@@ -14,20 +14,24 @@ resolver, rejects loopback and metadata answers, and retains every pinned
 address. Docker-assigned IPAM subnets are checked before the firewall is
 installed; any pinned address inside one causes the whole setup to roll back.
 
-The controller installs a per-box bridge and default-drop input and forwarding
-chains before Docker starts the workload. Pinned TCP destination addresses and
+The controller installs a per-attempt bridge and default-drop input and forwarding
+chains before Docker starts the workload. A fresh random attempt token is stored
+on the Docker network and incorporated into the chain names. Pinned TCP destination addresses and
 ports are accepted in `DOCKER-USER`; new host-bound traffic is dropped. The
 input chain permits required IPv6 Neighbor Solicitation and established
 replies. Docker receives static `/etc/hosts` mappings for approved names and a
 loopback-only resolver, so its embedded resolver cannot forward arbitrary
 queries. Firewall rules also block loopback and the known metadata endpoints.
 
-Each firewall chain and its cryptographic owner marker are created in a single
-`iptables-restore --noflush` table transaction. This avoids leaving a chain
-without a marker if the process exits between separate commands. Cleanup first
-verifies the network labels and all existing chain markers, then removes only
-the hooks, chains, and network owned by this box. If verification or cleanup
-fails, the caller retains the box record so cleanup can be retried.
+Each chain is created exclusively, then receives a cryptographic owner marker.
+Cleanup first verifies the network owner, scope, and attempt labels and all
+existing chain markers before changing firewall state. After a process restart,
+an unmarked chain is reclaimable only when its attempt token matches the
+network, the chain is empty, and no firewall hook references it. Nonempty or
+otherwise ambiguous orphan chains are left untouched and cleanup fails closed.
+The controller removes only the hooks, chains, and network owned by this
+attempt. If verification or cleanup fails, the caller retains the box record so
+cleanup can be retried.
 
 ## Public surface and limits
 
