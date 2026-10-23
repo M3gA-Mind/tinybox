@@ -590,21 +590,23 @@ async fn install_family(
         // Neighbor Discovery needs both Solicitation and Advertisement to
         // resolve and refresh bridge peers. Permit these control messages;
         // new host-bound traffic remains dropped.
-        firewall_success(
-            host,
-            firewall,
-            [
-                "-A",
-                &names.input_chain,
-                "-p",
-                "ipv6-icmp",
-                "--icmpv6-type",
-                "neighbor-solicitation,neighbor-advertisement",
-                "-j",
-                "ACCEPT",
-            ],
-        )
-        .await?;
+        for icmpv6_type in ["neighbor-solicitation", "neighbor-advertisement"] {
+            firewall_success(
+                host,
+                firewall,
+                [
+                    "-A",
+                    &names.input_chain,
+                    "-p",
+                    "ipv6-icmp",
+                    "--icmpv6-type",
+                    icmpv6_type,
+                    "-j",
+                    "ACCEPT",
+                ],
+            )
+            .await?;
+        }
     }
     install_pinned_destinations(host, firewall, names, plan, ipv6).await?;
     firewall_success(
