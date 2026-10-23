@@ -534,7 +534,8 @@ async fn ambiguous_create_preserves_same_box_network_from_an_older_attempt() -> 
     assert!(controller.prepare(&host, namespace, &id, &allowlist).await.is_err());
     let commands = host.commands();
     assert!(commands.iter().any(|argv| {
-        argv.iter().any(|arg| arg == "inspect") && argv.iter().any(|arg| arg.contains(ATTEMPT_LABEL))
+        argv.iter().any(|arg| arg == "inspect")
+            && argv.iter().any(|arg| arg.contains("ai.tinyhumans.tinybox.egress.attempt"))
     }));
     assert!(!commands.iter().any(|argv| argv.iter().any(|arg| arg == "rm")));
     Ok(())
@@ -699,7 +700,7 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
     let id = BoxId::new("box-0")?;
     let namespace = "test";
     let names = NetworkNames::for_box(namespace, &id);
-    let host = PreparedNativeHost::new(&id, &names);
+    let mut host = PreparedNativeHost::new(&id, &names);
     let controller = NativeLinuxDockerEgressController::new(Arc::new(Resolver));
     let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
 
@@ -779,7 +780,7 @@ async fn cleanup_reclaims_an_empty_attempt_chain_after_restart() -> Result<()> {
     let id = BoxId::new("box-empty-orphan")?;
     let namespace = "test";
     let names = NetworkNames::for_box(namespace, &id);
-    let host = PreparedNativeHost::new(&id, &names);
+    let mut host = PreparedNativeHost::new(&id, &names);
     host.no_matching_hooks = true;
     host.chains
         .lock()
