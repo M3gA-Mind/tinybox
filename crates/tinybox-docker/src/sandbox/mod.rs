@@ -224,6 +224,136 @@ impl ExecutionObserver for DockerExecutionObserver {
 pub const DEFAULT_NAMESPACE: &str = "default";
 
 impl DockerSandbox {
+    async fn validate_network_policy(&self, spec: &BoxSpec) -> Result<()> {
+        if let NetworkPolicy::Allowlist(_) = &spec.network {
+            let Some(controller) = &self.egress_controller else {
+                return Err(unsupported_egress_policy());
+            };
+            controller.validate_host(self.host.as_ref()).await?;
+        } else {
+            spec.network.refuse_allowlist(self.name())?;
+        }
+        Ok(())
+    }
+
+    async fn prepare_egress_network(
+        &self,
+        spec: &BoxSpec,
+        id: &BoxId,
+        attempt: &str,
+    ) -> Result<Option<String>> {
+        let NetworkPolicy::Allowlist(allowlist) = &spec.network else {
+            return Ok(None);
+        };
+        let Some(controller) = &self.egress_controller else {
+            return Err(self
+                .rollback_failed_egress_create(id, attempt, unsupported_egress_policy())
+                .await);
+        };
+        match controller
+            .prepare(self.host.as_ref(), &self.namespace, id, allowlist)
+            .await
+        {
+            Ok(network) => Ok(Some(network)),
+            Err(error) => Err(self.rollback_failed_egress_create(id, attempt, error).await),
+        }
+    }
+
+    async fn rollback_failed_create(
+        &self,
+        id: &BoxId,
+        attempt: &str,
+        has_egress_network: bool,
+        error: Error,
+    ) -> Error {
+        if has_egress_network {
+            self.rollback_failed_egress_create(id, attempt, error).await
+        } else {
+            self.discard_failed_create_record(id, attempt);
+            error
+        }
+    }
+
+    async fn reconcile_failed_create(
+        &self,
+        id: &BoxId,
+        attempt: &str,
+        has_egress_network: bool,
+        error: Error,
+    ) -> Error {
+        if is_name_conflict(&error) {
+            return self
+                .rollback_failed_create(id, attempt, has_egress_network, error)
+                .await;
+        }
+
+        match self
+            .docker(
+                "inspect the failed create",
+                args::inspect_attempt(&self.namespace, id),
+            )
+            .await
+        {
+            Ok(owner) if owner == attempt => {
+                if self
+                    .remove_container(args::remove(&self.namespace, id))
+                    .await
+                    .is_err()
+                {
+                    self.remember_failed_create_attempt(id, attempt);
+                    return error;
+                }
+                if !self
+                    .cleanup_failed_egress_network(id, attempt, has_egress_network)
+                    .await
+                {
+                    return error;
+                }
+                self.discard_failed_create_record(id, attempt);
+            }
+            Ok(_) => {
+                if !self
+                    .cleanup_failed_egress_network(id, attempt, has_egress_network)
+                    .await
+                {
+                    return error;
+                }
+                self.discard_failed_create_record(id, attempt);
+            }
+            Err(Error::Backend { message, .. }) if message.contains("No such container") => {
+                if !self
+                    .cleanup_failed_egress_network(id, attempt, has_egress_network)
+                    .await
+                {
+                    return error;
+                }
+                self.discard_failed_create_record(id, attempt);
+            }
+            Err(_) => self.remember_failed_create_attempt(id, attempt),
+        }
+        error
+    }
+
+    async fn cleanup_failed_egress_network(
+        &self,
+        id: &BoxId,
+        attempt: &str,
+        has_egress_network: bool,
+    ) -> bool {
+        if has_egress_network && self.cleanup_egress(id).await.is_err() {
+            self.remember_failed_create_attempt(id, attempt);
+            return false;
+        }
+        true
+    }
+
+    fn remember_failed_create_attempt(&self, id: &BoxId, attempt: &str) {
+        self.failed_create_attempts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.clone(), attempt.to_owned());
+    }
+
     /// Run containers via `docker` on `host`, recording boxes in `store`.
     ///
     /// Uses [`DEFAULT_NAMESPACE`]. Two stores on one machine that both allocate
@@ -549,10 +679,9 @@ impl Sandbox for DockerSandbox {
         // Resolve and install the default-drop filter before Docker starts the
         // image entrypoint. The controller is the only path that can make an
         // allowlist runnable.
-        let network = match self.prepare_egress_network(spec, &info.id, &attempt).await {
-            Ok(network) => network,
-            Err(error) => return Err(error),
-        };
+        let network = self
+            .prepare_egress_network(spec, &info.id, &attempt)
+            .await?;
 
         // Build the command before running anything, so a source this backend
         // cannot handle leaves no container behind.
@@ -908,6 +1037,14 @@ impl DockerSandbox {
 fn is_name_conflict(error: &Error) -> bool {
     matches!(error, Error::Backend { message, .. }
         if message.contains("container name") && message.contains("already in use"))
+}
+
+fn unsupported_egress_policy() -> Error {
+    Error::ConstraintNotEnforced {
+        sandbox: NAME.to_owned(),
+        constraint: tinybox_core::Constraint::Network,
+        enforcement: tinybox_core::Enforcement::Unsupported,
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
