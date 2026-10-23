@@ -519,7 +519,7 @@ async fn firewall_output<const N: usize>(
     if !output.succeeded() {
         return Err(unsupported("required firewall command failed"));
     }
-    Ok(output.stdout_lossy())
+    Ok(output.stdout_lossy().into_owned())
 }
 
 async fn firewall_success<I, S>(host: &dyn Host, firewall: &str, arguments: I) -> Result<()>
