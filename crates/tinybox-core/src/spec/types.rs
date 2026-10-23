@@ -318,7 +318,7 @@ impl EgressAllowlist {
                         .to_ipv4_mapped()
                         .is_some_and(|mapped| mapped.is_loopback())
             }
-            Err(_) => Self::parse_legacy_ipv4(host).is_some_and(|address| address.is_loopback()),
+            Err(_) => Self::parse_legacy_ipv4(&host).is_some_and(|address| address.is_loopback()),
         }
     }
 
