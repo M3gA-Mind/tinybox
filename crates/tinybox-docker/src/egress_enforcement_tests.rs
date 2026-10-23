@@ -101,6 +101,17 @@ impl EgressResolver for Resolver {
 }
 
 #[derive(Debug)]
+struct MappedIpv4Resolver;
+
+impl EgressResolver for MappedIpv4Resolver {
+    fn resolve(&self, _hostname: &str) -> std::io::Result<Vec<IpAddr>> {
+        Ok(vec!["::ffff:203.0.113.11".parse().map_err(|error| {
+            std::io::Error::other(format!("invalid fixture: {error}"))
+        })?])
+    }
+}
+
+#[derive(Debug)]
 struct BridgeLinkHost {
     exists: bool,
 }
@@ -382,6 +393,37 @@ async fn native_controller_prepares_and_cleans_a_pinned_allowlist() -> Result<()
                     && argv.iter().any(|arg| arg == "unix:///var/run/docker.sock")
             })
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_controller_maps_ipv4_mapped_answers_as_ipv4() -> Result<()> {
+    let id = BoxId::new("box-mapped")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let host = PreparedNativeHost::new(&id, &names);
+    let controller = NativeLinuxDockerEgressController::new(Arc::new(MappedIpv4Resolver));
+    let allowlist = tinybox_core::EgressAllowlist::new(["service.test"], [443]);
+
+    let prepared = controller
+        .prepare(&host, namespace, &id, &allowlist)
+        .await?;
+
+    assert_eq!(
+        prepared.host_mappings(),
+        [("service.test".to_owned(), IpAddr::from([203, 0, 113, 11]))]
+    );
+    let commands = host.commands();
+    assert!(commands.iter().any(|argv| {
+        argv.iter().any(|part| part == "iptables")
+            && argv.iter().any(|part| part == "203.0.113.11")
+            && argv.iter().any(|part| part == "ACCEPT")
+    }));
+    assert!(!commands.iter().any(|argv| {
+        argv.iter().any(|part| part == "ip6tables")
+            && argv.iter().any(|part| part.contains("203.0.113.11"))
+    }));
+    controller.cleanup(&host, namespace, &id).await?;
     Ok(())
 }
 

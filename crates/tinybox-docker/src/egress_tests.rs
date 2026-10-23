@@ -240,7 +240,10 @@ fn normalizes_ipv4_mapped_ipv6_answers_to_ipv4_targets()
     let plan = plan_egress_allowlist(&allowlist, &resolver)?;
 
     assert_eq!(plan.targets().len(), 1);
-    assert_eq!(plan.targets()[0].address(), "203.0.113.11".parse::<IpAddr>()?);
+    assert_eq!(
+        plan.targets()[0].address(),
+        "203.0.113.11".parse::<IpAddr>()?
+    );
     Ok(())
 }
 
