@@ -147,6 +147,7 @@ struct PreparedNativeHost {
     missing_final_drop: Option<String>,
     empty_network_create: bool,
     fail_chain_marker: bool,
+    #[cfg(target_os = "linux")]
     fail_chain_delete_once: Mutex<bool>,
     network_owner: String,
     network_scope: String,
@@ -168,6 +169,7 @@ impl PreparedNativeHost {
             missing_final_drop: None,
             empty_network_create: false,
             fail_chain_marker: false,
+            #[cfg(target_os = "linux")]
             fail_chain_delete_once: Mutex::new(false),
             network_owner: id.to_string(),
             network_scope: names.owner_token.clone(),
@@ -309,6 +311,7 @@ impl Host for PreparedNativeHost {
             .iter()
             .any(|arg| arg == "iptables" || arg == "ip6tables")
         {
+            #[cfg(target_os = "linux")]
             if let Some(index) = argv.iter().position(|arg| arg == "-F")
                 && let Some(chain) = argv.get(index + 1)
             {
@@ -322,6 +325,7 @@ impl Host for PreparedNativeHost {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .remove(&(firewall, chain.clone()));
             }
+            #[cfg(target_os = "linux")]
             if *self
                 .fail_chain_delete_once
                 .lock()
@@ -960,6 +964,7 @@ async fn cleanup_refuses_firewall_chains_with_another_owner_marker() -> Result<(
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
 async fn cleanup_restores_owner_marker_when_chain_delete_fails_after_flush() -> Result<()> {
     let id = BoxId::new("box-delete-retry")?;
     let namespace = "test";
