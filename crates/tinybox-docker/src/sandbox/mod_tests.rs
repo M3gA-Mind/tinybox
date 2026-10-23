@@ -58,6 +58,57 @@ impl super::DockerEgressController for RecordingEgressController {
     }
 }
 
+#[derive(Debug)]
+struct NonIdempotentArgController;
+
+#[async_trait]
+impl super::DockerEgressController for NonIdempotentArgController {
+    async fn prepare(
+        &self,
+        _host: &dyn Host,
+        _namespace: &str,
+        _id: &BoxId,
+        _allowlist: &tinybox_core::EgressAllowlist,
+    ) -> Result<crate::PreparedEgressNetwork> {
+        Ok(crate::PreparedEgressNetwork::new(
+            "tinybox-allowlist-test".to_owned(),
+            Vec::new(),
+        ))
+    }
+
+    async fn cleanup(&self, _host: &dyn Host, _namespace: &str, _id: &BoxId) -> Result<()> {
+        Ok(())
+    }
+
+    fn docker_argv(&self, mut argv: Vec<String>) -> Vec<String> {
+        argv.push("rewrite-once".to_owned());
+        argv
+    }
+}
+
+#[tokio::test]
+async fn docker_argv_controller_rewrites_each_command_once() -> Result<()> {
+    let host = ScriptedHost::silent();
+    let sandbox = DockerSandbox::new(host.clone(), Arc::new(MemoryStore::new()))
+        .with_egress_controller(Arc::new(NonIdempotentArgController));
+    let allowlist = tinybox_core::EgressAllowlist::new(["api.example.test"], [443]);
+
+    sandbox
+        .create(&spec()?.with_network(NetworkPolicy::Allowlist(allowlist)))
+        .await?;
+
+    let docker_commands = host
+        .commands()
+        .into_iter()
+        .filter(|argv| argv.first().is_some_and(|arg| arg == "docker"))
+        .collect::<Vec<_>>();
+    assert!(!docker_commands.is_empty());
+    assert!(docker_commands.iter().all(|argv| {
+        argv.iter().filter(|arg| arg.as_str() == "rewrite-once").count() == 1
+    }));
+    Ok(())
+}
+
 #[tokio::test]
 async fn allowlist_controller_prepares_before_start_and_cleans_after_destroy() -> Result<()> {
     let host = ScriptedHost::silent();
