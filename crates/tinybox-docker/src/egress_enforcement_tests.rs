@@ -140,6 +140,7 @@ enum NetworkInspectBehavior {
 #[derive(Debug)]
 struct PreparedNativeHost {
     commands: Mutex<Vec<Vec<String>>>,
+    restore_scripts: Mutex<Vec<String>>,
     chains: Mutex<std::collections::BTreeSet<(String, String)>>,
     marked_chains: Mutex<std::collections::BTreeSet<(String, String)>>,
     network_create_behavior: NetworkCreateBehavior,
@@ -162,6 +163,7 @@ impl PreparedNativeHost {
     fn new(id: &BoxId, names: &NetworkNames) -> Self {
         Self {
             commands: Mutex::new(Vec::new()),
+            restore_scripts: Mutex::new(Vec::new()),
             chains: Mutex::new(std::collections::BTreeSet::new()),
             marked_chains: Mutex::new(std::collections::BTreeSet::new()),
             network_create_behavior: NetworkCreateBehavior::Succeed,
@@ -207,6 +209,14 @@ impl Host for PreparedNativeHost {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(argv.clone());
+        if argv.iter().any(|arg| arg == "iptables-restore")
+            && let Some(stdin) = &request.stdin
+        {
+            self.restore_scripts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(String::from_utf8_lossy(stdin).into_owned());
+        }
 
         if let Some(docker_index) = argv.iter().position(|arg| arg == "docker") {
             let docker_args = &argv[docker_index + 1..];
