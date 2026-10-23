@@ -8,8 +8,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 use tinybox_core::{
-    Error, ExecOutput, ExecRequest, ExecutionObserver, Forward, Host, OutputStream, Result,
-    WorkspaceFileReader, WorkspaceFileWriter,
+    Error, ExecOutput, ExecRequest, ExecutionObserver, Forward, Host, HostExecutionLocation,
+    OutputStream, Result, WorkspaceFileReader, WorkspaceFileWriter,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{oneshot, watch};
@@ -295,6 +295,10 @@ impl LimitedLocalHost {
 impl Host for LimitedLocalHost {
     fn name(&self) -> &'static str {
         crate::LOCAL
+    }
+
+    fn execution_location(&self) -> HostExecutionLocation {
+        LocalHost::new().execution_location()
     }
 
     async fn run(&self, request: &ExecRequest) -> Result<ExecOutput> {
