@@ -947,6 +947,7 @@ async fn cleanup_ignores_another_boxes_chain_after_its_network_is_absent() -> Re
     let remaining_names = NetworkNames::for_box(namespace, &remaining_box);
     let removed_hash = stable_hash(namespace.as_bytes(), removed_box.as_str().as_bytes());
     let remaining_hash = stable_hash(namespace.as_bytes(), remaining_box.as_str().as_bytes());
+    assert_eq!(removed_names.forward_chain.len(), 28);
     assert_eq!(
         format!("{removed_hash:016x}").get(..4),
         format!("{remaining_hash:016x}").get(..4),
