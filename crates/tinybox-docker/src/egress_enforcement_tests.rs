@@ -1,6 +1,7 @@
 //! Tests for native Docker egress filter capability checks.
 
 use std::{
+    fmt::Write as _,
     net::IpAddr,
     sync::{Arc, Mutex},
 };
@@ -274,10 +275,11 @@ impl Host for PreparedNativeHost {
                     .into_iter()
                     .filter(|chain| chains.contains(&(firewall.clone(), (*chain).clone())))
                     .fold(String::new(), |mut stdout, chain| {
-                        stdout.push_str(&format!(
+                        let _ = writeln!(
+                            stdout,
                             "-N {chain}\n-A {chain} -s 0.0.0.0/32 -m comment --comment {} -j DROP\n-A {chain} -j DROP\n",
                             self.chain_owner_token
-                        ));
+                        );
                         stdout
                     });
                 return Ok(ExecOutput::new(0, stdout.into_bytes(), Vec::new()));

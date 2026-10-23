@@ -18,6 +18,7 @@ const DOCKER_SOCKET: &str = "unix:///var/run/docker.sock";
 const OWNER_LABEL: &str = "ai.tinyhumans.tinybox.egress.owner";
 const SCOPE_LABEL: &str = "ai.tinyhumans.tinybox.egress.scope";
 const ALLOWLIST_PROTOCOLS: [&str; 1] = ["tcp"];
+const HEX: &[u8; 16] = b"0123456789abcdef";
 
 /// A controller that installs and removes a per-box egress filter.
 ///
@@ -254,7 +255,6 @@ fn scope_token(namespace: &str, id: &str) -> String {
     hasher.update(id.as_bytes());
     let digest = hasher.finalize();
     let mut token = String::with_capacity(64);
-    const HEX: &[u8; 16] = b"0123456789abcdef";
     for byte in digest {
         token.push(char::from(HEX[usize::from(byte >> 4)]));
         token.push(char::from(HEX[usize::from(byte & 0x0f)]));
