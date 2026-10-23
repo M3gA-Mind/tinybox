@@ -419,6 +419,18 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
     let target_name = format!("tinybox-egress-target-{}", &suffix[..12]);
     const ALLOWED_PORT: &str = "18373";
     const BLOCKED_PORT: &str = "18374";
+    let gateway = docker_bridge_gateway()?;
+    let host_listener = TcpListener::bind((gateway, 0)).map_err(|error| Error::Backend {
+        sandbox: "docker".to_owned(),
+        operation: "bind the host-gateway negative-control listener",
+        message: error.to_string(),
+    })?;
+    host_listener
+        .set_nonblocking(true)
+        .map_err(|error| Error::io("configure host-gateway listener", &error))?;
+    let host_address = host_listener
+        .local_addr()
+        .map_err(|error| Error::io("read host-gateway listener address", &error))?;
     let image = docker_command(&[
         "run",
         "-d",
@@ -464,6 +476,20 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
                 &ExecRequest::new(["sh", "-c", &format!("nc -z -w 2 {ip} {BLOCKED_PORT}")]),
             )
             .await;
+        let host_gateway = sandbox
+            .exec(
+                &info.id,
+                &ExecRequest::new([
+                    "sh",
+                    "-c",
+                    &format!("nc -z -w 2 {} {}", host_address.ip(), host_address.port()),
+                ]),
+            )
+            .await;
+        let host_listener_untouched = matches!(
+            accept_before(&host_listener, Instant::now() + Duration::from_millis(250)),
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut
+        );
         let allowed_hits =
             docker_command(&["exec", &target_name, "sh", "-c", "test -s /tmp/allowed"]);
         let blocked_hits = Command::new("docker")
@@ -475,18 +501,26 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
         let destroy = sandbox.destroy(&info.id).await;
         let allowed = allowed?;
         let blocked = blocked?;
+        let host_gateway = host_gateway?;
         destroy?;
         allowed_hits?;
         let blocked_hits = blocked_hits?;
-        if allowed.exit_code != 0 || blocked.exit_code == 0 || !blocked_hits.success() {
+        if allowed.exit_code != 0
+            || blocked.exit_code == 0
+            || host_gateway.exit_code == 0
+            || !blocked_hits.success()
+            || !host_listener_untouched
+        {
             return Err(Error::Backend {
                 sandbox: "docker".to_owned(),
                 operation: "verify native egress allowlist",
                 message: format!(
-                    "allowed exit={}, blocked exit={}, forbidden listener hit={}",
+                    "allowed exit={}, blocked exit={}, host-gateway exit={}, forbidden listener hit={}, host listener touched={}",
                     allowed.exit_code,
                     blocked.exit_code,
-                    !blocked_hits.success()
+                    host_gateway.exit_code,
+                    !blocked_hits.success(),
+                    !host_listener_untouched
                 ),
             });
         }

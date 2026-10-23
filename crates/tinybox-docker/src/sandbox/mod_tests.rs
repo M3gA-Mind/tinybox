@@ -163,6 +163,56 @@ async fn native_controller_refuses_hosts_without_explicit_local_identity() -> Re
     Ok(())
 }
 
+#[tokio::test]
+async fn failed_egress_rollback_retains_box_record_for_cleanup_retry() -> Result<()> {
+    #[derive(Debug)]
+    struct CleanupFailureController;
+
+    #[async_trait]
+    impl super::DockerEgressController for CleanupFailureController {
+        async fn prepare(
+            &self,
+            _host: &dyn Host,
+            _namespace: &str,
+            _id: &BoxId,
+            _allowlist: &tinybox_core::EgressAllowlist,
+        ) -> Result<String> {
+            Err(Error::ConstraintNotEnforced {
+                sandbox: NAME.to_owned(),
+                constraint: tinybox_core::Constraint::Network,
+                enforcement: tinybox_core::Enforcement::Unsupported,
+            })
+        }
+
+        async fn cleanup(&self, _host: &dyn Host, _namespace: &str, _id: &BoxId) -> Result<()> {
+            Err(Error::Backend {
+                sandbox: NAME.to_owned(),
+                operation: "remove test egress filter",
+                message: "filter unavailable".to_owned(),
+            })
+        }
+
+        fn docker_argv(&self, argv: Vec<String>) -> Vec<String> {
+            argv
+        }
+    }
+
+    let host = ScriptedHost::silent();
+    let store = Arc::new(MemoryStore::new());
+    let sandbox = DockerSandbox::new(host, store.clone())
+        .with_egress_controller(Arc::new(CleanupFailureController));
+    let allowlist = tinybox_core::EgressAllowlist::new(["api.example.test"], [443]);
+
+    assert!(matches!(
+        sandbox
+            .create(&spec()?.with_network(NetworkPolicy::Allowlist(allowlist)))
+            .await,
+        Err(Error::Backend { message, .. }) if message.contains("cleanup failed")
+    ));
+    assert_eq!(store.list()?.len(), 1);
+    Ok(())
+}
+
 #[test]
 fn effective_published_ports_parse_dynamic_and_fixed_bindings() -> Result<()> {
     let ports = args::parse_published_ports(
