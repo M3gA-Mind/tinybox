@@ -227,6 +227,22 @@ impl Host for PreparedNativeHost {
                 ));
             }
             if docker_args.iter().any(|arg| arg == "network") {
+                if docker_args.iter().any(|arg| arg == "rm")
+                    && *self
+                        .fail_network_remove_once
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                {
+                    *self
+                        .fail_network_remove_once
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+                    return Ok(ExecOutput::new(
+                        1,
+                        Vec::new(),
+                        b"injected network removal failure".to_vec(),
+                    ));
+                }
                 if docker_args.iter().any(|arg| arg == "create") {
                     if matches!(
                         self.network_create_behavior,
