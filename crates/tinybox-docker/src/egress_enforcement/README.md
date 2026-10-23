@@ -7,9 +7,10 @@ allowlist remains Unsupported unless a host installs this implementation.
 ## Setup and enforcement
 
 Before creating a network, the controller requires an explicitly local host,
-the rootful Docker Engine socket, Linux Docker, non-interactive `sudo` access
-without a password or `requiretty` for `iptables` and `ip6tables`, Docker's
-`DOCKER-USER` forwarding hooks, and a usable bridge firewall interface. It resolves hostnames once through the injected
+the rootful Docker Engine socket, Linux Docker, and non-interactive `sudo`
+access without a password or `requiretty` for Docker, `iptables`, and
+`ip6tables`. Docker's `DOCKER-USER` forwarding hooks and a usable bridge
+firewall interface are also required. The controller resolves hostnames once through the injected
 resolver, rejects loopback and metadata answers, and retains every pinned
 address. Docker-assigned IPAM subnets are checked before the firewall is
 installed; any pinned address inside one causes the whole setup to roll back.
