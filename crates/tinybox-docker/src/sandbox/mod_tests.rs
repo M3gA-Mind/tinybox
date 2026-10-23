@@ -17,8 +17,8 @@ use std::sync::{
 use async_trait::async_trait;
 use tinybox_core::{
     BoxId, BoxSpec, BoxState, Capability, Error, ExecOutput, ExecRequest, Host, HostRef,
-    IsolationLevel, MemoryStore, NetworkPolicy, Placement, PortMapping, Resources, Result, Sandbox,
-    SandboxRef, SnapshotId, SnapshotSupport, Store, WorkspaceSource,
+    HostExecutionLocation, IsolationLevel, MemoryStore, NetworkPolicy, Placement, PortMapping,
+    Resources, Result, Sandbox, SandboxRef, SnapshotId, SnapshotSupport, Store, WorkspaceSource,
 };
 
 use super::{DockerSandbox, NAME, args, cleanup_timeout_error, state};
@@ -142,24 +142,29 @@ async fn native_controller_refuses_hosts_without_explicit_local_identity() -> Re
         }
     }
 
-    let host = ScriptedHost::silent();
-    let sandbox = DockerSandbox::new(host.clone(), Arc::new(MemoryStore::new()))
-        .with_egress_controller(Arc::new(crate::NativeLinuxDockerEgressController::new(
-            Arc::new(Resolver),
-        )));
     let allowlist = tinybox_core::EgressAllowlist::new(["api.example.test"], [443]);
+    for location in [HostExecutionLocation::Unknown, HostExecutionLocation::Remote] {
+        let host = Arc::new(ScriptedHost {
+            location: Some(location),
+            ..ScriptedHost::default()
+        });
+        let sandbox = DockerSandbox::new(host.clone(), Arc::new(MemoryStore::new()))
+            .with_egress_controller(Arc::new(crate::NativeLinuxDockerEgressController::new(
+                Arc::new(Resolver),
+            )));
 
-    assert!(matches!(
-        sandbox
-            .create(&spec()?.with_network(NetworkPolicy::Allowlist(allowlist)))
-            .await,
-        Err(Error::ConstraintNotEnforced {
-            constraint: tinybox_core::Constraint::Network,
-            enforcement: tinybox_core::Enforcement::Unsupported,
-            ..
-        })
-    ));
-    assert!(host.commands().is_empty());
+        assert!(matches!(
+            sandbox
+                .create(&spec()?.with_network(NetworkPolicy::Allowlist(allowlist.clone())))
+                .await,
+            Err(Error::ConstraintNotEnforced {
+                constraint: tinybox_core::Constraint::Network,
+                enforcement: tinybox_core::Enforcement::Unsupported,
+                ..
+            })
+        ));
+        assert!(host.commands().is_empty());
+    }
     Ok(())
 }
 
@@ -247,6 +252,7 @@ struct ScriptedHost {
     replies: Mutex<VecDeque<ExecOutput>>,
     seen: Mutex<Vec<Vec<String>>>,
     seen_env: Mutex<Vec<BTreeMap<String, String>>>,
+    location: Option<HostExecutionLocation>,
     cancel_observed: AtomicBool,
     refuse_observed: AtomicBool,
     block_observed: AtomicBool,
@@ -312,6 +318,10 @@ impl ScriptedHost {
 impl Host for ScriptedHost {
     fn name(&self) -> &'static str {
         "scripted"
+    }
+
+    fn execution_location(&self) -> HostExecutionLocation {
+        self.location.unwrap_or(HostExecutionLocation::Unknown)
     }
 
     async fn run(&self, request: &ExecRequest) -> Result<ExecOutput> {
