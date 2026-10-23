@@ -21,6 +21,22 @@ impl tinybox_jail::JailBackend for FixtureBackend {
     }
 }
 
+#[test]
+fn jailed_local_host_reports_local_execution_location() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let host = JailLocalHost::with_backend(
+        tinybox_jail::Jail::new(root.path(), "execution-location"),
+        Arc::new(FixtureBackend),
+        64,
+    )?;
+
+    assert_eq!(
+        host.execution_location(),
+        tinybox_core::HostExecutionLocation::Local
+    );
+    Ok(())
+}
+
 #[cfg(unix)]
 struct MissingStdinBackend;
 #[cfg(unix)]
