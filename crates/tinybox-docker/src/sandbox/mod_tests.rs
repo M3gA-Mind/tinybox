@@ -144,6 +144,8 @@ fn controller_preserves_requested_docker_variables_for_the_workload() -> Result<
         "DOCKER_CERT_PATH",
         "--env",
         "APP_MODE",
+        "--",
+        "image",
     ]);
     request.env.insert(
         "DOCKER_HOST".to_owned(),

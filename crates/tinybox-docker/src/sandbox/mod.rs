@@ -112,15 +112,24 @@ fn write_workload_docker_env_file(
     if values.is_empty() {
         return Ok(None);
     }
-    if !request
+    let subcommand = request
         .argv
         .iter()
-        .any(|part| part == "run" || part == "exec")
-    {
+        .position(|part| part == "run" || part == "exec");
+    if subcommand.is_none() {
         return Err(Error::Backend {
             sandbox: NAME.to_owned(),
             operation: "preserve Docker workload environment",
             message: "Docker environment files are supported only for run and exec".to_owned(),
+        });
+    }
+    if subcommand.is_some_and(|index| {
+        request.argv[index] == "run" && !request.argv[index + 1..].iter().any(|part| part == "--")
+    }) {
+        return Err(Error::Backend {
+            sandbox: NAME.to_owned(),
+            operation: "preserve Docker workload environment",
+            message: "docker run must separate its image and workload arguments with --".to_owned(),
         });
     }
     if values.iter().any(|(_, value)| value.contains(['\n', '\r'])) {
@@ -153,18 +162,41 @@ fn add_docker_env_file_flag(
     if argv.first().is_none_or(|program| program != "docker") {
         return argv;
     }
-    let mut index = 1;
-    while index + 1 < argv.len() {
+    let Some(subcommand) = argv.iter().position(|part| part == "run" || part == "exec") else {
+        return argv;
+    };
+    let run_command = argv[subcommand] == "run";
+    let mut options_end = if run_command {
+        argv.iter()
+            .enumerate()
+            .skip(subcommand + 1)
+            .find_map(|(index, part)| (part == "--").then_some(index))
+            .unwrap_or(argv.len())
+    } else {
+        let mut index = subcommand + 1;
+        while let Some(argument) = argv.get(index) {
+            match argument.as_str() {
+                "--env" | "-e" | "--env-file" | "--workdir" | "-w" | "--user" => {
+                    index = (index + 2).min(argv.len());
+                }
+                _ if argument.starts_with('-') => index += 1,
+                _ => break,
+            }
+        }
+        index
+    };
+
+    let mut index = subcommand + 1;
+    while index + 1 < options_end {
         if argv[index] == "--env" && values.iter().any(|(key, _)| argv[index + 1] == *key) {
             argv.drain(index..=index + 1);
+            options_end -= 2;
         } else {
             index += 1;
         }
     }
-    if let Some(subcommand) = argv.iter().position(|part| part == "run" || part == "exec") {
-        argv.insert(subcommand + 1, "--env-file".to_owned());
-        argv.insert(subcommand + 2, path.display().to_string());
-    }
+    argv.insert(subcommand + 1, "--env-file".to_owned());
+    argv.insert(subcommand + 2, path.display().to_string());
     argv
 }
 
