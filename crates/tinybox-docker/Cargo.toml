@@ -16,6 +16,7 @@ publish = false
 tinybox-core.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
+# SHA-256 keeps firewall cleanup ownership markers collision-resistant.
 sha2 = "0.10.9"
 # `DockerCli` runs the local `docker` client; one-shot runs need process spawning
 # and a deadline.
