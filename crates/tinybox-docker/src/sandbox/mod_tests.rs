@@ -112,6 +112,55 @@ async fn docker_argv_controller_rewrites_each_command_once() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn controller_preserves_requested_docker_variables_for_the_workload() {
+    #[derive(Debug)]
+    struct Resolver;
+
+    impl crate::EgressResolver for Resolver {
+        fn resolve(&self, _hostname: &str) -> std::io::Result<Vec<std::net::IpAddr>> {
+            Ok(Vec::new())
+        }
+    }
+
+    let controller = Arc::new(crate::NativeLinuxDockerEgressController::new(Arc::new(Resolver)));
+    let host = super::ControllerHost {
+        inner: ScriptedHost::silent(),
+        controller,
+    };
+    let mut request = ExecRequest::new([
+        "docker",
+        "run",
+        "--env",
+        "DOCKER_HOST",
+        "--env",
+        "DOCKER_CONTEXT",
+        "--env",
+        "APP_MODE",
+    ]);
+    request
+        .env
+        .insert("DOCKER_HOST".to_owned(), "tcp://workload-docker:2376".to_owned());
+    request
+        .env
+        .insert("DOCKER_CONTEXT".to_owned(), "workload-context".to_owned());
+    request
+        .env
+        .insert("APP_MODE".to_owned(), "test".to_owned());
+
+    let rewritten = host.request(&request);
+
+    assert!(rewritten.argv.windows(2).any(|args| {
+        args == ["--env", "DOCKER_HOST=tcp://workload-docker:2376"]
+    }));
+    assert!(rewritten.argv.windows(2).any(|args| {
+        args == ["--env", "DOCKER_CONTEXT=workload-context"]
+    }));
+    assert!(!rewritten.env.contains_key("DOCKER_HOST"));
+    assert!(!rewritten.env.contains_key("DOCKER_CONTEXT"));
+    assert_eq!(rewritten.env.get("APP_MODE").map(String::as_str), Some("test"));
+}
+
 #[tokio::test]
 async fn allowlist_controller_prepares_before_start_and_cleans_after_destroy() -> Result<()> {
     let host = ScriptedHost::silent();
