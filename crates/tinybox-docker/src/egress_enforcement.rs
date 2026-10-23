@@ -273,15 +273,19 @@ impl NetworkNames {
     fn for_attempt(namespace: &str, id: &BoxId, attempt_token: &str) -> Self {
         let hash = stable_hash(namespace.as_bytes(), id.as_str().as_bytes());
         let short = format!("{hash:016x}");
-        let chain_prefix = format!("TBX{}", &short[..4]);
-        let chain_token = &attempt_token[..20];
+        let owner_token = scope_token(namespace, id.as_str());
+        // iptables chain names allow at most 28 visible characters. Keep a
+        // 48-bit box identity in the orphan-scan prefix and a 48-bit attempt
+        // suffix so one box cannot make another box's chain look like an orphan.
+        let chain_prefix = format!("TBX{}", &owner_token[..12]);
+        let chain_token = &attempt_token[..12];
         Self {
             network: format!("tinybox-egress-{}", &short[..12]),
             // Linux interface names are limited to IFNAMSIZ - 1 (15 bytes).
             bridge: format!("tbx{}", &short[..12]),
             forward_chain: format!("{chain_prefix}{chain_token}F"),
             input_chain: format!("{chain_prefix}{chain_token}I"),
-            owner_token: scope_token(namespace, id.as_str()),
+            owner_token,
             attempt_token: attempt_token.to_owned(),
             chain_prefix,
             chain_owner_token: chain_owner_token(namespace, id.as_str(), attempt_token),
