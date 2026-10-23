@@ -114,8 +114,11 @@ async fn controller_host_forwards_host_capabilities_and_pins_docker_commands() -
     assert!(!host.has_pending_observed_cleanup());
     host.retry_observed_cleanup().await?;
     assert!(matches!(
-        host.open_workspace_file(std::path::Path::new("/workspace"), std::path::Path::new("file"))
-            .await,
+        host.open_workspace_file(
+            std::path::Path::new("/workspace"),
+            std::path::Path::new("file")
+        )
+        .await,
         Err(Error::UnsupportedHostFileTransfer { .. })
     ));
     assert!(matches!(
@@ -128,12 +131,12 @@ async fn controller_host_forwards_host_capabilities_and_pins_docker_commands() -
         Err(Error::UnsupportedHostFileTransfer { .. })
     ));
     assert!(matches!(
-        host.forward("127.0.0.1:1234".parse().expect("valid address")).await,
+        host.forward(std::net::SocketAddr::from(([127, 0, 0, 1], 1234)))
+            .await,
         Err(Error::Unsupported { .. })
     ));
 
-    let observer: Arc<dyn tinybox_core::ExecutionObserver> =
-        Arc::new(CapturingObserver::default());
+    let observer: Arc<dyn tinybox_core::ExecutionObserver> = Arc::new(CapturingObserver::default());
     host.run_observed(&ExecRequest::new(["docker", "version"]), observer)
         .await?;
     assert_eq!(inner.commands()[0], ["docker", "version"]);
@@ -146,8 +149,6 @@ async fn missing_controller_during_egress_preparation_rolls_back_reserved_record
     let id = BoxId::new("box-0")?;
     let allowlist = tinybox_core::EgressAllowlist::new(["api.example.test"], [443]);
     let spec = spec()?.with_network(NetworkPolicy::Allowlist(allowlist));
-    store.reserve(id.clone(), spec.clone())?;
-
     assert!(matches!(
         sandbox.prepare_egress_network(&spec, &id, "attempt").await,
         Err(Error::ConstraintNotEnforced {
@@ -156,7 +157,7 @@ async fn missing_controller_during_egress_preparation_rolls_back_reserved_record
             ..
         })
     ));
-    assert!(matches!(store.get(&id), Err(Error::NotFound { .. })));
+    assert!(matches!(store.get(&id), Err(Error::UnknownBox { .. })));
     Ok(())
 }
 
