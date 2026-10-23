@@ -1,5 +1,6 @@
 //! The parts a [`BoxSpec`](crate::spec::BoxSpec) is assembled from.
 
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -291,6 +292,29 @@ impl EgressAllowlist {
         ) || host.starts_with("::ffff:169.254.169.254")
     }
 
+    /// Whether an allowlist entry explicitly names a loopback address or alias.
+    fn is_loopback_host(host: &str) -> bool {
+        let host = host
+            .trim()
+            .trim_matches(['[', ']'])
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
+        if host == "localhost" || host.ends_with(".localhost") {
+            return true;
+        }
+
+        match host.parse::<IpAddr>() {
+            Ok(IpAddr::V4(address)) => address.is_loopback(),
+            Ok(IpAddr::V6(address)) => {
+                address.is_loopback()
+                    || address
+                        .to_ipv4_mapped()
+                        .is_some_and(|mapped| mapped.is_loopback())
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Check the list is non-empty, well formed and names no metadata endpoint.
     ///
     /// # Errors
@@ -321,6 +345,11 @@ impl EgressAllowlist {
             if Self::is_metadata_host(trimmed) {
                 return Err(Error::InvalidNetworkPolicy {
                     reason: "allowlist names a cloud metadata endpoint",
+                });
+            }
+            if Self::is_loopback_host(trimmed) {
+                return Err(Error::InvalidNetworkPolicy {
+                    reason: "allowlist names a loopback endpoint",
                 });
             }
         }
