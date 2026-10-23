@@ -78,6 +78,7 @@ fn resolves_each_distinct_hostname_once_and_retains_the_answer() -> tinybox_core
     assert_eq!(plan.targets().len(), 2);
     assert!(plan.targets().iter().all(|target| {
         target.host() == "api.example.test."
+            && [443, 8443].contains(&target.port())
             && target.address() == IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 8))
     }));
     assert_eq!(
@@ -85,6 +86,40 @@ fn resolves_each_distinct_hostname_once_and_retains_the_answer() -> tinybox_core
         plan.targets()[0].address()
     );
     Ok(())
+}
+
+#[test]
+fn pins_ip_literals_without_resolving_and_rejects_forbidden_literals() -> tinybox_core::Result<()> {
+    let resolver = StaticResolver(BTreeMap::new());
+    let allowlist = EgressAllowlist::new(["203.0.113.9"], [9443]);
+
+    let plan = plan_egress_allowlist(&allowlist, &resolver)?;
+
+    assert_eq!(plan.targets().len(), 1);
+    assert_eq!(plan.targets()[0].host(), "203.0.113.9");
+    assert_eq!(plan.targets()[0].port(), 9443);
+    assert_eq!(
+        plan.targets()[0].address(),
+        IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 9))
+    );
+
+    let forbidden = EgressAllowlist::new(["127.0.0.1"], [443]);
+    assert!(matches!(
+        plan_egress_allowlist(&forbidden, &resolver),
+        Err(Error::InvalidNetworkPolicy { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn returns_resolver_errors_as_backend_errors() {
+    let resolver = StaticResolver(BTreeMap::new());
+    let allowlist = EgressAllowlist::new(["unavailable.example"], [443]);
+
+    assert!(matches!(
+        plan_egress_allowlist(&allowlist, &resolver),
+        Err(Error::Backend { .. })
+    ));
 }
 
 #[derive(Debug)]
