@@ -410,7 +410,12 @@ async fn failed_create_cleanup_retains_the_record_for_retry() -> Result<()> {
     let store = Arc::new(MemoryStore::new());
     let sandbox = DockerSandbox::new(host, store.clone())
         .with_egress_controller(Arc::new(CleanupFailureController));
-    let info = tinybox_core::insert_new(&store, BoxState::Ready, &spec()?, 0)?;
+    let info = tinybox_core::insert_new(
+        store.as_ref(),
+        BoxState::Ready,
+        &spec()?,
+        std::time::SystemTime::now(),
+    )?;
     let original = Error::Backend {
         sandbox: NAME.to_owned(),
         operation: "start test container",
