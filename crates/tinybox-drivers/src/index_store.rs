@@ -49,6 +49,30 @@ impl DocumentIndexStore {
         migrations::prepare(&storage)
             .await
             .map_err(|error| to_io(&error))?;
+        Self::on_prepared(&storage, registry)
+    }
+
+    /// Open an index store on ports a host manages, reached over the storage
+    /// bus: only the current declarations are confirmed, and nothing is
+    /// migrated (see [`DocumentBoxStore::open_host_managed`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the host refuses a declaration, the bridge cannot
+    /// start, or `registry` cannot be a document id.
+    ///
+    /// [`DocumentBoxStore::open_host_managed`]: crate::DocumentBoxStore::open_host_managed
+    pub async fn open_host_managed(
+        storage: Storage,
+        registry: impl Into<String>,
+    ) -> io::Result<Self> {
+        migrations::declare(&storage)
+            .await
+            .map_err(|error| to_io(&error))?;
+        Self::on_prepared(&storage, registry)
+    }
+
+    fn on_prepared(storage: &Storage, registry: impl Into<String>) -> io::Result<Self> {
         let documents: Arc<dyn DocumentStore> = Arc::clone(storage.documents());
         let registry = registry.into();
         let bridge = Blocking::new().map_err(|e| to_io(&e))?;

@@ -25,16 +25,31 @@ struct MigrationReceipt {
     complete: bool,
 }
 
+/// Ensure `TinyBox`'s current declarations, and nothing else.
+///
+/// This is all a host-managed port gets ([`DocumentBoxStore::open_host_managed`]
+/// and its siblings): the host declared these collections when it bound the
+/// module's scope, so the call only confirms host and module agree on them. The
+/// host's grant does not include the v1 source collections, and the host's own
+/// import owns their migration.
+///
+/// [`DocumentBoxStore::open_host_managed`]: crate::DocumentBoxStore::open_host_managed
+pub(crate) async fn declare(storage: &Storage) -> Result<()> {
+    let documents = storage.documents();
+    for spec in collections() {
+        documents.ensure_collection(&spec).await?;
+    }
+    Ok(())
+}
+
 /// Ensure `TinyBox`'s declarations and migrate every known legacy row.
 ///
 /// Migration receipts record successful scans. Legacy rows are still scanned
 /// on every open so a delayed old writer cannot leave an unreadable record
 /// behind a stale completion marker.
 pub(crate) async fn prepare(storage: &Storage) -> Result<()> {
+    declare(storage).await?;
     let documents = Arc::clone(storage.documents());
-    for spec in collections() {
-        documents.ensure_collection(&spec).await?;
-    }
     documents
         .ensure_collection(&CollectionSpec::new(V1_BOX_COLLECTION))
         .await?;

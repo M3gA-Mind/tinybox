@@ -44,6 +44,28 @@ impl DocumentBoxStore {
         migrations::prepare(&storage)
             .await
             .map_err(|error| store_error("open", &error))?;
+        Self::on_prepared(&storage)
+    }
+
+    /// Open a store on ports a host manages, reached over the storage bus.
+    ///
+    /// The host owns the schema and the data migration there: it declared the
+    /// collections when it bound the module's scope, and its grant does not
+    /// reach the v1 source collections, so this only confirms the current
+    /// declarations and migrates nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Store`] when the host refuses a declaration or the
+    /// bridge cannot be opened.
+    pub async fn open_host_managed(storage: Storage) -> Result<Self> {
+        migrations::declare(&storage)
+            .await
+            .map_err(|error| store_error("open", &error))?;
+        Self::on_prepared(&storage)
+    }
+
+    fn on_prepared(storage: &Storage) -> Result<Self> {
         let documents: Arc<dyn DocumentStore> = Arc::clone(storage.documents());
         let bridge = Blocking::new().map_err(|error| store_error("open", &error))?;
         let boxes = Repo::new(&documents, BOX_COLLECTION)
