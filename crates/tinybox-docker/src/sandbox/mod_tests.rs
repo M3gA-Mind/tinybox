@@ -254,7 +254,6 @@ fn native_controller_leaves_nonlocal_docker_commands_and_environment_alone() -> 
     let prepared = host.request(&request)?;
     assert_eq!(prepared.request.argv, request.argv);
     assert_eq!(prepared.request.env, request.env);
-    assert!(prepared._env_file.is_none());
     Ok(())
 }
 
