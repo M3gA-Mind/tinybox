@@ -848,6 +848,35 @@ async fn cleanup_reclaims_an_empty_attempt_chain_after_restart() -> Result<()> {
 
 #[tokio::test]
 #[cfg(target_os = "linux")]
+async fn cleanup_without_network_succeeds_when_no_orphaned_chains_exist() -> Result<()> {
+    let id = BoxId::new("box-network-already-absent")?;
+    let namespace = "test";
+    let names = NetworkNames::for_box(namespace, &id);
+    let mut host = PreparedNativeHost::new(&id, &names);
+    host.network_inspect_behavior = NetworkInspectBehavior::Absent;
+    host.no_matching_hooks = true;
+
+    NativeLinuxDockerEgressController::new(Arc::new(Resolver))
+        .cleanup(&host, namespace, &id)
+        .await?;
+
+    let commands = host.commands();
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|argv| argv.iter().any(|arg| arg == "-S"))
+            .count(),
+        2
+    );
+    assert!(!commands.iter().any(|argv| {
+        argv.iter()
+            .any(|arg| matches!(arg.as_str(), "-D" | "-F" | "-X" | "rm"))
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
 async fn cleanup_refuses_a_nonempty_unmarked_attempt_chain_after_restart() -> Result<()> {
     let id = BoxId::new("box-nonempty-orphan")?;
     let namespace = "test";
