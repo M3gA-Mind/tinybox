@@ -427,7 +427,7 @@ async fn verify_created_network(host: &dyn Host, names: &NetworkNames, id: &BoxI
             "network".into(),
             "inspect".into(),
             "--format".into(),
-            format!("{{{{.Driver}}}}|{{{{.EnableIPv6}}}}|{{{{index .Options \"com.docker.network.bridge.name\"}}}}|{{{{index .Labels \"{OWNER_LABEL}\"}}}}|{{{{index .Labels \"{SCOPE_LABEL}\"}}}}"),
+            format!("{{{{.Driver}}}}|{{{{.EnableIPv6}}}}|{{{{index .Options \"com.docker.network.bridge.name\"}}}}|{{{{index .Labels \"{OWNER_LABEL}\"}}}}|{{{{index .Labels \"{SCOPE_LABEL}\"}}}}|{{{{index .Labels \"{ATTEMPT_LABEL}\"}}}}"),
             names.network.clone(),
         ],
     )

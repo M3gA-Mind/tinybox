@@ -140,18 +140,20 @@ enum NetworkInspectBehavior {
 #[derive(Debug)]
 struct PreparedNativeHost {
     commands: Mutex<Vec<Vec<String>>>,
-    restore_scripts: Mutex<Vec<String>>,
     chains: Mutex<std::collections::BTreeSet<(String, String)>>,
     marked_chains: Mutex<std::collections::BTreeSet<(String, String)>>,
+    chains_with_rules: Mutex<std::collections::BTreeSet<(String, String)>>,
     network_create_behavior: NetworkCreateBehavior,
     network_inspect_behavior: NetworkInspectBehavior,
     missing_final_drop: Option<String>,
     empty_network_create: bool,
     fail_chain_marker: bool,
+    no_matching_hooks: bool,
     #[cfg(target_os = "linux")]
     fail_chain_delete_once: Mutex<bool>,
     network_owner: String,
     network_scope: String,
+    network_attempt: String,
     network_subnets: String,
     chain_owner_token: String,
     bridge: String,
@@ -163,21 +165,23 @@ impl PreparedNativeHost {
     fn new(id: &BoxId, names: &NetworkNames) -> Self {
         Self {
             commands: Mutex::new(Vec::new()),
-            restore_scripts: Mutex::new(Vec::new()),
             chains: Mutex::new(std::collections::BTreeSet::new()),
             marked_chains: Mutex::new(std::collections::BTreeSet::new()),
+            chains_with_rules: Mutex::new(std::collections::BTreeSet::new()),
             network_create_behavior: NetworkCreateBehavior::Succeed,
             network_inspect_behavior: NetworkInspectBehavior::Owned,
             missing_final_drop: None,
             empty_network_create: false,
             fail_chain_marker: false,
+            no_matching_hooks: false,
             #[cfg(target_os = "linux")]
             fail_chain_delete_once: Mutex::new(false),
             network_owner: id.to_string(),
             network_scope: names.owner_token.clone(),
+            network_attempt: names.attempt_token.clone(),
             network_subnets: r#"[{"Subnet":"172.18.0.0/16"},{"Subnet":"fd00:dead:beef::/64"}]"#
                 .to_owned(),
-            chain_owner_token: names.owner_token.clone(),
+            chain_owner_token: names.chain_owner_token.clone(),
             bridge: names.bridge.clone(),
             forward_chain: names.forward_chain.clone(),
             input_chain: names.input_chain.clone(),
@@ -209,64 +213,6 @@ impl Host for PreparedNativeHost {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(argv.clone());
-        if argv
-            .iter()
-            .any(|arg| matches!(arg.as_str(), "iptables-restore" | "ip6tables-restore"))
-            && let Some(stdin) = &request.stdin
-        {
-            self.restore_scripts
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(String::from_utf8_lossy(stdin).into_owned());
-        }
-        if let Some(restore_program) = argv
-            .iter()
-            .find(|arg| matches!(arg.as_str(), "iptables-restore" | "ip6tables-restore"))
-        {
-            let firewall = if restore_program == "ip6tables-restore" {
-                "ip6tables"
-            } else {
-                "iptables"
-            };
-            if let Some(stdin) = &request.stdin {
-                let script = String::from_utf8_lossy(stdin);
-                if self.fail_chain_marker && script.contains(&self.chain_owner_token) {
-                    return Ok(ExecOutput::new(
-                        1,
-                        Vec::new(),
-                        b"injected owner marker failure".to_vec(),
-                    ));
-                }
-                let mut chains = self
-                    .chains
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let mut marked_chains = self
-                    .marked_chains
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                for line in script.lines() {
-                    if let Some(chain) = line
-                        .strip_prefix(':')
-                        .and_then(|value| value.split_whitespace().next())
-                    {
-                        chains.insert((firewall.to_owned(), chain.to_owned()));
-                    }
-                    if let Some(chain) = line
-                        .strip_prefix("-A ")
-                        .and_then(|value| value.split_whitespace().next())
-                    {
-                        marked_chains.insert((firewall.to_owned(), chain.to_owned()));
-                    }
-                }
-            }
-            return Ok(ExecOutput::new(
-                0,
-                b"iptables-restore v1.8.10\n".to_vec(),
-                Vec::new(),
-            ));
-        }
-
         if let Some(docker_index) = argv.iter().position(|arg| arg == "docker") {
             let docker_args = &argv[docker_index + 1..];
             if docker_args.iter().any(|arg| arg == "info") {
@@ -342,16 +288,22 @@ impl Host for PreparedNativeHost {
                     ) {
                         "network-id|owner-without-scope".to_owned()
                     } else if format.contains(".Id") {
-                        format!("network-id|{owner}|{}", self.network_scope)
+                        format!(
+                            "network-id|{owner}|{}|{}",
+                            self.network_scope, self.network_attempt
+                        )
                     } else if format.contains(".Driver") {
                         format!(
-                            "bridge|true|{}|{}|{}",
-                            self.bridge, owner, self.network_scope
+                            "bridge|true|{}|{}|{}|{}",
+                            self.bridge, owner, self.network_scope, self.network_attempt
                         )
                     } else if format.contains(".IPAM.Config") {
                         self.network_subnets.clone()
                     } else {
-                        format!("{owner}|{}", self.network_scope)
+                        format!(
+                            "{owner}|{}|{}",
+                            self.network_scope, self.network_attempt
+                        )
                     };
                     return Ok(ExecOutput::new(0, stdout.into_bytes(), Vec::new()));
                 }
