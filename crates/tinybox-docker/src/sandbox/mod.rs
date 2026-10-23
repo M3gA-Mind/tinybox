@@ -19,7 +19,7 @@ use tinybox_core::{
     SnapshotSupport, Store, SystemClock, WorkspaceFileReader, WorkspaceFileWriter, detach,
 };
 
-use crate::DockerEgressController;
+use crate::{DockerEgressController, PreparedEgressNetwork};
 
 mod args;
 mod observed;
@@ -241,7 +241,7 @@ impl DockerSandbox {
         spec: &BoxSpec,
         id: &BoxId,
         attempt: &str,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<PreparedEgressNetwork>> {
         let NetworkPolicy::Allowlist(allowlist) = &spec.network else {
             return Ok(None);
         };
@@ -690,7 +690,7 @@ impl Sandbox for DockerSandbox {
             &info.id,
             &attempt,
             spec,
-            network.as_deref(),
+            network.as_ref(),
         ) {
             Ok(argv) => argv,
             Err(error) => {
