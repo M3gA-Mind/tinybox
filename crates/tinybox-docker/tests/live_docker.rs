@@ -587,30 +587,14 @@ async fn live_allowlist_pins_destinations_and_blocks_other_raw_tcp() -> Result<(
             .await?;
 
         let probes = async {
-        let file_setup = sandbox
-            .exec(
-                &info.id,
-                &ExecRequest::new(["sh", "-c", "printf 'published-ok\\n' >/tmp/index.html"]),
-            )
-            .await?;
-        if file_setup.exit_code != 0 {
-            return Err(Error::Backend {
-                sandbox: "docker".to_owned(),
-                operation: "prepare the published-port response",
-                message: file_setup.stderr_lossy().into_owned(),
-            });
-        }
         let container = format!("tinybox-{namespace}-{}", info.id);
         docker_command(&[
             "exec",
             "-d",
             &container,
-            "httpd",
-            "-f",
-            "-p",
-            "0.0.0.0:18375",
-            "-h",
-            "/tmp",
+                "sh",
+                "-c",
+                "while true; do printf 'published-ok\\n' | nc -l -p 18375; done",
         ])?;
         let published_port = sandbox
             .published_ports(&info.id)
