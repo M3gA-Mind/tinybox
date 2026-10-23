@@ -4,7 +4,12 @@
 //! consumes pinned resolver answers and does not use proxy environment
 //! variables as an enforcement boundary.
 
-use std::{fmt::Debug, net::IpAddr, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    fmt::Debug,
+    net::IpAddr,
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use tinybox_core::{
@@ -42,13 +47,47 @@ pub trait DockerEgressController: Debug + Send + Sync {
         namespace: &str,
         id: &BoxId,
         allowlist: &EgressAllowlist,
-    ) -> Result<String>;
+    ) -> Result<PreparedEgressNetwork>;
 
     /// Remove this box's filter and network after its container has stopped.
     async fn cleanup(&self, host: &dyn Host, namespace: &str, id: &BoxId) -> Result<()>;
 
     /// Bind a Docker CLI command to the daemon this controller verifies.
     fn docker_argv(&self, argv: Vec<String>) -> Vec<String>;
+}
+
+/// A firewall-protected network and the hostname mappings pinned for it.
+///
+/// The sandbox installs these mappings in `/etc/hosts` and points the
+/// container's upstream resolver at its own loopback, so Docker's embedded
+/// resolver cannot forward arbitrary DNS queries through the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedEgressNetwork {
+    network: String,
+    host_mappings: Vec<(String, IpAddr)>,
+}
+
+impl PreparedEgressNetwork {
+    /// Build a network result for a trusted egress controller.
+    #[must_use]
+    pub fn new(network: String, host_mappings: Vec<(String, IpAddr)>) -> Self {
+        Self {
+            network,
+            host_mappings,
+        }
+    }
+
+    /// Docker network name to attach to the workload.
+    #[must_use]
+    pub fn network(&self) -> &str {
+        &self.network
+    }
+
+    /// Pinned `/etc/hosts` entries used instead of upstream DNS.
+    #[must_use]
+    pub fn host_mappings(&self) -> &[(String, IpAddr)] {
+        &self.host_mappings
+    }
 }
 
 /// Native Linux Engine support using the local rootful Docker socket and
@@ -90,7 +129,7 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
         namespace: &str,
         id: &BoxId,
         allowlist: &EgressAllowlist,
-    ) -> Result<String> {
+    ) -> Result<PreparedEgressNetwork> {
         ensure_supported_host(host)?;
         ensure_linux_target()?;
         verify_engine_and_firewall(host).await?;
@@ -139,7 +178,25 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
             };
         }
 
-        Ok(names.network)
+        let host_mappings = plan
+            .targets()
+            .iter()
+            .flat_map(|target| {
+                let host = target.host();
+                if host.parse::<IpAddr>().is_ok() {
+                    return Vec::new();
+                }
+                let unqualified = host.trim_end_matches('.');
+                let mut names = vec![(host.to_owned(), target.address())];
+                if unqualified != host {
+                    names.push((unqualified.to_owned(), target.address()));
+                }
+                names
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        Ok(PreparedEgressNetwork::new(names.network, host_mappings))
     }
 
     async fn cleanup(&self, host: &dyn Host, namespace: &str, id: &BoxId) -> Result<()> {
