@@ -565,23 +565,28 @@ fn stale_neighbor_command_targets_the_sandbox_ipv6_peer() {
 }
 
 #[test]
-fn exchange_before_retries_a_connection_closed_before_the_response() {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let address = listener.local_addr().unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let server = thread::spawn(move || {
+fn exchange_before_retries_a_connection_closed_before_the_response() -> Result<()> {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .map_err(|error| Error::io("bind response retry test listener", &error))?;
+    let address = listener
+        .local_addr()
+        .map_err(|error| Error::io("read response retry test address", &error))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| Error::io("set response retry listener nonblocking", &error))?;
+    let server = thread::spawn(move || -> std::io::Result<()> {
         let (mut first, _) = loop {
             match listener.accept() {
                 Ok(connection) => break connection,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(5));
                 }
-                Err(error) => panic!("accept first probe: {error}"),
+                Err(error) => break Err(error)?,
             }
         };
         let mut request = [0; 64];
-        let _ = first.read(&mut request).unwrap();
-        first.shutdown(std::net::Shutdown::Write).unwrap();
+        let _ = first.read(&mut request)?;
+        first.shutdown(std::net::Shutdown::Write)?;
         drop(first);
         let deadline = Instant::now() + Duration::from_secs(2);
         let (mut second, _) = loop {
@@ -593,21 +598,30 @@ fn exchange_before_retries_a_connection_closed_before_the_response() {
                 {
                     thread::sleep(Duration::from_millis(5));
                 }
-                Err(error) => panic!("accept retry probe: {error}"),
+                Err(error) => break Err(error)?,
             }
         };
         let mut request = [0; 64];
-        let _ = second.read(&mut request).unwrap();
-        second.write_all(b"published-ok\n").unwrap();
+        let _ = second.read(&mut request)?;
+        second.write_all(b"published-ok\n")?;
+        Ok(())
     });
 
-    let response = exchange_before(address, Instant::now() + Duration::from_secs(2)).unwrap();
-    server.join().unwrap();
+    let response = exchange_before(address, Instant::now() + Duration::from_secs(2))?;
+    server
+        .join()
+        .map_err(|_| Error::Backend {
+            sandbox: "docker".to_owned(),
+            operation: "join response retry test server",
+            message: "server thread panicked".to_owned(),
+        })?
+        .map_err(|error| Error::io("serve response retry test", &error))?;
     assert!(
         response
             .windows(b"published-ok\n".len())
             .any(|window| window == b"published-ok\n")
     );
+    Ok(())
 }
 
 /// A disposable Linux Engine proof for the native firewall controller.
