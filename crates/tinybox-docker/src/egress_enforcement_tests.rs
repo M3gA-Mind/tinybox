@@ -199,7 +199,10 @@ impl Host for PreparedNativeHost {
             }
             if docker_args.iter().any(|arg| arg == "network") {
                 if docker_args.iter().any(|arg| arg == "create") {
-                    if matches!(self.network_create_behavior, NetworkCreateBehavior::CommandFailure) {
+                    if matches!(
+                        self.network_create_behavior,
+                        NetworkCreateBehavior::CommandFailure
+                    ) {
                         return Ok(ExecOutput::new(
                             1,
                             Vec::new(),
