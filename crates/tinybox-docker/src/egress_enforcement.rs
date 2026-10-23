@@ -172,14 +172,16 @@ impl DockerEgressController for NativeLinuxDockerEgressController {
             };
         }
 
+        let mut attempt_owned_chains = BTreeSet::new();
         let setup = async {
             verify_created_network(host, &names, id).await?;
             verify_created_bridge_link(host, &names).await?;
-            install_firewall(host, &names, &plan).await
+            install_firewall(host, &names, &plan, &mut attempt_owned_chains).await
         }
         .await;
         if let Err(error) = setup {
-            let cleanup = cleanup_native(host, namespace, id).await;
+            let cleanup =
+                cleanup_native_with_attempt(host, namespace, id, &attempt_owned_chains).await;
             return match cleanup {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(Error::Backend {
@@ -401,9 +403,10 @@ async fn install_firewall(
     host: &dyn Host,
     names: &NetworkNames,
     plan: &PinnedEgressPlan,
+    attempt_owned_chains: &mut BTreeSet<(String, String)>,
 ) -> Result<()> {
-    install_family(host, "iptables", names, plan, false).await?;
-    install_family(host, "ip6tables", names, plan, true).await?;
+    install_family(host, "iptables", names, plan, false, attempt_owned_chains).await?;
+    install_family(host, "ip6tables", names, plan, true, attempt_owned_chains).await?;
     verify_hook(
         host,
         "iptables",
@@ -438,6 +441,7 @@ async fn install_family(
     names: &NetworkNames,
     plan: &PinnedEgressPlan,
     ipv6: bool,
+    attempt_owned_chains: &mut BTreeSet<(String, String)>,
 ) -> Result<()> {
     let existing = firewall_output(host, firewall, ["-S"]).await?;
     if existing.contains(&names.forward_chain) || existing.contains(&names.input_chain) {
@@ -446,6 +450,7 @@ async fn install_family(
 
     for chain in [&names.forward_chain, &names.input_chain] {
         firewall_success(host, firewall, ["-N", chain]).await?;
+        attempt_owned_chains.insert((firewall.to_owned(), chain.clone()));
         install_chain_owner_marker(host, firewall, chain, &names.owner_token, ipv6).await?;
     }
     for rule in deny_rules(ipv6) {
@@ -664,6 +669,16 @@ async fn verify_hook(
 
 #[allow(clippy::too_many_lines)] // Keep ownership preflight and cleanup order together.
 async fn cleanup_native(host: &dyn Host, namespace: &str, id: &BoxId) -> Result<()> {
+    cleanup_native_with_attempt(host, namespace, id, &BTreeSet::new()).await
+}
+
+#[allow(clippy::too_many_lines)] // Keep ownership preflight and cleanup order together.
+async fn cleanup_native_with_attempt(
+    host: &dyn Host,
+    namespace: &str,
+    id: &BoxId,
+    attempt_owned_chains: &BTreeSet<(String, String)>,
+) -> Result<()> {
     let names = NetworkNames::for_box(namespace, id);
     let inspect = docker_request(
         host,
@@ -710,7 +725,9 @@ async fn cleanup_native(host: &dyn Host, namespace: &str, id: &BoxId) -> Result<
             .lines()
             .any(|line| line == format!("-N {chain}") || line.starts_with(&chain_prefix));
         if chain_exists {
-            if !chain_has_owner_marker(&rules, chain, &names.owner_token) {
+            let created_by_attempt = attempt_owned_chains
+                .contains(&(firewall.to_owned(), chain.to_owned()));
+            if !created_by_attempt && !chain_has_owner_marker(&rules, chain, &names.owner_token) {
                 return Err(unsupported(
                     "egress firewall chain ownership could not be verified",
                 ));
