@@ -435,6 +435,7 @@ async fn install_firewall(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)] // Preserve the ordered default-drop rule setup as one unit.
 async fn install_family(
     host: &dyn Host,
     firewall: &str,
