@@ -239,6 +239,25 @@ fn allowlist_validation_rejects_malformed_and_metadata_hosts() {
 }
 
 #[test]
+fn allowlist_validation_rejects_loopback_targets() {
+    use super::EgressAllowlist;
+
+    for host in [
+        "127.0.0.1",
+        "[::1]",
+        "[::ffff:127.0.0.1]",
+        "localhost",
+        "LOCALHOST.",
+        "service.localhost",
+    ] {
+        assert!(
+            EgressAllowlist::new([host], [80]).validate().is_err(),
+            "{host} must be refused"
+        );
+    }
+}
+
+#[test]
 fn allowlist_policy_allows_egress_but_open_is_highest_risk() {
     use super::EgressAllowlist;
     let policy = NetworkPolicy::Allowlist(EgressAllowlist::new(["example.com"], [443]));
