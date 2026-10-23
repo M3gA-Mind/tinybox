@@ -7,6 +7,7 @@
 use std::{collections::BTreeSet, fmt::Debug, net::IpAddr, sync::Arc};
 
 use async_trait::async_trait;
+use sha2::{Digest, Sha256};
 use tinybox_core::{
     BoxId, EgressAllowlist, Error, ExecOutput, ExecRequest, Host, HostExecutionLocation, Result,
 };
@@ -240,9 +241,22 @@ impl NetworkNames {
             bridge: format!("tbx{}", &short[..12]),
             forward_chain: format!("TBX{}F", &short[..10]),
             input_chain: format!("TBX{}I", &short[..10]),
-            owner_token: short,
+            owner_token: scope_token(namespace, id.as_str()),
         }
     }
+}
+
+fn scope_token(namespace: &str, id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update((namespace.len() as u64).to_be_bytes());
+    hasher.update(namespace.as_bytes());
+    hasher.update((id.len() as u64).to_be_bytes());
+    hasher.update(id.as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn stable_hash(namespace: &[u8], id: &[u8]) -> u64 {
@@ -614,12 +628,17 @@ fn chain_has_owner_marker(rules: &str, chain: &str, owner_token: &str) -> bool {
 
 fn deny_rules(ipv6: bool) -> Vec<Vec<String>> {
     if ipv6 {
-        ["::1/128", "fe80::/10", "fd00:ec2::254/128"]
+        ["::1/128", "fd00:ec2::254/128"]
             .into_iter()
             .map(|prefix| vec!["-d".into(), prefix.into(), "-j".into(), "DROP".into()])
             .collect()
     } else {
-        ["127.0.0.0/8", "169.254.0.0/16", "100.100.100.200/32"]
+        [
+            "127.0.0.0/8",
+            "169.254.169.254/32",
+            "169.254.170.2/32",
+            "100.100.100.200/32",
+        ]
             .into_iter()
             .map(|prefix| vec!["-d".into(), prefix.into(), "-j".into(), "DROP".into()])
             .collect()

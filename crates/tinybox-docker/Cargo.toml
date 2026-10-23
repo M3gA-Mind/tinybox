@@ -16,6 +16,7 @@ publish = false
 tinybox-core.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
+sha2 = "0.10.9"
 # `DockerCli` runs the local `docker` client; one-shot runs need process spawning
 # and a deadline.
 tokio = { workspace = true, features = ["process"] }
