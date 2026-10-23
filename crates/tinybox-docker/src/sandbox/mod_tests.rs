@@ -195,7 +195,7 @@ async fn native_controller_refuses_hosts_without_explicit_local_identity() -> Re
                 ..
             })
         ));
-        assert_eq!(host.commands(), []);
+        assert_eq!(host.commands(), Vec::<Vec<String>>::new());
     }
     Ok(())
 }
