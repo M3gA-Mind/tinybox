@@ -955,7 +955,12 @@ impl Sandbox for DockerSandbox {
 
     async fn destroy(&self, id: &BoxId) -> Result<()> {
         // Fail on an unknown box before touching Docker.
-        self.store.get(id)?;
+        let info = self.store.get(id)?;
+        if matches!(info.spec.network, NetworkPolicy::Allowlist(_))
+            && self.egress_controller.is_none()
+        {
+            return Err(unsupported_egress_policy());
+        }
         let attempt = self
             .failed_create_attempts
             .lock()
