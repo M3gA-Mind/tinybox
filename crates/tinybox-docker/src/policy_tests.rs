@@ -104,3 +104,18 @@ fn a_symlink_to_a_socket_is_reported() -> std::io::Result<()> {
     assert_eq!(run_policy_issues(None, Some(&link), &[]).len(), 1);
     Ok(())
 }
+
+#[test]
+fn audit_medium9_joining_another_containers_network_is_reported() {
+    let issues = run_policy_issues(Some("container:abc"), None, &[]);
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert!(issues[0].contains("container abc"), "{issues:?}");
+    assert_eq!(
+        run_policy_issues(Some("bridge"), None, &[]),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        run_policy_issues(Some("none"), None, &[]),
+        Vec::<String>::new()
+    );
+}

@@ -125,7 +125,7 @@ fn without_workspace_preserves_isolation_flags_without_mount_or_workdir() {
     assert!(has_pair(&argv, "--network", "bridge"));
     assert!(has_pair(&argv, "-m", "2048m"));
     assert!(has_pair(&argv, "--cpus", "2.5"));
-    assert!(has_pair(&argv, "-e", "MODE=host-cwd"));
+    assert!(has_pair(&argv, "-e", "MODE"));
     assert!(!argv.iter().any(|arg| arg == "-v"));
     assert!(!argv.iter().any(|arg| arg == "-w"));
     assert!(!argv.iter().any(|arg| arg == "--read-only"));
@@ -185,9 +185,9 @@ fn overrides_mounts_and_env_are_ordered() {
         "-v",
         "/definitely/not/here:/definitely/not/here:ro",
         "-e",
-        "A=1",
+        "A",
         "-e",
-        "REQ_KEY=req value=1",
+        "REQ_KEY",
         "--",
         "debian:12",
         "sh",
@@ -417,4 +417,23 @@ async fn audit_h6_a_timed_out_run_kills_its_client_and_its_container() {
         !still_alive,
         "docker client pid {pid} still alive 1s after the timeout reported it killed"
     );
+}
+
+#[tokio::test]
+async fn audit_m1_env_values_reach_the_client_but_never_its_argv() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (cli, out) = fake(tmp.path(), "printf '%s' \"$API_TOKEN\"");
+    let spec = OneShot::new(tmp.path(), "true")
+        .without_workspace()
+        .with_env([(OsString::from("API_TOKEN"), OsString::from("s3cret"))]);
+
+    let outcome = cli
+        .run_one_shot(&spec, Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let argv = recorded(&out);
+    assert!(has_pair(&argv, "-e", "API_TOKEN"), "{argv:?}");
+    assert!(!argv.iter().any(|arg| arg.contains("s3cret")), "{argv:?}");
+    assert_eq!(outcome.stdout, "s3cret");
 }
