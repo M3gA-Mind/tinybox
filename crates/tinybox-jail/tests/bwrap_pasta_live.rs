@@ -103,12 +103,20 @@ fn live_killing_a_jail_leaves_no_pasta_behind() -> io::Result<()> {
     let start = Instant::now();
     let root = tempfile::tempdir()?;
     let mut cmd = Command::new("/bin/sh");
-    cmd.args(["-c", "sleep 30"]);
+    cmd.args(["-c", "echo started; sleep 30"]);
     let jail = jail(root.path());
     backend
         .require(&jail)
         .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error))?;
     let mut child = spawn_captured_with(&backend, &jail, cmd)?;
+    // A running jail: one killed during its startup is the next test's case.
+    let mut line = String::new();
+    let stdout = child
+        .stdout
+        .as_mut()
+        .ok_or_else(|| io::Error::other("the jail's stdout was not captured"))?;
+    io::BufRead::read_line(&mut io::BufReader::new(stdout), &mut line)?;
+    assert_eq!(line, "started\n", "the jail never started");
     let pasta = eventually(|| pasta_of(child.id()))
         .ok_or_else(|| io::Error::other("no pasta serves the jail's network"))?;
     child.kill()?;
@@ -144,6 +152,57 @@ fn live_a_jail_that_exits_leaves_no_pasta_behind() -> io::Result<()> {
         "pasta {pasta} outlived the jail"
     );
     done("pasta after exit", start);
+    Ok(())
+}
+
+#[test]
+fn live_a_jail_killed_during_its_startup_leaves_no_jail_or_pasta_behind() -> io::Result<()> {
+    let Some(backend) = private()? else {
+        return Ok(());
+    };
+    let start = Instant::now();
+    let root = tempfile::tempdir()?;
+    let jail = jail(root.path());
+    backend
+        .require(&jail)
+        .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error))?;
+    // A duration no other process here will be sleeping for.
+    let marker = format!("53.{}", std::process::id());
+    let mut pastas = Vec::new();
+    for iteration in 0..50_u64 {
+        let mut cmd = Command::new("/bin/sleep");
+        cmd.arg(&marker);
+        let mut child = spawn_captured_with(&backend, &jail, cmd)?;
+        // The network is up before the spawn returns, so its pasta is there.
+        pastas.push(
+            pasta_of(child.id())
+                .ok_or_else(|| io::Error::other("no pasta serves the jail's network"))?,
+        );
+        std::thread::sleep(Duration::from_millis(iteration % 4));
+        child.kill()?;
+        child.wait()?;
+    }
+    let wanted = format!("/bin/sleep\0{marker}\0");
+    let left = eventually(|| {
+        let jails = std::fs::read_dir("/proc")
+            .ok()?
+            .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<u32>().ok())
+            .filter(|pid| {
+                std::fs::read(format!("/proc/{pid}/cmdline"))
+                    .is_ok_and(|line| line == wanted.as_bytes())
+            })
+            .count();
+        let pastas = pastas
+            .iter()
+            .filter(|pasta| Path::new(&format!("/proc/{pasta}")).exists())
+            .count();
+        (jails == 0 && pastas == 0).then_some(())
+    });
+    assert!(
+        left.is_some(),
+        "a jail killed during its startup left its command or its pasta running"
+    );
+    done("pasta after a startup kill", start);
     Ok(())
 }
 

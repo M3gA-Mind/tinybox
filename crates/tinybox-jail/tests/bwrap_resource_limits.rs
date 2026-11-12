@@ -97,3 +97,25 @@ fn a_hard_limit_is_refused_for_a_jail_sharing_the_host_network() -> io::Result<(
     assert_eq!(refused(&backend, &shared), Some(io::ErrorKind::Unsupported));
     Ok(())
 }
+
+#[test]
+fn a_limited_jail_killed_during_its_startup_leaves_nothing_running() -> io::Result<()> {
+    let Some(backend) = limiting_backend()? else {
+        return Ok(());
+    };
+    let start = Instant::now();
+    let root = tempfile::tempdir()?;
+    // A soft budget: the jail runs inside a resource scope. `systemd-run`
+    // first registers the scope with the user manager, so the kills spread
+    // over 0-39 ms to land in bwrap's own startup too.
+    let mut limited = jail(root.path()).deny_net();
+    limited.resources = Some(Resources::DEFAULT);
+    let survivors = kill_during_startup(&backend, &limited, "59", 120, 40)?;
+    assert!(
+        survivors.is_empty(),
+        "{} limited jails outlived a kill during startup: pids {survivors:?}",
+        survivors.len()
+    );
+    done("limited startup kill", start);
+    Ok(())
+}

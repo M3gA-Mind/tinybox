@@ -3,7 +3,7 @@
 use std::io;
 use std::path::Path;
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tinybox_jail::{BubblewrapBackend, Jail, JailBackend, spawn_captured_with};
 
@@ -79,4 +79,56 @@ pub(crate) fn refused(backend: &BubblewrapBackend, jail: &Jail) -> Option<io::Er
     spawn_captured_with(backend, jail, cmd)
         .err()
         .map(|e| e.kind())
+}
+
+/// Spawns `iterations` jails running `sleep <prefix>.<this pid>`, killing
+/// each 0 to `max_delay_ms - 1` ms after its spawn returns, and gives back the
+/// pids of any still running two seconds later.
+pub(crate) fn kill_during_startup(
+    backend: &BubblewrapBackend,
+    jail: &Jail,
+    prefix: &str,
+    iterations: u32,
+    max_delay_ms: u32,
+) -> io::Result<Vec<u32>> {
+    // A duration no other process here will be sleeping for.
+    let marker = format!("{prefix}.{}", std::process::id());
+    for iteration in 0..iterations {
+        let mut cmd = Command::new("/bin/sleep");
+        cmd.arg(&marker);
+        let mut child = spawn_captured_with(backend, jail, cmd)?;
+        std::thread::sleep(Duration::from_millis(u64::from(iteration % max_delay_ms)));
+        child.kill()?;
+        child.wait()?;
+    }
+    Ok(settle(|| running(&marker)))
+}
+
+/// Polls `check` for up to two seconds, until it finds nothing.
+fn settle(mut check: impl FnMut() -> Vec<u32>) -> Vec<u32> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let found = check();
+        if found.is_empty() || Instant::now() >= deadline {
+            return found;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Live processes whose command line is `sleep <marker>`, in any pid
+/// namespace below this one (they all appear in this one's `/proc`).
+fn running(marker: &str) -> Vec<u32> {
+    let wanted = format!("/bin/sleep\0{marker}\0");
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| {
+            // A zombie's command line reads empty, so only live ones match.
+            std::fs::read(format!("/proc/{pid}/cmdline"))
+                .is_ok_and(|line| line == wanted.as_bytes())
+        })
+        .collect()
 }
