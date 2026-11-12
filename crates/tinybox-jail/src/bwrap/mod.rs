@@ -64,8 +64,19 @@
 //! loopback services, the host behind the gateway address and the host's
 //! abstract sockets are unreachable. The holder lives exactly as long as
 //! `bwrap` (`--sync-fd`), so no `pasta` outlives a jail, even one that is
-//! killed. `slirp4netns` is not used: it only attaches to an existing
+//! killed (see "Killing a jail"). `slirp4netns` is not used: it only attaches to an existing
 //! namespace, which Ubuntu's `AppArmor` user-namespace restriction refuses.
+//!
+//! # Killing a jail
+//!
+//! `bwrap` arms `--die-with-parent` inside the sandbox only after the
+//! sandbox's setup, so on its own a kill landing in the first milliseconds
+//! after the spawn left the sandbox running. A spawn therefore returns only
+//! once `bwrap` has reported the sandbox's first process (`--json-status-fd`)
+//! and a watcher holds a pidfd for it; the watcher kills it, and with it the
+//! jail's whole pid namespace, as soon as `bwrap` exits (see `reaper.rs`). A
+//! `bwrap` that never reports fails the spawn, after being killed. A `bwrap`
+//! without `--json-status-fd` is not used.
 //!
 //! # Seccomp
 //!
@@ -142,6 +153,7 @@ use crate::jail::{Jail, JailBackend};
 mod args;
 mod launcher;
 mod pasta;
+mod reaper;
 mod scope;
 mod seccomp;
 
@@ -288,8 +300,14 @@ fn is_trusted_binary(path: &Path) -> bool {
 ///
 /// A `bwrap` that cannot install the seccomp filters (no `--add-seccomp-fd`,
 /// or no filter for this architecture) is not used: a jail is refused rather
-/// than started unfiltered.
+/// than started unfiltered. Nor is one that cannot report its sandbox's first
+/// process (no `--json-status-fd`): a jail killed during its startup could then
+/// outlive the kill (see `reaper`).
 fn verify(program: &Path) -> Option<Verified> {
+    if !help_lists(program, "--json-status-fd") {
+        log::debug!("[cwd_jail:bwrap] unavailable: no --json-status-fd");
+        return None;
+    }
     let seccomp = match seccomp_filters(program) {
         Ok(filters) => filters,
         Err(error) => {
@@ -462,6 +480,8 @@ fn xdg_runtime_dir() -> Option<PathBuf> {
 struct Prepared {
     launcher: Command,
     args: launcher::ArgsFile,
+    /// The read end of `bwrap`'s `--json-status-fd` (see `reaper`).
+    status: std::fs::File,
 }
 
 /// Rebuilds `cmd` as a launcher + `bwrap --args` invocation of the same
@@ -500,6 +520,12 @@ fn prepare_command(
         Some(network) => Some(join_network(network, &mut argv, &mut fds)?),
         None => None,
     };
+    // `bwrap` reports the sandbox's first process here, so a launcher killed
+    // during the sandbox's startup can still take it down (see `reaper`).
+    let (status, status_writer) = std::io::pipe()?;
+    let number = args::FIRST_GRANT_FD + i32::try_from(fds.len()).map_err(io::Error::other)?;
+    argv.extend(["--json-status-fd".into(), number.to_string().into()]);
+    fds.push((status_writer.into(), number));
     argv.push("--clearenv".into());
     for (key, value) in cmd.get_envs() {
         if let Some(value) = value {
@@ -560,6 +586,7 @@ fn prepare_command(
     Ok(Prepared {
         launcher,
         args: file,
+        status: std::fs::File::from(std::os::fd::OwnedFd::from(status)),
     })
 }
 
@@ -670,6 +697,7 @@ impl BubblewrapBackend {
         let Prepared {
             launcher: mut wrapper,
             args,
+            status,
         } = prepare_command(
             verified,
             jail,
@@ -686,13 +714,17 @@ impl BubblewrapBackend {
                 // can signal the whole sandbox.
                 .process_group(0);
         }
-        let child = wrapper.spawn().inspect_err(|_| args.discard())?;
-        // `bwrap` now holds the holder's writer; drop ours so the network ends
-        // when the jail does.
+        let mut child = wrapper.spawn().inspect_err(|_| args.discard())?;
+        // `bwrap` now holds the holder's writer and the status writer; drop
+        // ours so the network ends when the jail does, and so the status pipe
+        // ends when `bwrap` does.
         drop(wrapper);
         if let Some(network) = network {
             network.release();
         }
+        // Not handed back until the sandbox is held: a kill from here on
+        // takes it down even mid-setup.
+        reaper::hold(&mut child, status).inspect_err(|_| args.discard())?;
         Ok(child)
     }
 }

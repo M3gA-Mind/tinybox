@@ -46,6 +46,10 @@ seccompiler = { version = "0.5", default-features = false }
 # The per-architecture syscall numbers that deny list names. Already in the
 # lockfile through several dependencies.
 libc = "0.2"
+# A pidfd for each bwrap sandbox's first process, so a launcher killed during
+# the sandbox's startup still takes the sandbox down (`bwrap/reaper.rs`). Safe
+# wrappers; already in the lockfile through tempfile and cap-std.
+rustix = { version = "1", default-features = false, features = ["std", "process"] }
 
 [target.'cfg(windows)'.dependencies]
 # AppContainer profile APIs, ACL editing, STARTUPINFOEXW process spawn, and the
